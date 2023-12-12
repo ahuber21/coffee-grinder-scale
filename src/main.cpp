@@ -1,18 +1,27 @@
 #include <Arduino.h>
+#include <ArduinoOTA.h>
+#include <WiFi.h>
+#include <WiFiManager.h>
 
-// put function declarations here:
-int myFunction(int, int);
+#include "secrets.h"
+
+uint32_t seconds = 0;
 
 void setup() {
-  // put your setup code here, to run once:
-  int result = myFunction(2, 3);
+  Serial.begin(115200);
+  WiFiManager wifiManager;
+  wifiManager.autoConnect(WIFI_MANAGER_SSID);
+
+  ArduinoOTA.begin();
+  Serial.print("Arduino OTA ready at ");
+  Serial.println(WiFi.localIP());
 }
 
 void loop() {
-  // put your main code here, to run repeatedly:
-}
+  ArduinoOTA.handle();
 
-// put function definitions here:
-int myFunction(int x, int y) {
-  return x + y;
+  if (millis() / 1000 > seconds) {
+    Serial.println("Hi!");
+    seconds = millis() / 1000;
+  }
 }
