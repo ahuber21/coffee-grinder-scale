@@ -10,40 +10,120 @@ const char PROGMEM index_html[] = R"rawliteral(
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>WebSocket Client</title>
+  <style>
+    body {
+      background-color: #1a1a1a; /* Dark background */
+      color: white; /* White text color */
+      font-family: 'Courier New', monospace; /* Monospace font */
+      margin: 0;
+      padding: 0;
+      display: flex;
+      flex-direction: column;
+      height: 100vh;
+    }
+
+    h1 {
+      color: #ffcc00; /* Yellowish heading color */
+    }
+
+    #messagesContainer {
+      flex-grow: 1;
+      overflow-y: auto;
+      font-size: 16px;
+      line-height: 1.5;
+      scrollbar-width: thin; /* Always show the scrollbar */
+    }
+
+    .timestamp {
+      font-weight: bold; /* Bold font for timestamp */
+      color: #66ccff; /* Light blue color for timestamp */
+    }
+
+    #inputContainer {
+      display: flex;
+      align-items: center;
+      padding: 10px;
+      background-color: #333; /* Darker background for the input area */
+      margin-right: 10px; /* Adjust margin for scrollbar */
+    }
+
+    #messageInput {
+      flex-grow: 1;
+      margin-right: 10px;
+      padding: 5px;
+      font-size: 16px;
+    }
+
+    #sendMessageButton {
+      padding: 5px 10px;
+      font-size: 16px;
+      cursor: pointer;
+      background-color: #66ccff; /* Light blue color for the button */
+      color: #1a1a1a; /* Dark text color for the button */
+      border: none;
+    }
+  </style>
 </head>
 <body>
   <h1>WebSocket Client</h1>
   <div id="messagesContainer"></div>
+  <div id="inputContainer">
+    <input type="text" id="messageInput" placeholder="Type your message...">
+    <button id="sendMessageButton">Send</button>
+  </div>
 
-  <script>
-    const socket = new WebSocket('ws://' + window.location.hostname + '/ws');
-    const messagesContainer = document.getElementById('messagesContainer');
+<!-- Your HTML code remains the same -->
 
-    socket.onopen = function(event) {
-      addMessage('WebSocket opened');
-    };
+<script>
+  const socket = new WebSocket('ws://' + window.location.hostname + '/ws');
+  const messagesContainer = document.getElementById('messagesContainer');
+  const messageInput = document.getElementById('messageInput');
+  const sendMessageButton = document.getElementById('sendMessageButton');
 
-    socket.onmessage = function(event) {
-      addMessage(event.data);
-    };
+  socket.onopen = function(event) {
+    addMessage('WebSocket opened');
+  };
 
-    socket.onclose = function(event) {
-      addMessage('WebSocket closed');
-    };
+  socket.onmessage = function(event) {
+    addMessage(event.data);
+    // Automatically scroll down when a new message is added
+    messagesContainer.scrollTop = messagesContainer.scrollHeight;
+  };
 
-    function addMessage(message) {
-      const messageDiv = document.createElement('div');
-      messageDiv.textContent = getCurrentDateTime() + ': ' + message;
-      messagesContainer.appendChild(messageDiv);
+  socket.onclose = function(event) {
+    addMessage('WebSocket closed');
+  };
+
+  function sendMessage() {
+    const messageToSend = messageInput.value;
+    if (messageToSend.trim() !== '') {
+      socket.send(messageToSend);
+      messageInput.value = '';
     }
+  }
 
-    function getCurrentDateTime() {
-      const now = new Date();
-      const dateString = now.toISOString().slice(0, 19).replace("T", " ");
-      const milliseconds = now.getMilliseconds();
-      return dateString + '.' + milliseconds;
+  sendMessageButton.addEventListener('click', sendMessage);
+
+  messageInput.addEventListener('keydown', function(event) {
+    if (event.key === 'Enter' && !event.shiftKey) {
+      event.preventDefault(); // Prevents the default behavior (line break)
+      sendMessage();
     }
-  </script>
+  });
+
+  function addMessage(message) {
+    const messageDiv = document.createElement('div');
+    messageDiv.innerHTML = getCurrentDateTime() + ': ' + message.replace(/\n/g, '<br>');
+    messagesContainer.appendChild(messageDiv);
+  }
+
+  function getCurrentDateTime() {
+    const now = new Date();
+    const dateString = now.toISOString().slice(0, 19).replace("T", " ");
+    const milliseconds = now.getMilliseconds().toString().padStart(3, '0');
+    return '<span class="timestamp">' + dateString + '.' + milliseconds + '</span>';
+  }
+</script>
 </body>
 </html>
 )rawliteral";
