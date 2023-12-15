@@ -34,13 +34,15 @@ public:
 
   void begin(AsyncWebServer *srv);
 
-  void print(const String &message);
+  void print(const String &message) const;
 
-  void println(const String &message) { print(message + "\n"); }
+  void println(const String &message) const { print(message + "\n"); }
 
-  template <typename T> void print(T message) { print(String(message)); }
+  template <typename T> void print(T message) const { print(String(message)); }
 
-  template <typename T> void println(T message) { println(String(message)); }
+  template <typename T> void println(T message) const {
+    println(String(message));
+  }
 
 private:
   AsyncWebServer *_server;
