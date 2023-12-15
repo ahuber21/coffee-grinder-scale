@@ -1,5 +1,4 @@
 #include "wslogger.h"
-// #include <AsyncTCP.h>
 #include <ESPAsyncWebServer.h>
 
 namespace wslogger {
@@ -177,7 +176,7 @@ void WSLogger::begin(AsyncWebServer *srv) {
   _server->on("/console", HTTP_GET, wslogger::onConnect);
 }
 
-void WSLogger::print(const String &message) {
+void WSLogger::print(const String &message) const {
   Serial.print(message);
   for (auto *client : _ws.getClients()) {
     if (client->status() == WS_CONNECTED) {

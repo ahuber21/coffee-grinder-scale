@@ -9,14 +9,19 @@
 #include <ESPAsyncWebServer.h>
 
 #include "defines.h"
+#include "websettings.h"
 #include "wslogger.h"
 
-ADS1232 scale;
+ADS1232 scale =
+    ADS1232(ADC_PDWN_PIN, ADC_SCLK_PIN, ADC_DOUT_PIN, ADC_A0_PIN, ADC_SPEED_PIN,
+            ADC_GAIN1_PIN, ADC_GAIN0_PIN, ADC_TEMP_PIN);
 AsyncWebServer server(SERVER_PORT);
 WSLogger ws;
 
-float scale_units = 0.0f;
+int32_t scale_raw = 0;
 uint32_t scale_refresh_millis = 0;
+
+WebSettings settings;
 
 void setup() {
   Serial.begin(115200);
@@ -32,7 +37,10 @@ void setup() {
   ws.print("Arduino OTA ready at ");
   ws.println(WiFi.localIP());
 
-  scale.begin(SCALE_DOUT, SCALE_SCLK, SCALE_PDWN, SCALE_SPEED);
+  // power up the scale circuit
+  pinMode(ADC_LDO_EN_PIN, OUTPUT);
+  digitalWrite(ADC_LDO_EN_PIN, HIGH);
+  scale.begin();
   scale.tare();
   ws.println("Scale ready");
 }
@@ -40,10 +48,10 @@ void setup() {
 void loop() {
   ArduinoOTA.handle();
 
-  float last = scale_units;
-  scale.get_units(scale_units);
-  if (scale_units != last || millis() - scale_refresh_millis > 1000) {
-    ws.println(scale_units);
+  uint32_t last = scale_raw;
+  scale_raw = scale.readRaw(settings.scale.read_samples);
+  if (scale_raw != last || millis() - scale_refresh_millis > 1000) {
+    ws.println(scale_raw);
     scale_refresh_millis = millis();
   }
 }
