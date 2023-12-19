@@ -13,42 +13,59 @@ const char PROGMEM config_html[] = R"rawliteral(
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Config Page</title>
-<style>
-    body {
-      background-color: #2c3e50;
-      color: #ecf0f1;
-      font-family: Arial, sans-serif;
-      text-align: center;
-      margin-top: 50px;
-    }
-    h1 {
-      color: #3498db;
-    }
-    .button-group {
+  <style>
+  body {
+    background-color: #1a1a1a;
+    font-family: 'Courier New', monospace;
+    text-align: center;
+    margin-top: 50px;
+  }
+  h1 {
+    color: #ffcc00;
+  }
+  .settings-table {
+    display: grid;
+    grid-template-columns: auto auto;
+    gap: 10px;
+    justify-content: center;
+    margin-top: 20px;
+  }
+  .setting {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 10px;
+    background-color: #2c3e50;
+    border-radius: 5px;
+  }
+  .description {
+    color: white;
+    margin-right: 20px;
+  }
+  .button-container {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+  }
+  .button-group {
       display: flex;
       justify-content: center;
-      margin-top: 20px;
     }
-    .button-container {
-      display: flex;
-      align-items: center;
-      margin-bottom: 10px;
-    }
-    .description {
-      margin-right: 10px;
-    }
-    .button {
-      background-color: #34495e;
-      color: #ecf0f1;
-      border: none;
-      padding: 10px 20px;
-      margin: 0 5px;
-      cursor: pointer;
-      border-radius: 5px;
-    }
-    .button.active {
-      background-color: #3498db;
-    }
+  .button {
+    background-color: #2c3e50;
+    color: #ecf0f1;
+    border: none;
+    padding: 10px 20px;
+    margin: 5px;
+    cursor: pointer;
+    border-radius: 5px;
+    display: flex;
+    align-items: center;
+    text-align: center;
+  }
+  .button.active {
+    background-color: #3498db;
+  }
   </style>
   <script>
     const socket = new WebSocket('ws://' + window.location.hostname + '/WebSocketSettings');
@@ -82,7 +99,7 @@ const char PROGMEM config_html[] = R"rawliteral(
 <body>
   <h1>Config Page</h1>
   <div class="button-container">
-    <div class="description">Samples per ADC read:</div>
+    <div class="description">Samples per ADC read</div>
     <div class="button-group">
       <button class="button" onclick="changeScaleReadSamples('4')" data-value="4">4</button>
       <button class="button" onclick="changeScaleReadSamples('8')" data-value="8">8</button>
