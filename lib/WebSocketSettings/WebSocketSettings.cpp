@@ -14,11 +14,11 @@ const char PROGMEM config_html[] = R"rawliteral(
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Config Page</title>
   <style>
+
   body {
     background-color: #1a1a1a;
     font-family: 'Courier New', monospace;
-    text-align: center;
-    margin-top: 50px;
+    margin-top: 20px;
   }
   h1 {
     color: #ffcc00;
@@ -41,27 +41,32 @@ const char PROGMEM config_html[] = R"rawliteral(
   .description {
     color: white;
     margin-right: 20px;
+    width: 30%;
+    text-align: right;
   }
-  .button-container {
+  .setting-container {
     display: flex;
-    justify-content: center;
     align-items: center;
+    margin-top: 10px;
   }
   .button-group {
       display: flex;
-      justify-content: center;
+      justify-content: left;
+      width: 70%;
     }
   .button {
+    height:34px;
+    width:48px;
+    margin: 7px;
+    color:grey;
+    text-align:center;
+    position:relative;
+    padding: 0;
     background-color: #2c3e50;
     color: #ecf0f1;
     border: none;
-    padding: 10px 20px;
-    margin: 5px;
     cursor: pointer;
     border-radius: 5px;
-    display: flex;
-    align-items: center;
-    text-align: center;
   }
   .button.active {
     background-color: #3498db;
@@ -70,23 +75,19 @@ const char PROGMEM config_html[] = R"rawliteral(
   <script>
     const socket = new WebSocket('ws://' + window.location.hostname + '/WebSocketSettings');
     socket.onopen = function (event) {
-      socket.send('get:read_samples:');
+      socket.send('get');
     };
     socket.onclose = function (event) {
       console.log('Config WebSocket closed');
     };
     socket.onmessage = function (event) {
       const response = JSON.parse(event.data);
-      if (response.variable && response.value !== undefined) {
-        setActiveButton(response.value);
-      }
+      setActiveButton('.speedButton', response['speed']);
+      setActiveButton('.readSamplesButton', response['read_samples']);
+      setActiveButton('.gainButton', response['gain']);
     };
-    function changeScaleReadSamples(value) {
-      socket.send('set:read_samples:' + value);
-      setActiveButton(value);
-    }
-    function setActiveButton(value) {
-      const buttons = document.querySelectorAll('.button');
+    function setActiveButton(className, value) {
+      const buttons = document.querySelectorAll(className);
       buttons.forEach(button => {
         button.classList.remove('active');
         if (button.getAttribute('data-value') == value) {
@@ -94,18 +95,39 @@ const char PROGMEM config_html[] = R"rawliteral(
         }
       });
     }
+    function set(variable, value) {
+      socket.send('set:' + variable + ':' + value);
+    }
   </script>
 </head>
 <body>
   <h1>Config Page</h1>
-  <div class="button-container">
+  <div class="setting-container">
     <div class="description">Samples per ADC read</div>
     <div class="button-group">
-      <button class="button" onclick="changeScaleReadSamples('4')" data-value="4">4</button>
-      <button class="button" onclick="changeScaleReadSamples('8')" data-value="8">8</button>
-      <button class="button" onclick="changeScaleReadSamples('12')" data-value="12">12</button>
-      <button class="button" onclick="changeScaleReadSamples('24')" data-value="24">24</button>
-      <button class="button" onclick="changeScaleReadSamples('48')" data-value="48">48</button>
+      <button class="button readSamplesButton" onclick="set('read_samples', '1')" data-value="1">1</button>
+      <button class="button readSamplesButton" onclick="set('read_samples', '2')" data-value="2">2</button>
+      <button class="button readSamplesButton" onclick="set('read_samples', '4')" data-value="4">4</button>
+      <button class="button readSamplesButton" onclick="set('read_samples', '8')" data-value="8">8</button>
+      <button class="button readSamplesButton" onclick="set('read_samples', '12')" data-value="12">12</button>
+      <button class="button readSamplesButton" onclick="set('read_samples', '24')" data-value="24">24</button>
+      <button class="button readSamplesButton" onclick="set('read_samples', '48')" data-value="48">48</button>
+    </div>
+  </div>
+  <div class="setting-container">
+    <div class="description">Speed (SPS)</div>
+    <div class="button-group">
+      <button class="button speedButton" onclick="set('speed', '10')" data-value="10">10</button>
+      <button class="button speedButton" onclick="set('speed', '80')" data-value="80">80</button>
+    </div>
+  </div>
+  <div class="setting-container">
+    <div class="description">Gain</div>
+    <div class="button-group">
+      <button class="button gainButton" onclick="set('gain', '1')" data-value="1">1</button>
+      <button class="button gainButton" onclick="set('gain', '2')" data-value="2">2</button>
+      <button class="button gainButton" onclick="set('gain', '64')" data-value="64">64</button>
+      <button class="button gainButton" onclick="set('gain', '128')" data-value="128">128</button>
     </div>
   </div>
 </body>
@@ -153,56 +175,44 @@ void WebSocketSettings::onWebSocketEvent(AsyncWebSocket *server,
       if (info->opcode == WS_TEXT) {
         String cmd = String((char *)data);
         String response;
-        if (handleWebSocketText(cmd, response))
-          client->text(response.c_str());
+        handleWebSocketText(cmd, response);
+        _logger->println("Send response: " + response);
+        client->text(response.c_str());
       }
     }
     break;
   }
 }
 
-bool WebSocketSettings::handleWebSocketText(const String &cmd,
+void WebSocketSettings::handleWebSocketText(const String &cmd,
                                             String &response) {
-  // Split the command string using the colon as a delimiter
-  int colonIndex = cmd.indexOf(':');
-  if (colonIndex == -1) {
-    // Invalid command format
-    return false;
-  }
-
   // Extract command parts
-  String cmdType = cmd.substring(0, colonIndex);
-  String varName =
-      cmd.substring(colonIndex + 1, cmd.indexOf(':', colonIndex + 1));
-  String value = cmd.substring(cmd.indexOf(':', colonIndex + 1) + 1);
+  int cIdx = cmd.indexOf(':');
+  String cmdType = cmd.substring(0, cIdx);
+  String varName = cmd.substring(cIdx + 1, cmd.indexOf(':', cIdx + 1));
+  String value = cmd.substring(cmd.indexOf(':', cIdx + 1) + 1);
 
-  // Prepare JSON response object
-  StaticJsonDocument<128> jsonDoc; // Adjust the capacity as needed
-  jsonDoc["variable"] = varName;
-
-  // Handle the command based on its type and variable name
-  if (cmdType == "get") {
-    // Get command, handle accordingly
-    if (varName == "read_samples") {
-      jsonDoc["value"] = scale.read_samples;
-    }
-
-    serializeJson(jsonDoc, response);
-    return true;
-  }
-
+  _logger->println(String("Handle cmd: " + cmd));
   if (cmdType == "set") {
-    // Set command, handle accordingly
     if (varName == "read_samples") {
-      // Convert the value to byte and set it
       scale.read_samples = value.toInt();
-      // Save the updated scale to EEPROM
-      saveScaleToEEPROM();
-      _logger->println(String("read_samples set to: " + value));
+    } else if (varName == "speed") {
+      scale.speed = value.toInt();
+    } else if (varName == "gain") {
+      scale.gain = value.toInt();
     }
+
+    saveScaleToEEPROM();
+    scale.is_changed = true;
   }
 
-  return false;
+  // Response contains all settings
+  StaticJsonDocument<128> jsonDoc;
+  jsonDoc["read_samples"] = scale.read_samples;
+  jsonDoc["speed"] = scale.speed;
+  jsonDoc["gain"] = scale.gain;
+
+  serializeJson(jsonDoc, response);
 }
 
 void WebSocketSettings::loadScaleFromEEPROM() {

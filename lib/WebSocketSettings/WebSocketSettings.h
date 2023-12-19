@@ -9,6 +9,10 @@ class WebSocketSettings {
 public:
   struct Scale {
     byte read_samples = 8;
+    byte speed = 10;
+    byte gain = 1;
+
+    bool is_changed = false;
   };
 
   WebSocketSettings();
@@ -23,7 +27,7 @@ private:
   void loadScaleFromEEPROM();
   void saveScaleToEEPROM();
 
-  bool handleWebSocketText(const String &cmd, String &response);
+  void handleWebSocketText(const String &cmd, String &response);
 
   // EEPROM address to store the scale value
   static const int EEPROM_SCALE_ADDRESS;

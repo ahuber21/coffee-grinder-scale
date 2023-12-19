@@ -22,7 +22,7 @@ WebSocketSettings settings;
 int32_t scale_raw = 0;
 uint32_t scale_refresh_millis = 0;
 
-// WebSettings settings;
+void setupScale();
 
 void setup() {
   Serial.begin(115200);
@@ -45,12 +45,16 @@ void setup() {
   pinMode(ADC_LDO_EN_PIN, OUTPUT);
   digitalWrite(ADC_LDO_EN_PIN, HIGH);
   scale.begin();
-  scale.tare();
+  setupScale();
   logger.println("Scale ready");
 }
 
 void loop() {
   ArduinoOTA.handle();
+
+  if (settings.scale.is_changed) {
+    setupScale();
+  }
 
   uint32_t last = scale_raw;
   scale_raw = scale.readRaw(settings.scale.read_samples);
@@ -58,4 +62,12 @@ void loop() {
     logger.println(scale_raw);
     scale_refresh_millis = millis();
   }
+}
+
+void setupScale() {
+  scale.setSpeed(settings.scale.speed);
+  scale.setGain(settings.scale.gain);
+  scale.tare();
+
+  settings.scale.is_changed = false;
 }
