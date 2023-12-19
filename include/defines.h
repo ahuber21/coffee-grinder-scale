@@ -11,4 +11,8 @@
 #define ADC_A0_PIN 0   // tied to GND = AIN1 in PRO
 #define ADC_TEMP_PIN 0 // tied to GND = AIN1 in PRO
 
+#define BUTTON_LEFT 12  // T5 / CN6
+#define BUTTON_RIGHT 33 // T8 / CN7
+#define BUTTON_BACK 32  // T9 / CN8
+
 #define SERVER_PORT 80

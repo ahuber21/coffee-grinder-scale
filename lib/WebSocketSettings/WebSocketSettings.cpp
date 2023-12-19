@@ -85,6 +85,8 @@ const char PROGMEM config_html[] = R"rawliteral(
       setActiveButton('.speedButton', response['speed']);
       setActiveButton('.readSamplesButton', response['read_samples']);
       setActiveButton('.gainButton', response['gain']);
+      document.getElementById('target_dose_single').value = response['target_dose_single'];
+      document.getElementById('target_dose_double').value = response['target_dose_double'];
     };
     function setActiveButton(className, value) {
       const buttons = document.querySelectorAll(className);
@@ -96,7 +98,11 @@ const char PROGMEM config_html[] = R"rawliteral(
       });
     }
     function set(variable, value) {
-      socket.send('set:' + variable + ':' + value);
+      socket.send(`set:${variable}:${value}`);
+    }
+    function submitValue(variable) {
+      const inputValue = document.getElementById(variable).value;
+      set(variable, inputValue);
     }
   </script>
 </head>
@@ -128,6 +134,27 @@ const char PROGMEM config_html[] = R"rawliteral(
       <button class="button gainButton" onclick="set('gain', '2')" data-value="2">2</button>
       <button class="button gainButton" onclick="set('gain', '64')" data-value="64">64</button>
       <button class="button gainButton" onclick="set('gain', '128')" data-value="128">128</button>
+    </div>
+  </div>
+  <div class="setting-container">
+    <div class="description">Calibration Factor</div>
+    <div class="text-input">
+      <input type="text" id="calibration_factor" placeholder="Enter value">
+      <button class="button submitButton" onclick="submitValue('calibration_factor')">Submit</button>
+    </div>
+  </div>
+  <div class="setting-container">
+    <div class="description">Target Dose Single</div>
+    <div class="text-input">
+      <input type="text" id="target_dose_single" placeholder="Enter value">
+      <button class="button submitButton" onclick="submitValue('target_dose_single')">Submit</button>
+    </div>
+  </div>
+  <div class="setting-container">
+    <div class="description">Target Dose Double</div>
+    <div class="text-input">
+      <input type="text" id="target_dose_double" placeholder="Enter value">
+      <button class="button submitButton" onclick="submitValue('target_dose_double')">Submit</button>
     </div>
   </div>
 </body>
@@ -200,6 +227,12 @@ void WebSocketSettings::handleWebSocketText(const String &cmd,
       scale.speed = value.toInt();
     } else if (varName == "gain") {
       scale.gain = value.toInt();
+    } else if (varName == "calibration_factor") {
+      scale.calibration_factor = value.toFloat();
+    } else if (varName == "target_dose_single") {
+      scale.target_dose_single = value.toFloat();
+    } else if (varName == "target_dose_double") {
+      scale.target_dose_double = value.toFloat();
     }
 
     saveScaleToEEPROM();
@@ -207,10 +240,13 @@ void WebSocketSettings::handleWebSocketText(const String &cmd,
   }
 
   // Response contains all settings
-  StaticJsonDocument<128> jsonDoc;
+  StaticJsonDocument<256> jsonDoc;
   jsonDoc["read_samples"] = scale.read_samples;
   jsonDoc["speed"] = scale.speed;
   jsonDoc["gain"] = scale.gain;
+  jsonDoc["calibration_factor"] = scale.calibration_factor;
+  jsonDoc["target_dose_single"] = scale.target_dose_single;
+  jsonDoc["target_dose_double"] = scale.target_dose_double;
 
   serializeJson(jsonDoc, response);
 }

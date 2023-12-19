@@ -11,6 +11,9 @@ public:
     byte read_samples = 8;
     byte speed = 10;
     byte gain = 1;
+    float calibration_factor = 0.0;
+    float target_dose_single = 0.0;
+    float target_dose_double = 0.0;
 
     bool is_changed = false;
   };
