@@ -1,3 +1,5 @@
+/**
+
 #include "websettings.h"
 #include <ESPAsyncWebServer.h>
 
@@ -10,16 +12,17 @@ const char PROGMEM config_html[] = R"rawliteral(
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
         <title>Configuration Page</title>
         <script>
-          const socket = new WebSocket('ws://' + window.location.hostname + '/config-ws');
-          socket.onopen = function(event) {
-            console.log('Config WebSocket opened');
+          const socket = new WebSocket('ws://' + window.location.hostname +
+'/config-ws'); socket.onopen = function(event) { console.log('Config WebSocket
+opened');
           };
           socket.onclose = function(event) {
             console.log('Config WebSocket closed');
           };
           function changeScaleReadSamples() {
             const selectElement = document.getElementById('scaleSelect');
-            const selectedValue = selectElement.options[selectElement.selectedIndex].value;
+            const selectedValue =
+selectElement.options[selectElement.selectedIndex].value;
             socket.send(selectedValue);
           }
         </script>
@@ -91,3 +94,6 @@ void WebSettings::begin(AsyncWebServer *srv, const WSLogger *logger) {
   _server->addHandler(&_ws);
   _server->on("/settings", HTTP_GET, websettings::onConnect);
 }
+
+
+*/

@@ -1,3 +1,5 @@
+/**
+
 #pragma once
 #include <Arduino.h>
 #include <AsyncWebSocket.h>
@@ -31,3 +33,5 @@ private:
   AsyncWebSocket _ws;
   const WSLogger *_logger;
 };
+
+*/

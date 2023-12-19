@@ -12,5 +12,3 @@
 #define ADC_TEMP_PIN 0 // tied to GND = AIN1 in PRO
 
 #define SERVER_PORT 80
-
-#define WS_WELCOME_MSG "Welcome to the Eureka WebSocket logger\n"
