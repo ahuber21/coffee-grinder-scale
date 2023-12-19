@@ -12,15 +12,13 @@
 #pragma once
 
 #include <Arduino.h>
-
-class AsyncWebServer;
-class WebSocketHandler;
+#include <AsyncWebSocket.h>
 
 class WebSocketLogger {
 public:
-  WebSocketLogger() : _server(nullptr), _ws(nullptr) {}
+  WebSocketLogger();
 
-  void begin(AsyncWebServer *srv, WebSocketHandler *wb);
+  void begin(AsyncWebServer *srv);
 
   void print(const String &message) const;
 
@@ -34,5 +32,5 @@ public:
 
 private:
   AsyncWebServer *_server;
-  WebSocketHandler *_ws;
+  AsyncWebSocket _ws;
 };

@@ -1,5 +1,4 @@
 #include "WebSocketLogger.h"
-#include "WebSocketHandler.h"
 #include <ESPAsyncWebServer.h>
 
 namespace wslogger {
@@ -75,7 +74,7 @@ const char PROGMEM index_html[] = R"rawliteral(
 <!-- Your HTML code remains the same -->
 
 <script>
-  const socket = new WebSocket('ws://' + window.location.hostname + '/ws');
+  const socket = new WebSocket('ws://' + window.location.hostname + '/WebSocketLogger');
   const messagesContainer = document.getElementById('messagesContainer');
   const messageInput = document.getElementById('messageInput');
   const sendMessageButton = document.getElementById('sendMessageButton');
@@ -127,12 +126,11 @@ const char PROGMEM index_html[] = R"rawliteral(
 </body>
 </html>
 )rawliteral";
-
 void onConnect(AsyncWebServerRequest *request) {
   request->send_P(200, "text/html", index_html);
 }
 
-void handleWebSocketData(AsyncWebSocketClient *client, void *arg, uint8_t *data,
+void handleWebSocketData(AsyncWebSocketClient *client, uint8_t *data,
                          size_t len) {
   // Process the received data, for example, interpret it as a string
   String message = "";
@@ -146,22 +144,42 @@ void handleWebSocketData(AsyncWebSocketClient *client, void *arg, uint8_t *data,
 }
 void sendWelcomeMessage(AsyncWebSocketClient *client) {
   // Send a welcome message to the newly connected client
-  client->text("WebSocket logger attached");
+  client->text("Welcome to the Eureka web socket logger");
+}
+
+void onWebSocketEvent(AsyncWebSocket *server, AsyncWebSocketClient *client,
+                      AwsEventType type, void *arg, uint8_t *data, size_t len) {
+  switch (type) {
+  case WS_EVT_CONNECT:
+    Serial.println("WebSocket client connected");
+    sendWelcomeMessage(client);
+    break;
+  case WS_EVT_DISCONNECT:
+    Serial.println("WebSocket client disconnected");
+    break;
+  case WS_EVT_DATA:
+    handleWebSocketData(client, data, len);
+    break;
+  case WS_EVT_PONG:
+    break;
+  case WS_EVT_ERROR:
+    break;
+  }
 }
 } // namespace wslogger
 
-void WebSocketLogger::begin(AsyncWebServer *srv, WebSocketHandler *ws) {
-  _ws = ws;
+WebSocketLogger::WebSocketLogger() : _ws("/WebSocketLogger") {}
+
+void WebSocketLogger::begin(AsyncWebServer *srv) {
+  _ws.onEvent(&wslogger::onWebSocketEvent);
   _server = srv;
-  _ws->registerOnConnectHandler(&wslogger::sendWelcomeMessage);
-  _ws->registerOnDataHandler(&wslogger::handleWebSocketData);
-  _server->addHandler(_ws);
+  _server->addHandler(&_ws);
   _server->on("/console", HTTP_GET, wslogger::onConnect);
 }
 
 void WebSocketLogger::print(const String &message) const {
   Serial.print(message);
-  for (auto *client : _ws->getClients()) {
+  for (auto *client : _ws.getClients()) {
     if (client->status() == WS_CONNECTED) {
       client->text(message);
     }
