@@ -1,6 +1,7 @@
 #pragma once
 #include <Arduino.h>
 #include <AsyncWebSocket.h>
+#include <EEPROM.h>
 
 class WebSocketLogger;
 
@@ -19,6 +20,14 @@ public:
   Scale scale;
 
 private:
+  void loadScaleFromEEPROM();
+  void saveScaleToEEPROM();
+
+  bool handleWebSocketText(const String &cmd, String &response);
+
+  // EEPROM address to store the scale value
+  static const int EEPROM_SCALE_ADDRESS;
+
   AsyncWebSocket _ws;
   AsyncWebServer *_server;
   const WebSocketLogger *_logger;

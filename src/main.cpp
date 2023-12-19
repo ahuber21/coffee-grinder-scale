@@ -53,7 +53,6 @@ void loop() {
   ArduinoOTA.handle();
 
   uint32_t last = scale_raw;
-  // scale_raw = scale.readRaw(settings.scale.read_samples);
   scale_raw = scale.readRaw(settings.scale.read_samples);
   if (scale_raw != last || millis() - scale_refresh_millis > 1000) {
     logger.println(scale_raw);
