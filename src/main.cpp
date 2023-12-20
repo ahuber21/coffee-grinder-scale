@@ -6,6 +6,7 @@
 
 // needs to be included after WiFiManager.h
 // which does not properly protect some defines
+#include <Display.h>
 #include <ESPAsyncWebServer.h>
 #include <WebSocketLogger.h>
 #include <WebSocketSettings.h>
@@ -15,23 +16,31 @@
 ADS1232 scale =
     ADS1232(ADC_PDWN_PIN, ADC_SCLK_PIN, ADC_DOUT_PIN, ADC_A0_PIN, ADC_SPEED_PIN,
             ADC_GAIN1_PIN, ADC_GAIN0_PIN, ADC_TEMP_PIN);
+Display display(DISPLAY_SCK_PIN, DISPLAY_MISO_PIN, DISPLAY_MOSI_PIN,
+                DISPLAY_SS_PIN, DISPLAY_DC_PIN, DISPLAY_CS_PIN,
+                DISPLAY_RESET_PIN, DISPLAY_BACKLIGHT_PIN);
 
 AsyncWebServer server(SERVER_PORT);
 WebSocketLogger logger;
 WebSocketSettings settings;
 
+static const unsigned long timeout_millis = 30000;
 bool state_on_interrupt_was_debug = false;
 float target_grams = 0;
 unsigned long grinder_started_millis = 0;
+unsigned long grinder_target_stop_millis = 0;
 unsigned long last_heartbeat_millis = 0;
 int32_t tare_raw = 0;
+float last_grams = 0;
+unsigned long last_grams_millis = 0;
+float grams_per_seconds_total = 0;
+uint16_t grams_per_seconds_count = 0;
 
 enum State {
   IDLE = 0,
   BUTTON_PRESSED,
   CONFIGURED,
   RUNNING,
-  TIMEOUT,
   STOPPING,
   DEBUG,
 } state;
@@ -50,7 +59,6 @@ void loopButtonPressed();
 void loopButtonPressedDebug();
 void loopConfigured();
 void loopRunning();
-void loopTimeout();
 void loopStopping();
 void loopDebug();
 
@@ -79,6 +87,10 @@ void setup() {
   scale.begin();
   setupScale();
   logger.println("Scale ready");
+
+  // display
+  display.begin();
+  display.helloWorld();
 
   pinMode(BUTTON_LEFT, INPUT_PULLDOWN);
   attachInterrupt(
@@ -138,9 +150,6 @@ void loop() {
   case RUNNING:
     loopRunning();
     break;
-  case TIMEOUT:
-    loopTimeout();
-    break;
   case STOPPING:
     loopStopping();
     break;
@@ -153,7 +162,7 @@ void loop() {
 }
 
 void heartbeat() {
-  if (millis() - last_heartbeat_millis > 1000) {
+  if (millis() - last_heartbeat_millis > 5000) {
     String message = "[heartbeat] state=";
     switch (state) {
     case IDLE:
@@ -167,9 +176,6 @@ void heartbeat() {
       break;
     case RUNNING:
       message += "RUNNING";
-      break;
-    case TIMEOUT:
-      message += "TIMEOUT";
       break;
     case STOPPING:
       message += "STOPPING";
@@ -237,50 +243,111 @@ void loopConfigured() {
   // tare
   tare_raw = scale.readRaw(settings.scale.read_samples);
 
-  // turn on grinder
+  // start grinder
+  logger.println("Grinder started");
   grinder_started_millis = millis();
+  grinder_target_stop_millis = grinder_started_millis + timeout_millis;
+
+  // initial values
+  last_grams = units();
+  last_grams_millis = millis();
+  grams_per_seconds_total = 0;
+  grams_per_seconds_count = 0;
 
   state = RUNNING;
 }
 
 void loopRunning() {
-  float grams = scale.readUnits(settings.scale.read_samples);
-  logger.println("Running ... " + String(grams));
+  // we are assuming a more or less constant rate
+  // therefore we calculate the grams per second and extrapolate the stopping
+  // time
+
+  unsigned long int now = millis();
+
+  if (now >= grinder_target_stop_millis) {
+    state = STOPPING;
+    return;
+  }
+
+  float grams = units();
+
+  // wait until something is happening
+  if (grams < 1) {
+    return;
+  }
+
+  if (grams > target_grams) {
+    state = STOPPING;
+    return;
+  }
+
+  // calculate rate
+  float rate = 1000. * (grams - last_grams) / (now - last_grams_millis);
+  if (rate < 0) {
+    rate = 0;
+  }
+
+  // update last values with current ones
+  last_grams = grams;
+  last_grams_millis = now;
+
+  // update the values for average calculation
+  if (rate > 0.1) {
+    grams_per_seconds_total += rate;
+    ++grams_per_seconds_count;
+  }
+
+  // calculate average rate
+  float avg_rate = (grams_per_seconds_count > 0)
+                       ? grams_per_seconds_total / grams_per_seconds_count
+                       : 0;
+
+  // update the target stop time
+  unsigned long int target_millis_calculated = 1000 * target_grams / avg_rate;
+  if (avg_rate == 0 || target_millis_calculated > timeout_millis) {
+    target_millis_calculated = timeout_millis;
+  }
+  grinder_target_stop_millis =
+      grinder_started_millis + target_millis_calculated;
+
+  // send formatted log message
+  char buffer[130];
+  float time = (now - grinder_started_millis) / 1000.;
+  float total = target_millis_calculated / 1000.;
+  float eta = (grinder_target_stop_millis - now) / 1000.;
+  sprintf(
+      buffer,
+      "TIME %5.2f s | EST RUNTIME %5.2f s | ETA %5.2f s | WEIGHT %+5.2f g | "
+      "RATE %+3.2f g/s | RATE (AVG) %+3.2f g/s",
+      time, total, eta, grams, rate, avg_rate);
+  logger.println(buffer);
 
   // update display
-
-  if (millis() - grinder_started_millis > 5000) {
-    logger.println("Timeout");
-    state = TIMEOUT;
-  }
-  if (grams >= target_grams) {
-    state = STOPPING;
-  }
-}
-
-void loopTimeout() {
-  float grams = scale.readUnits(settings.scale.read_samples);
-
-  // stop grinder
-
-  // update display with timeout message
-
-  state = IDLE;
 }
 
 void loopStopping() {
-  float grams = scale.readUnits(settings.scale.read_samples);
+  float grams = units();
 
   // stop grinder
+  logger.println("Grinder stopped");
 
-  delay(100);
-  for (int i = 0; i < 10; ++i) {
-    float tmp = scale.readUnits(settings.scale.read_samples);
-    if (tmp - grams < 0.1) {
+  for (int i = 0; i < 20; ++i) {
+    float tmp = units();
+    float delta = tmp - grams;
+    grams = tmp;
+    if (delta < 0.1) {
       break;
     }
+    logger.println("Waiting for stable weight");
     delay(50);
   }
+
+  float total_time = (millis() - grinder_started_millis) / 1000.;
+  char buffer[80];
+  sprintf(buffer,
+          "DONE | TIME %5.2f s | TOTAL WEIGHT %5.2f g | TARGET WEIGHT %5.2f",
+          total_time, grams, target_grams);
+  logger.println(buffer);
 
   // final display update
 

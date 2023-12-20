@@ -11,8 +11,17 @@
 #define ADC_A0_PIN 0   // tied to GND = AIN1 in PRO
 #define ADC_TEMP_PIN 0 // tied to GND = AIN1 in PRO
 
-#define BUTTON_LEFT 12  // T5 / CN6
-#define BUTTON_RIGHT 33 // T8 / CN7
+#define BUTTON_LEFT 33  // T5 / CN6
+#define BUTTON_RIGHT 12 // T8 / CN7
 #define BUTTON_BACK 32  // T9 / CN8
+
+#define DISPLAY_SCK_PIN 1427
+#define DISPLAY_MISO_PIN 12
+#define DISPLAY_MOSI_PIN 13
+#define DISPLAY_SS_PIN 15
+#define DISPLAY_DC_PIN 26
+#define DISPLAY_CS_PIN 15
+#define DISPLAY_RESET_PIN 27
+#define DISPLAY_BACKLIGHT_PIN 25
 
 #define SERVER_PORT 80
