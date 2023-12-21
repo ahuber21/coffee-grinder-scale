@@ -71,8 +71,6 @@ const char PROGMEM index_html[] = R"rawliteral(
     <button id="sendMessageButton">Send</button>
   </div>
 
-<!-- Your HTML code remains the same -->
-
 <script>
   const socket = new WebSocket('ws://' + window.location.hostname + '/WebSocketLogger');
   const messagesContainer = document.getElementById('messagesContainer');

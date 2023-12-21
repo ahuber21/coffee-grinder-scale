@@ -25,6 +25,8 @@ WebSocketLogger logger;
 WebSocketSettings settings;
 
 static const unsigned long timeout_millis = 30000;
+static const unsigned long finalize_screentime_millis = 5000;
+
 bool state_on_interrupt_was_debug = false;
 float target_grams = 0;
 unsigned long grinder_started_millis = 0;
@@ -35,17 +37,22 @@ float last_grams = 0;
 unsigned long last_grams_millis = 0;
 float grams_per_seconds_total = 0;
 uint16_t grams_per_seconds_count = 0;
+unsigned long finalize_millis = 0;
+float finalize_time = 0;
+float finalize_grams = 0;
 
-enum State {
+volatile enum State {
   IDLE = 0,
   BUTTON_PRESSED,
   CONFIGURED,
   RUNNING,
   STOPPING,
+  FINALIZE,
   DEBUG,
 } state;
+State oldstate = IDLE;
 
-enum ButtonPins {
+volatile enum ButtonPins {
   left = BUTTON_LEFT,
   right = BUTTON_RIGHT,
   back = BUTTON_BACK,
@@ -60,12 +67,21 @@ void loopButtonPressedDebug();
 void loopConfigured();
 void loopRunning();
 void loopStopping();
+void loopFinalize();
 void loopDebug();
 
 float units();
 
 void setup() {
   Serial.begin(115200);
+
+  // display
+  display.begin();
+  display.wakeUp();
+  display.setRotation(3);
+  display.setBrightness(1);
+  display.clear();
+  display.drawBitmap(0, 0, (unsigned char *)bootLogo);
 
   WiFiManager wifiManager;
   wifiManager.autoConnect("Eureka setup");
@@ -78,8 +94,6 @@ void setup() {
   logger.println("Settings ready");
 
   ArduinoOTA.begin();
-  logger.print("Arduino OTA ready at ");
-  logger.println(WiFi.localIP());
 
   // power up the scale circuit
   pinMode(ADC_LDO_EN_PIN, OUTPUT);
@@ -87,10 +101,6 @@ void setup() {
   scale.begin();
   setupScale();
   logger.println("Scale ready");
-
-  // display
-  display.begin();
-  display.helloWorld();
 
   pinMode(BUTTON_LEFT, INPUT_PULLDOWN);
   attachInterrupt(
@@ -120,6 +130,7 @@ void setup() {
       },
       RISING);
 
+  display.clear();
   state = IDLE;
 }
 
@@ -136,11 +147,16 @@ void setupScale() {
 void loop() {
   heartbeat();
 
+  if (state != oldstate) {
+    display.clear();
+  }
+
   switch (state) {
   case IDLE:
     loopIdle();
     break;
   case BUTTON_PRESSED:
+    display.clear();
     state_on_interrupt_was_debug ? loopButtonPressedDebug()
                                  : loopButtonPressed();
     break;
@@ -153,12 +169,17 @@ void loop() {
   case STOPPING:
     loopStopping();
     break;
+  case FINALIZE:
+    loopFinalize();
+    break;
   case DEBUG:
     loopDebug();
     break;
   default:
     break;
   }
+
+  oldstate = state;
 }
 
 void heartbeat() {
@@ -180,6 +201,9 @@ void heartbeat() {
     case STOPPING:
       message += "STOPPING";
       break;
+    case FINALIZE:
+      message += "FINALIZE";
+      break;
     case DEBUG:
       message += "DEBUG";
       break;
@@ -198,6 +222,9 @@ void loopIdle() {
   if (settings.scale.is_changed) {
     setupScale();
   }
+
+  float grams = units();
+  display.displayString(String(grams, 2) + " g", VerticalAlignment::CENTER);
 }
 
 void loopButtonPressed() {
@@ -238,7 +265,7 @@ void loopButtonPressedDebug() {
 }
 
 void loopConfigured() {
-  // show stuff on display
+  display.displayString("T", VerticalAlignment::CENTER);
 
   // tare
   tare_raw = scale.readRaw(settings.scale.read_samples);
@@ -247,6 +274,11 @@ void loopConfigured() {
   logger.println("Grinder started");
   grinder_started_millis = millis();
   grinder_target_stop_millis = grinder_started_millis + timeout_millis;
+
+  // update display
+  display.clear();
+  display.displayString(String(target_grams, 2) + " g",
+                        VerticalAlignment::THREE_ROW_BOTTOM);
 
   // initial values
   last_grams = units();
@@ -323,10 +355,25 @@ void loopRunning() {
   logger.println(buffer);
 
   // update display
+  display.displayString("R - " + String(time, 2) + " s",
+                        VerticalAlignment::THREE_ROW_TOP);
+  display.displayString(String(grams, 2) + " g",
+                        VerticalAlignment::THREE_ROW_CENTER);
+  display.displayString(String(target_grams, 2) + " g",
+                        VerticalAlignment::THREE_ROW_BOTTOM);
 }
 
 void loopStopping() {
   float grams = units();
+
+  // update display
+  float time = (millis() - grinder_started_millis) / 1000.;
+  display.displayString("S - " + String(time, 2) + " s",
+                        VerticalAlignment::THREE_ROW_TOP);
+  display.displayString(String(grams, 2) + " g",
+                        VerticalAlignment::THREE_ROW_CENTER);
+  display.displayString(String(target_grams, 2) + " g",
+                        VerticalAlignment::THREE_ROW_BOTTOM);
 
   // stop grinder
   logger.println("Grinder stopped");
@@ -342,19 +389,36 @@ void loopStopping() {
     delay(50);
   }
 
-  float total_time = (millis() - grinder_started_millis) / 1000.;
+  time = (millis() - grinder_started_millis) / 1000.;
   char buffer[80];
   sprintf(buffer,
           "DONE | TIME %5.2f s | TOTAL WEIGHT %5.2f g | TARGET WEIGHT %5.2f",
-          total_time, grams, target_grams);
+          time, grams, target_grams);
   logger.println(buffer);
 
-  // final display update
+  finalize_millis = millis();
+  finalize_grams = grams;
+  finalize_time = time;
+  state = FINALIZE;
+}
 
-  state = IDLE;
+void loopFinalize() {
+  display.displayString(String(finalize_time, 2) + " s",
+                        VerticalAlignment::THREE_ROW_TOP);
+  display.displayString(String(finalize_grams, 2) + " g",
+                        VerticalAlignment::THREE_ROW_CENTER);
+  display.displayString("FINAL", VerticalAlignment::THREE_ROW_BOTTOM);
+
+  if (millis() - finalize_millis > finalize_screentime_millis) {
+    display.clear();
+    state = IDLE;
+  }
 }
 
 void loopDebug() {
+  IPAddress ip = WiFi.localIP();
+  display.displayString(ip.toString(), VerticalAlignment::CENTER);
+
   auto raw = scale.readRaw(settings.scale.read_samples);
   logger.println("Cal: " + String(settings.scale.calibration_factor, 10));
   logger.println("Tare: " + String(tare_raw));
