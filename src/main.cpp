@@ -280,6 +280,9 @@ void loopButtonPressedDebug() {
 }
 
 void loopConfigured() {
+  // reset graph
+  graph.resetGraph(target_grams);
+
   display.displayString("T", VerticalAlignment::CENTER);
 
   // tare

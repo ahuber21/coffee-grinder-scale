@@ -58,13 +58,16 @@ const char PROGMEM WebSocketGraph::graph_html[] = R"rawliteral(
         existingCanvas.parentNode.removeChild(existingCanvas);
         const newCanvas = document.createElement('canvas');
         newCanvas.id = 'graphCanvas';
+        newCanvas.width = 800;
+        newCanvas.height = 400;
         document.body.appendChild(newCanvas);
 
         const ctx = document.getElementById('graphCanvas');
 
         weightDataset = {
             label: 'Weight',
-            borderColor: '#3498db',
+            backgroundColor: '#ffcc00',
+            borderColor: '#ffcc00',
             borderWidth: 2,
             fill: false,
             data: [],
@@ -78,51 +81,35 @@ const char PROGMEM WebSocketGraph::graph_html[] = R"rawliteral(
         options: {
             responsive: true,
             scales: {
-            x: {
-                type: 'linear',
-                position: 'bottom',
-                title: {
-                display: true,
-                text: 'Time [s]',
-                font: {
-                    size: 14,
-                    color: 'white', // Set text color to white
+                x: {
+                    type: 'linear',
+                    position: 'bottom',
+                    title: {
+                        display: true,
+                        text: 'Time [s]',
+                        color: 'white',
+                    },
+                    ticks: {
+                        color: 'white',
+                    },
                 },
+                y: {
+                    type: 'linear',
+                    position: 'left',
+                    title: {
+                        display: true,
+                        text: 'Weight [g]',
+                        color: 'white',
+                    },
+                    ticks: {
+                        color: 'white',
+                    },
                 },
-                ticks: {
-                color: 'white', // Set tick color to white
-                },
-            },
-            y: {
-                type: 'linear',
-                position: 'left',
-                title: {
-                display: true,
-                text: 'Weight [g]',
-                font: {
-                    size: 14,
-                    color: 'white', // Set text color to white
-                },
-                },
-                ticks: {
-                color: 'white', // Set tick color to white
-                },
-            },
-            },
-            elements: {
-            point: {
-                backgroundColor: '#ffcc00', // Set circle color to yellow
-                borderColor: '#ffcc00', // Set circle border color to yellow
-            },
-            line: {
-                backgroundColor: '#ffcc00', // Set line color to yellow
-                borderColor: '#ffcc00', // Set line border color to yellow
-            },
             },
             plugins: {
-            legend: {
-                display: false, // Hide legend
-            },
+                legend: {
+                    display: false,
+                },
             },
         },
         });
@@ -142,7 +129,7 @@ const char PROGMEM WebSocketGraph::graph_html[] = R"rawliteral(
 
     socket.onmessage = function (event) {
         const data = JSON.parse(event.data);
-        if (event.target_weight) {
+        if (data.target_weight) {
             createChart();
         } else {
             weightDataset.data.push({ x: data.seconds, y: data.weight });
