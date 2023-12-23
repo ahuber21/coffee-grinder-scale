@@ -18,6 +18,10 @@ public:
     bool is_changed = false;
   };
 
+  struct WiFi {
+    bool reset_flag = false;
+  };
+
   WebSocketSettings();
   void begin(AsyncWebServer *srv, const WebSocketLogger *logger);
   void onWebSocketEvent(AsyncWebSocket *server, AsyncWebSocketClient *client,
@@ -25,6 +29,7 @@ public:
                         size_t len);
 
   Scale scale;
+  WiFi wifi;
 
 private:
   void loadScaleFromEEPROM();

@@ -71,6 +71,8 @@ void loopStopping();
 void loopFinalize();
 void loopDebug();
 
+void resetWifi();
+
 void heartbeat();
 
 float units();
@@ -87,16 +89,8 @@ void setup() {
 
   // display
   setupDisplay();
-  display.begin();
-  display.wakeUp();
-  display.setRotation(3);
-  display.setBrightness(1);
-  display.clear();
-  display.drawBitmap(0, 0, (unsigned char *)bootLogo);
 
   setupWifi();
-  WiFiManager wifiManager;
-  wifiManager.autoConnect("Eureka setup");
 
   server.begin();
   logger.begin(&server);
@@ -233,6 +227,10 @@ void loopIdle() {
 
   if (settings.scale.is_changed) {
     setupScale();
+  }
+
+  if (settings.wifi.reset_flag) {
+    resetWifi();
   }
 
   float grams = units();
@@ -447,3 +445,50 @@ float units() {
 
 void grinderOn() { digitalWrite(GRINDER_RELAY_PIN, LOW); }
 void grinderOff() { digitalWrite(GRINDER_RELAY_PIN, HIGH); }
+
+void setupDisplay() {
+  display.begin();
+  display.wakeUp();
+  display.setRotation(3);
+  display.setBrightness(1);
+  display.clear();
+  display.drawBitmap(0, 0, (unsigned char *)bootLogo);
+}
+
+void setupWifi() {
+  WiFiManager wifiManager;
+
+  bool wifiWebServerStarted = false;
+
+  wifiManager.setWebServerCallback(
+      [&wifiWebServerStarted]() { wifiWebServerStarted = true; });
+  wifiManager.setAPCallback([](WiFiManager *manager) {
+    display.clear();
+    display.displayString("AP started", VerticalAlignment::CENTER);
+  });
+  wifiManager.setSaveConfigCallback([]() {
+    display.clear();
+    display.displayString("Saving WiFi &", VerticalAlignment::TWO_ROW_TOP);
+    display.displayString("rebooting", VerticalAlignment::TWO_ROW_BOTTOM);
+  });
+
+  wifiManager.autoConnect("Eureka setup");
+
+  if (wifiWebServerStarted) {
+    ESP.restart();
+  }
+}
+
+void resetWifi() {
+  WiFiManager manager;
+  manager.resetSettings();
+
+  display.clear();
+  display.displayString("WiFi reset", VerticalAlignment::CENTER);
+
+  logger.println("WiFi reset");
+
+  settings.wifi.reset_flag = false;
+
+  ESP.restart();
+}

@@ -71,6 +71,13 @@ const char PROGMEM config_html[] = R"rawliteral(
   .button.active {
     background-color: #3498db;
   }
+  .redButton {
+    padding: 8px 15px;
+    background-color: #e74c3c;
+    color: #ecf0f1;
+    border-radius: 5px;
+    border: none;
+  }
   </style>
   <script>
     const socket = new WebSocket('ws://' + window.location.hostname + '/WebSocketSettings');
@@ -85,6 +92,7 @@ const char PROGMEM config_html[] = R"rawliteral(
       setActiveButton('.speedButton', response['speed']);
       setActiveButton('.readSamplesButton', response['read_samples']);
       setActiveButton('.gainButton', response['gain']);
+      document.getElementById('calibration_factor').value = response['calibration_factor'];
       document.getElementById('target_dose_single').value = response['target_dose_single'];
       document.getElementById('target_dose_double').value = response['target_dose_double'];
     };
@@ -99,6 +107,9 @@ const char PROGMEM config_html[] = R"rawliteral(
     }
     function set(variable, value) {
       socket.send(`set:${variable}:${value}`);
+    }
+    function resetWiFi() {
+      socket.send('set:resetWiFi:0');
     }
     function submitValue(variable) {
       const inputValue = document.getElementById(variable).value;
@@ -155,6 +166,12 @@ const char PROGMEM config_html[] = R"rawliteral(
     <div class="text-input">
       <input type="text" id="target_dose_double" placeholder="Enter value">
       <button class="button submitButton" onclick="submitValue('target_dose_double')">Submit</button>
+    </div>
+  </div>
+  <div class="setting-container">
+    <div class="description">Reset WiFi</div>
+    <div class="button-group">
+      <button class="redButton" onclick="resetWiFi()">Reset WiFi</button>
     </div>
   </div>
 </body>
@@ -233,6 +250,8 @@ void WebSocketSettings::handleWebSocketText(const String &cmd,
       scale.target_dose_single = value.toFloat();
     } else if (varName == "target_dose_double") {
       scale.target_dose_double = value.toFloat();
+    } else if (varName == "resetWiFi") {
+      wifi.reset_flag = true;
     }
 
     saveScaleToEEPROM();
