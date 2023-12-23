@@ -58,9 +58,10 @@ volatile enum ButtonPins {
   back = BUTTON_BACK,
 } button;
 
+void setupDisplay();
+void setupWifi();
 void setupScale();
 
-void heartbeat();
 void loopIdle();
 void loopButtonPressed();
 void loopButtonPressedDebug();
@@ -70,12 +71,22 @@ void loopStopping();
 void loopFinalize();
 void loopDebug();
 
+void heartbeat();
+
 float units();
+
+void grinderOn();
+void grinderOff();
 
 void setup() {
   Serial.begin(115200);
 
+  // grinder relay
+  pinMode(GRINDER_RELAY_PIN, OUTPUT);
+  grinderOff();
+
   // display
+  setupDisplay();
   display.begin();
   display.wakeUp();
   display.setRotation(3);
@@ -83,6 +94,7 @@ void setup() {
   display.clear();
   display.drawBitmap(0, 0, (unsigned char *)bootLogo);
 
+  setupWifi();
   WiFiManager wifiManager;
   wifiManager.autoConnect("Eureka setup");
 
@@ -271,6 +283,7 @@ void loopConfigured() {
   tare_raw = scale.readRaw(settings.scale.read_samples);
 
   // start grinder
+  grinderOn();
   logger.println("Grinder started");
   grinder_started_millis = millis();
   grinder_target_stop_millis = grinder_started_millis + timeout_millis;
@@ -376,6 +389,7 @@ void loopStopping() {
                         VerticalAlignment::THREE_ROW_BOTTOM);
 
   // stop grinder
+  grinderOff();
   logger.println("Grinder stopped");
 
   for (int i = 0; i < 20; ++i) {
@@ -430,3 +444,6 @@ float units() {
   float raw = scale.readRaw(settings.scale.read_samples) - tare_raw;
   return raw * settings.scale.calibration_factor;
 }
+
+void grinderOn() { digitalWrite(GRINDER_RELAY_PIN, LOW); }
+void grinderOff() { digitalWrite(GRINDER_RELAY_PIN, HIGH); }
