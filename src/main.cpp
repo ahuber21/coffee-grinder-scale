@@ -8,6 +8,7 @@
 // which does not properly protect some defines
 #include <Display.h>
 #include <ESPAsyncWebServer.h>
+#include <WebSocketGraph.h>
 #include <WebSocketLogger.h>
 #include <WebSocketSettings.h>
 
@@ -23,6 +24,7 @@ Display display(DISPLAY_SCK_PIN, DISPLAY_MISO_PIN, DISPLAY_MOSI_PIN,
 AsyncWebServer server(SERVER_PORT);
 WebSocketLogger logger;
 WebSocketSettings settings;
+WebSocketGraph graph;
 
 static const unsigned long timeout_millis = 30000;
 static const unsigned long finalize_screentime_millis = 5000;
@@ -98,6 +100,9 @@ void setup() {
 
   settings.begin(&server, &logger);
   logger.println("Settings ready");
+
+  graph.begin(&server);
+  logger.println("Graph ready");
 
   ArduinoOTA.begin();
 
@@ -314,6 +319,11 @@ void loopRunning() {
 
   float grams = units();
 
+  float time = (now - grinder_started_millis) / 1000.;
+
+  // update graph
+  graph.updateGraphData(time, grams);
+
   // wait until something is happening
   if (grams < 1) {
     return;
@@ -355,7 +365,6 @@ void loopRunning() {
 
   // send formatted log message
   char buffer[130];
-  float time = (now - grinder_started_millis) / 1000.;
   float total = target_millis_calculated / 1000.;
   float eta = (grinder_target_stop_millis - now) / 1000.;
   sprintf(
@@ -407,6 +416,9 @@ void loopStopping() {
           "DONE | TIME %5.2f s | TOTAL WEIGHT %5.2f g | TARGET WEIGHT %5.2f",
           time, grams, target_grams);
   logger.println(buffer);
+
+  // final graph update
+  graph.updateGraphData(time, grams);
 
   finalize_millis = millis();
   finalize_grams = grams;
