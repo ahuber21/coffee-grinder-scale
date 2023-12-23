@@ -358,6 +358,10 @@ void loopRunning() {
                        ? grams_per_seconds_total / grams_per_seconds_count
                        : 0;
 
+  if (!(avg_rate > 0)) {
+    return;
+  }
+
   // update the target stop time
   unsigned long int target_millis_calculated = 1000 * target_grams / avg_rate;
   if (avg_rate == 0 || target_millis_calculated > timeout_millis) {
