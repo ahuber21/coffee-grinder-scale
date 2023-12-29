@@ -34,7 +34,6 @@ float target_grams = 0;
 unsigned long grinder_started_millis = 0;
 unsigned long grinder_target_stop_millis = 0;
 unsigned long last_heartbeat_millis = 0;
-int32_t tare_raw = 0;
 float last_grams = 0;
 unsigned long last_grams_millis = 0;
 float grams_per_seconds_total = 0;
@@ -76,8 +75,6 @@ void loopDebug();
 void resetWifi();
 
 void heartbeat();
-
-float units();
 
 void grinderOn();
 void grinderOff();
@@ -146,17 +143,21 @@ void setup() {
 }
 
 void setupScale() {
-  scale.setSmoothing(false);
   scale.setSpeed(settings.scale.speed);
   scale.setGain(settings.scale.gain);
   scale.setCalFactor(settings.scale.calibration_factor);
-  tare_raw = scale.readRaw(settings.scale.read_samples);
+  scale.setRingBufferSize(settings.scale.read_samples);
+  scale.initRingBuffer();
+  scale.tare();
 
   settings.scale.is_changed = false;
 }
 
 void loop() {
   heartbeat();
+
+  // read the ADC if it's ready - this is close to non-blocking
+  scale.readADCIfReady();
 
   if (state != oldstate) {
     display.clear();
@@ -238,7 +239,7 @@ void loopIdle() {
     resetWifi();
   }
 
-  float grams = units();
+  float grams = scale.getUnits();
   display.displayString(String(grams, 2) + " g", VerticalAlignment::CENTER);
 }
 
@@ -264,7 +265,6 @@ void loopButtonPressed() {
 void loopButtonPressedDebug() {
   switch (button) {
   case left:
-    tare_raw = scale.readRaw(settings.scale.read_samples);
     state = DEBUG;
     break;
   case right:
@@ -282,11 +282,12 @@ void loopButtonPressedDebug() {
 void loopConfigured() {
   // reset graph
   graph.resetGraph(target_grams);
+  graph.updateGraphData(0.0f, 0.0f);
 
   display.displayString("T", VerticalAlignment::CENTER);
 
   // tare
-  tare_raw = scale.readRaw(settings.scale.read_samples);
+  scale.tare();
 
   // start grinder
   grinderOn();
@@ -300,7 +301,7 @@ void loopConfigured() {
                         VerticalAlignment::THREE_ROW_BOTTOM);
 
   // initial values
-  last_grams = units();
+  last_grams = scale.getUnits();
   last_grams_millis = millis();
   grams_per_seconds_total = 0;
   grams_per_seconds_count = 0;
@@ -320,7 +321,7 @@ void loopRunning() {
     return;
   }
 
-  float grams = units();
+  float grams = scale.getUnits();
 
   float time = (now - grinder_started_millis) / 1000.;
 
@@ -391,7 +392,7 @@ void loopRunning() {
 }
 
 void loopStopping() {
-  float grams = units();
+  float grams = scale.getUnits();
 
   // update display
   float time = (millis() - grinder_started_millis) / 1000.;
@@ -407,7 +408,7 @@ void loopStopping() {
   logger.println("Grinder stopped");
 
   for (int i = 0; i < 20; ++i) {
-    float tmp = units();
+    float tmp = scale.getUnits();
     float delta = tmp - grams;
     grams = tmp;
     if (delta < 0.1) {
@@ -450,20 +451,14 @@ void loopDebug() {
   IPAddress ip = WiFi.localIP();
   display.displayString(ip.toString(), VerticalAlignment::CENTER);
 
-  auto raw = scale.readRaw(settings.scale.read_samples);
+  auto raw = scale.getRaw();
   logger.println("Cal: " + String(settings.scale.calibration_factor, 10));
-  logger.println("Tare: " + String(tare_raw));
   logger.println("Raw: " + String(raw));
-  logger.println("Grams: " + String(units()));
+  logger.println("Grams: " + String(scale.getUnits()));
 }
 
-float units() {
-  float raw = scale.readRaw(settings.scale.read_samples) - tare_raw;
-  return raw * settings.scale.calibration_factor;
-}
-
-void grinderOn() { digitalWrite(GRINDER_RELAY_PIN, LOW); }
-void grinderOff() { digitalWrite(GRINDER_RELAY_PIN, HIGH); }
+void grinderOn() { digitalWrite(GRINDER_RELAY_PIN, HIGH); }
+void grinderOff() { digitalWrite(GRINDER_RELAY_PIN, LOW); }
 
 void setupDisplay() {
   display.begin();

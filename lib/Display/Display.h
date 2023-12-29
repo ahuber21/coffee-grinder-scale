@@ -19,13 +19,16 @@
 // 4 for 96px, 5 for 128px, 6 for 160px
 #define DISPLAY_COLS_TS4 6
 
+#define BUF_SIZE_PER_LINE 80
+
 enum VerticalAlignment {
-  CENTER,
+  CENTER = 0,
   TWO_ROW_TOP,
   TWO_ROW_BOTTOM,
   THREE_ROW_TOP,
   THREE_ROW_CENTER,
-  THREE_ROW_BOTTOM
+  THREE_ROW_BOTTOM,
+  VA_MAX = THREE_ROW_BOTTOM,
 };
 
 static const unsigned char bootLogo[] PROGMEM = {
@@ -217,8 +220,13 @@ public:
   }
 
 private:
+  void clearBuffer();
+
   SPIClass m_spiDisplay;
   Adafruit_ST7735 m_display;
+
+  // buffer for the various rows
+  char m_buffer[VA_MAX][BUF_SIZE_PER_LINE];
 
   // Display backlight pin
   const uint8_t m_backlightPin;
