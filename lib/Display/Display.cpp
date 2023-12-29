@@ -7,12 +7,10 @@ TextColor colorBottom = colors;
 
 Display::Display(uint8_t sck, uint8_t miso, uint8_t mosi, uint8_t ss,
                  uint8_t dc, uint8_t cs, uint8_t reset, uint8_t backlight)
-    : m_spiDisplay(HSPI), m_display(&m_spiDisplay, 15, 26, 27),
-      m_backlightPin(25) {
-  clearBuffer();
+    : m_spiDisplay(HSPI), m_display(&m_spiDisplay, cs, dc, reset),
+      m_backlightPin(25), m_fps(16) {
+  memset(m_lastDisplayRefreshMillis, 0, sizeof(uint32_t) * VA_MAX);
 }
-
-void Display::clearBuffer() { memset(m_buffer, 0, VA_MAX * BUF_SIZE_PER_LINE); }
 
 void Display::begin() {
   ledcSetup(1, 100, 8);
@@ -29,11 +27,11 @@ void Display::displayString(const String &text, VerticalAlignment alignment) {
 }
 
 void Display::displayString(const char *text, VerticalAlignment alignment) {
-  if (strcmp(m_buffer[(size_t)alignment], text) == 0) {
+  uint32_t now = millis();
+  if (now - m_lastDisplayRefreshMillis[(int)alignment] < 1000.0f / m_fps) {
     return;
   }
-
-  memcpy(m_buffer[(size_t)alignment], text, strlen(text));
+  m_lastDisplayRefreshMillis[(int)alignment] = now;
 
   int16_t x, y;
   uint16_t w, h;
@@ -90,8 +88,8 @@ void Display::setTextColor(TextColor color) {
 }
 
 void Display::clear() {
-  clearBuffer();
   m_display.fillScreen(ST7735_BLACK);
+  memset(m_lastDisplayRefreshMillis, 0, sizeof(uint32_t) * VA_MAX);
 }
 
 void Display::shutDown() {

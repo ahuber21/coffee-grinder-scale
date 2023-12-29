@@ -14,9 +14,8 @@
 
 #include "defines.h"
 
-ADS1232 scale =
-    ADS1232(ADC_PDWN_PIN, ADC_SCLK_PIN, ADC_DOUT_PIN, ADC_A0_PIN, ADC_SPEED_PIN,
-            ADC_GAIN1_PIN, ADC_GAIN0_PIN, ADC_TEMP_PIN);
+ADS1232 scale = ADS1232(ADC_PDWN_PIN, ADC_SCLK_PIN, ADC_DOUT_PIN, ADC_SPEED_PIN,
+                        ADC_GAIN1_PIN, ADC_GAIN0_PIN);
 Display display(DISPLAY_SCK_PIN, DISPLAY_MISO_PIN, DISPLAY_MOSI_PIN,
                 DISPLAY_SS_PIN, DISPLAY_DC_PIN, DISPLAY_CS_PIN,
                 DISPLAY_RESET_PIN, DISPLAY_BACKLIGHT_PIN);
@@ -102,11 +101,20 @@ void setup() {
   logger.println("Graph ready");
 
   ArduinoOTA.begin();
+  ArduinoOTA.onStart([]() { display.clear(); });
+  ArduinoOTA.onProgress([](unsigned int progress, unsigned int total) {
+    char buffer[10];
+    float percentage = progress / (total / 100.0f);
+    sprintf(buffer, "%4.2f %%", percentage);
+
+    logger.println(buffer);
+    display.displayString("UPDATE", VerticalAlignment::TWO_ROW_TOP);
+    display.displayString(buffer, VerticalAlignment::TWO_ROW_BOTTOM);
+  });
 
   // power up the scale circuit
   pinMode(ADC_LDO_EN_PIN, OUTPUT);
   digitalWrite(ADC_LDO_EN_PIN, HIGH);
-  scale.begin();
   setupScale();
   logger.println("Scale ready");
 
@@ -143,6 +151,10 @@ void setup() {
 }
 
 void setupScale() {
+  if (!scale.begin()) {
+    logger.println("scale.begin() error");
+    ESP.restart();
+  };
   scale.setSpeed(settings.scale.speed);
   scale.setGain(settings.scale.gain);
   scale.setCalFactor(settings.scale.calibration_factor);

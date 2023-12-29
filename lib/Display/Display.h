@@ -28,7 +28,7 @@ enum VerticalAlignment {
   THREE_ROW_TOP,
   THREE_ROW_CENTER,
   THREE_ROW_BOTTOM,
-  VA_MAX = THREE_ROW_BOTTOM,
+  VA_MAX,
 };
 
 static const unsigned char bootLogo[] PROGMEM = {
@@ -220,16 +220,15 @@ public:
   }
 
 private:
-  void clearBuffer();
-
   SPIClass m_spiDisplay;
   Adafruit_ST7735 m_display;
 
-  // buffer for the various rows
-  char m_buffer[VA_MAX][BUF_SIZE_PER_LINE];
-
   // Display backlight pin
   const uint8_t m_backlightPin;
+
+  // limit the number of displayString operations per second
+  uint8_t m_fps;
+  uint32_t m_lastDisplayRefreshMillis[VA_MAX];
 };
 
 #endif // DISPLAY_H

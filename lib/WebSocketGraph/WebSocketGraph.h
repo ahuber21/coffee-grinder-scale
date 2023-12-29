@@ -24,4 +24,7 @@ private:
   // Member variables
   AsyncWebSocket _ws;
   AsyncWebServer *_server;
+
+  float _lastWeightValue;
+  float _lastSecondsValue;
 };

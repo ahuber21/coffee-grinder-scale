@@ -151,7 +151,9 @@ const char PROGMEM WebSocketGraph::graph_html[] = R"rawliteral(
 </html>
 )rawliteral";
 
-WebSocketGraph::WebSocketGraph() : _ws("/GraphWebSocket"), _server(nullptr) {}
+WebSocketGraph::WebSocketGraph()
+    : _ws("/GraphWebSocket"), _server(nullptr), _lastWeightValue(-1.0f),
+      _lastSecondsValue(-1.0f) {}
 
 void WebSocketGraph::begin(AsyncWebServer *server) {
   _server = server;
@@ -179,9 +181,19 @@ void WebSocketGraph::resetGraph(float target_weight) {
   String jsonString;
   serializeJson(jsonDoc, jsonString);
   _ws.textAll(jsonString.c_str());
+
+  _lastWeightValue = -1.0f;
+  _lastSecondsValue = -1.0f;
 }
 
 void WebSocketGraph::updateGraphData(float seconds, float weight) {
+  if ((seconds - _lastSecondsValue < 0.3) && (weight - _lastWeightValue < 0.1))
+    return;
+
+  // cache to limit update rate
+  _lastWeightValue = weight;
+  _lastSecondsValue = seconds;
+
   // Create a JSON object
   StaticJsonDocument<64> jsonDoc;
   jsonDoc["seconds"] = seconds;

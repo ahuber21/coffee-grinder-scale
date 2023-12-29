@@ -1,0 +1,3 @@
+[submodule "lib/ADS1232"]
+	path = lib/ADS1232
+	url = git@gitlab.com:ahoenle/esp-32-ads-1232.git
