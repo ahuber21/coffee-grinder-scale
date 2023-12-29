@@ -92,7 +92,7 @@ void setup() {
 
   server.begin();
   logger.begin(&server);
-  logger.println("WebSocket ready");
+  logger.println("Logger ready");
 
   settings.begin(&server, &logger);
   logger.println("Settings ready");
@@ -105,7 +105,7 @@ void setup() {
   ArduinoOTA.onProgress([](unsigned int progress, unsigned int total) {
     char buffer[10];
     float percentage = progress / (total / 100.0f);
-    sprintf(buffer, "%4.2f %%", percentage);
+    sprintf(buffer, "%3.0f %%", percentage);
 
     logger.println(buffer);
     display.displayString("UPDATE", VerticalAlignment::TWO_ROW_TOP);

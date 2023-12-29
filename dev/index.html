@@ -1,6 +1,3 @@
-#include "WebSocketGraph.h"
-
-const char PROGMEM WebSocketGraph::graph_html[] = R"rawliteral(
 <!DOCTYPE html>
 <html lang="en">
 
@@ -55,7 +52,7 @@ const char PROGMEM WebSocketGraph::graph_html[] = R"rawliteral(
 
     <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
     <script>
-        const socket = new WebSocket('ws://' + window.location.hostname + '/GraphWebSocket');
+        const socket = new WebSocket('ws://localhost:8765');
 
         let weightChart;
         let targetDataset;
@@ -173,56 +170,3 @@ const char PROGMEM WebSocketGraph::graph_html[] = R"rawliteral(
 </body>
 
 </html>
-)rawliteral";
-
-WebSocketGraph::WebSocketGraph()
-    : _ws("/GraphWebSocket"), _server(nullptr), _lastWeightValue(-1.0f),
-      _lastSecondsValue(-1.0f) {}
-
-void WebSocketGraph::begin(AsyncWebServer *server) {
-  _server = server;
-  _server->addHandler(&_ws);
-  _server->on("/graph", HTTP_GET, [this](AsyncWebServerRequest *request) {
-    request->send_P(200, "text/html", graph_html);
-  });
-
-  _ws.onEvent([this](AsyncWebSocket *server, AsyncWebSocketClient *client,
-                     AwsEventType type, void *arg, uint8_t *data, size_t len) {
-    this->handleWebSocketEvent(server, client, type, arg, data, len);
-  });
-}
-
-void WebSocketGraph::handleWebSocketEvent(AsyncWebSocket *server,
-                                          AsyncWebSocketClient *client,
-                                          AwsEventType type, void *arg,
-                                          uint8_t *data, size_t len) {
-  // Handle WebSocket events if needed
-}
-
-void WebSocketGraph::resetGraph(float target_weight) {
-  StaticJsonDocument<24> jsonDoc;
-  jsonDoc["target_weight"] = target_weight;
-  String jsonString;
-  serializeJson(jsonDoc, jsonString);
-  _ws.textAll(jsonString.c_str());
-
-  _lastWeightValue = -1.0f;
-  _lastSecondsValue = -1.0f;
-}
-
-void WebSocketGraph::updateGraphData(float seconds, float weight) {
-  if ((seconds - _lastSecondsValue < 0.3) && (weight - _lastWeightValue < 0.1))
-    return;
-
-  // cache to limit update rate
-  _lastWeightValue = weight;
-  _lastSecondsValue = seconds;
-
-  // Create a JSON object
-  StaticJsonDocument<64> jsonDoc;
-  jsonDoc["seconds"] = seconds;
-  jsonDoc["weight"] = weight;
-  String jsonString;
-  serializeJson(jsonDoc, jsonString);
-  _ws.textAll(jsonString.c_str());
-}
