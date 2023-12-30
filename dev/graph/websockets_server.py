@@ -15,6 +15,7 @@ data = [
     {"seconds": 8, "weight": 8},
     {"seconds": 9, "weight": 9},
     {"seconds": 10, "weight": 10},
+    {"finalize": True},
 ]
 
 

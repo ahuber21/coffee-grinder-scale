@@ -152,10 +152,13 @@ const char PROGMEM WebSocketGraph::graph_html[] = R"rawliteral(
             if (data.target_weight) {
                 targetWeight = data.target_weight
                 createChart();
+            } else if (data.finalize) {
+                weightDataset.backgroundColor = '#529641';
+                weightDataset.borderColor = '#529641';
+                weightChart.update();
             } else {
                 targetDataset.data.push({ x: data.seconds, y: targetWeight });
                 weightDataset.data.push({ x: data.seconds, y: data.weight });
-
                 weightChart.update();
             }
         };
@@ -218,7 +221,6 @@ void WebSocketGraph::updateGraphData(float seconds, float weight) {
   _lastWeightValue = weight;
   _lastSecondsValue = seconds;
 
-  // Create a JSON object
   StaticJsonDocument<64> jsonDoc;
   jsonDoc["seconds"] = seconds;
   jsonDoc["weight"] = weight;
@@ -226,3 +228,5 @@ void WebSocketGraph::updateGraphData(float seconds, float weight) {
   serializeJson(jsonDoc, jsonString);
   _ws.textAll(jsonString.c_str());
 }
+
+void WebSocketGraph::finalizeGraph() { _ws.textAll("{'finalize':true}"); }

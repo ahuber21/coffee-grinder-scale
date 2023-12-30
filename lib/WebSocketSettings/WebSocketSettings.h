@@ -14,6 +14,8 @@ public:
     float calibration_factor = 0.0;
     float target_dose_single = 0.0;
     float target_dose_double = 0.0;
+    float correction_dose_single = 0.0;
+    float correction_dose_double = 0.0;
 
     bool is_changed = false;
   };

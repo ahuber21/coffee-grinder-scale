@@ -149,10 +149,13 @@
             if (data.target_weight) {
                 targetWeight = data.target_weight
                 createChart();
+            } else if (data.finalize) {
+                weightDataset.backgroundColor = '#529641';
+                weightDataset.borderColor = '#529641';
+                weightChart.update();
             } else {
                 targetDataset.data.push({ x: data.seconds, y: targetWeight });
                 weightDataset.data.push({ x: data.seconds, y: data.weight });
-
                 weightChart.update();
             }
         };

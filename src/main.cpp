@@ -29,7 +29,10 @@ static const unsigned long timeout_millis = 30000;
 static const unsigned long finalize_screentime_millis = 5000;
 
 bool state_on_interrupt_was_debug = false;
+bool grinder_is_running = false;
+
 float target_grams = 0;
+float target_grams_corrected = 0; // includes the correction dose
 unsigned long grinder_started_millis = 0;
 unsigned long grinder_target_stop_millis = 0;
 unsigned long last_heartbeat_millis = 0;
@@ -37,6 +40,10 @@ float last_grams = 0;
 unsigned long last_grams_millis = 0;
 float grams_per_seconds_total = 0;
 uint16_t grams_per_seconds_count = 0;
+
+float stopping_last_grams = 0;
+unsigned long stopping_last_millis = 0;
+
 unsigned long finalize_millis = 0;
 float finalize_time = 0;
 float finalize_grams = 0;
@@ -259,10 +266,14 @@ void loopButtonPressed() {
   switch (button) {
   case left:
     target_grams = settings.scale.target_dose_single;
+    target_grams_corrected = settings.scale.target_dose_single +
+                             settings.scale.correction_dose_single;
     state = CONFIGURED;
     break;
   case right:
     target_grams = settings.scale.target_dose_double;
+    target_grams_corrected = settings.scale.target_dose_double +
+                             settings.scale.correction_dose_double;
     state = CONFIGURED;
     break;
   case back:
@@ -350,10 +361,17 @@ void loopRunning() {
     return;
   }
 
+  // calculate weight increase
+  float delta_grams = grams - last_grams;
+  float delta_millis = now - last_grams_millis;
+  if (delta_grams < 0.2) {
+    return;
+  }
+
   // calculate rate
-  float rate = 1000. * (grams - last_grams) / (now - last_grams_millis);
+  float rate = 1000. * delta_grams / delta_millis;
   if (rate < 0) {
-    rate = 0;
+    return;
   }
 
   // update last values with current ones
@@ -376,7 +394,8 @@ void loopRunning() {
   }
 
   // update the target stop time
-  unsigned long int target_millis_calculated = 1000 * target_grams / avg_rate;
+  unsigned long int target_millis_calculated =
+      1000 * target_grams_corrected / avg_rate;
   if (avg_rate == 0 || target_millis_calculated > timeout_millis) {
     target_millis_calculated = timeout_millis;
   }
@@ -399,46 +418,49 @@ void loopRunning() {
                         VerticalAlignment::THREE_ROW_TOP);
   display.displayString(String(grams, 2) + " g",
                         VerticalAlignment::THREE_ROW_CENTER);
-  display.displayString(String(target_grams, 2) + " g",
-                        VerticalAlignment::THREE_ROW_BOTTOM);
 }
 
 void loopStopping() {
+  if (grinder_is_running) {
+    // stop grinder
+    grinderOff();
+    logger.println("Grinder stopped");
+  }
+
   float grams = scale.getUnits();
 
   // update display
   float time = (millis() - grinder_started_millis) / 1000.;
-  display.displayString("S - " + String(time, 2) + " s",
+  display.displayString(String(time, 2) + " s",
                         VerticalAlignment::THREE_ROW_TOP);
   display.displayString(String(grams, 2) + " g",
                         VerticalAlignment::THREE_ROW_CENTER);
-  display.displayString(String(target_grams, 2) + " g",
-                        VerticalAlignment::THREE_ROW_BOTTOM);
 
-  // stop grinder
-  grinderOff();
-  logger.println("Grinder stopped");
+  auto now = millis();
 
-  for (int i = 0; i < 20; ++i) {
-    float tmp = scale.getUnits();
-    float delta = tmp - grams;
-    grams = tmp;
-    if (delta < 0.1) {
-      break;
-    }
-    logger.println("Waiting for stable weight");
-    delay(50);
+  if (now - stopping_last_millis < 200) {
+    return;
   }
 
-  time = (millis() - grinder_started_millis) / 1000.;
+  stopping_last_millis = now;
+  float delta_grams = abs(grams - stopping_last_grams);
+  stopping_last_grams = grams;
+
+  time = (now - grinder_started_millis) / 1000.;
+  // graph update
+  graph.updateGraphData(time, grams);
+
+  if (delta_grams > 0.1) {
+    logger.println("Waiting to stabilize");
+    display.displayString("STABILIZING", VerticalAlignment::THREE_ROW_BOTTOM);
+    return;
+  }
+
   char buffer[80];
   sprintf(buffer,
           "DONE | TIME %5.2f s | TOTAL WEIGHT %5.2f g | TARGET WEIGHT %5.2f",
           time, grams, target_grams);
   logger.println(buffer);
-
-  // final graph update
-  graph.updateGraphData(time, grams);
 
   finalize_millis = millis();
   finalize_grams = grams;
@@ -452,6 +474,8 @@ void loopFinalize() {
   display.displayString(String(finalize_grams, 2) + " g",
                         VerticalAlignment::THREE_ROW_CENTER);
   display.displayString("FINAL", VerticalAlignment::THREE_ROW_BOTTOM);
+
+  graph.finalizeGraph();
 
   if (millis() - finalize_millis > finalize_screentime_millis) {
     display.clear();
@@ -469,8 +493,14 @@ void loopDebug() {
   logger.println("Grams: " + String(scale.getUnits()));
 }
 
-void grinderOn() { digitalWrite(GRINDER_RELAY_PIN, HIGH); }
-void grinderOff() { digitalWrite(GRINDER_RELAY_PIN, LOW); }
+void grinderOn() {
+  digitalWrite(GRINDER_RELAY_PIN, HIGH);
+  grinder_is_running = true;
+}
+void grinderOff() {
+  digitalWrite(GRINDER_RELAY_PIN, LOW);
+  grinder_is_running = false;
+}
 
 void setupDisplay() {
   display.begin();

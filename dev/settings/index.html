@@ -96,6 +96,8 @@
             document.getElementById('calibration_factor').value = response['calibration_factor'];
             document.getElementById('target_dose_single').value = response['target_dose_single'];
             document.getElementById('target_dose_double').value = response['target_dose_double'];
+            document.getElementById('correction_dose_single').value = response['correction_dose_single'];
+            document.getElementById('correction_dose_double').value = response['correction_dose_double'];
         };
         function setActiveButton(className, value) {
             const buttons = document.querySelectorAll(className);
@@ -164,10 +166,24 @@
         </div>
     </div>
     <div class="setting-container">
+        <div class="description">Correction Dose Single</div>
+        <div class="text-input">
+            <input type="text" id="correction_dose_single" placeholder="Enter value">
+            <button class="button submitButton" onclick="submitValue('correction_dose_single')">Submit</button>
+        </div>
+    </div>
+    <div class="setting-container">
         <div class="description">Target Dose Double</div>
         <div class="text-input">
             <input type="text" id="target_dose_double" placeholder="Enter value">
             <button class="button submitButton" onclick="submitValue('target_dose_double')">Submit</button>
+        </div>
+    </div>
+    <div class="setting-container">
+        <div class="description">Correction Dose Double</div>
+        <div class="text-input">
+            <input type="text" id="correction_dose_double" placeholder="Enter value">
+            <button class="button submitButton" onclick="submitValue('correction_dose_double')">Submit</button>
         </div>
     </div>
     <div class="setting-container">

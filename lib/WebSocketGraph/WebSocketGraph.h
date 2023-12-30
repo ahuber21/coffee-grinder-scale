@@ -12,6 +12,7 @@ public:
   void begin(AsyncWebServer *server);
   void resetGraph(float target_weight);
   void updateGraphData(float seconds, float weight);
+  void finalizeGraph();
 
 private:
   void handleWebSocketEvent(AsyncWebSocket *server,

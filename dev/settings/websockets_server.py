@@ -22,6 +22,7 @@ async def handle_websocket(websocket, path):
             elif "set" in message:
                 _, variable, value = message.split(":")
                 data[variable] = value
+            print(f"Settings = {json.dumps(data)}")
         except websockets.exceptions.ConnectionClosedOK:
             print("Client disconnected.")
             break
