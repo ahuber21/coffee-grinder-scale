@@ -229,4 +229,11 @@ void WebSocketGraph::updateGraphData(float seconds, float weight) {
   _ws.textAll(jsonString.c_str());
 }
 
-void WebSocketGraph::finalizeGraph() { _ws.textAll("{'finalize':true}"); }
+void WebSocketGraph::finalizeGraph() {
+  StaticJsonDocument<20> jsonDoc;
+  jsonDoc["finalize"] = true;
+  _ws.textAll("{'finalize':true}");
+  String jsonString;
+  serializeJson(jsonDoc, jsonString);
+  _ws.textAll(jsonString.c_str());
+}
