@@ -104,8 +104,9 @@ const char PROGMEM config_html[] = R"rawliteral(
             document.getElementById('calibration_factor').value = response['calibration_factor'];
             document.getElementById('target_dose_single').value = response['target_dose_single'];
             document.getElementById('target_dose_double').value = response['target_dose_double'];
-            document.getElementById('correction_dose_single').value = response['correction_dose_single'];
-            document.getElementById('correction_dose_double').value = response['correction_dose_double'];
+            document.getElementById('top_up_margin_single').value = response['top_up_margin_single'];
+            document.getElementById('top_up_margin_double').value = response['top_up_margin_double'];
+            document.getElementById('settle_millis').value = response['settle_millis'];
         };
         function setActiveButton(className, value) {
             const buttons = document.querySelectorAll(className);
@@ -167,31 +168,38 @@ const char PROGMEM config_html[] = R"rawliteral(
         </div>
     </div>
     <div class="setting-container">
-        <div class="description">Target Dose Single</div>
+        <div class="description">Target Dose Single [g]</div>
         <div class="text-input">
             <input type="text" id="target_dose_single" placeholder="Enter value">
             <button class="button submitButton" onclick="submitValue('target_dose_single')">Submit</button>
         </div>
     </div>
     <div class="setting-container">
-        <div class="description">Correction Dose Single</div>
+        <div class="description">Top Up Margin Single [g]</div>
         <div class="text-input">
-            <input type="text" id="correction_dose_single" placeholder="Enter value">
-            <button class="button submitButton" onclick="submitValue('correction_dose_single')">Submit</button>
+            <input type="text" id="top_up_margin_single" placeholder="Enter value">
+            <button class="button submitButton" onclick="submitValue('top_up_margin_single')">Submit</button>
         </div>
     </div>
     <div class="setting-container">
-        <div class="description">Target Dose Double</div>
+        <div class="description">Target Dose Double [g]</div>
         <div class="text-input">
             <input type="text" id="target_dose_double" placeholder="Enter value">
             <button class="button submitButton" onclick="submitValue('target_dose_double')">Submit</button>
         </div>
     </div>
     <div class="setting-container">
-        <div class="description">Correction Dose Double</div>
+        <div class="description">Top Up Margin Double [g]</div>
         <div class="text-input">
-            <input type="text" id="correction_dose_double" placeholder="Enter value">
-            <button class="button submitButton" onclick="submitValue('correction_dose_double')">Submit</button>
+            <input type="text" id="top_up_margin_double" placeholder="Enter value">
+            <button class="button submitButton" onclick="submitValue('top_up_margin_double')">Submit</button>
+        </div>
+    </div>
+    <div class="setting-container">
+        <div class="description">Scale settle time [ms]</div>
+        <div class="text-input">
+            <input type="text" id="settle_millis" placeholder="Enter value">
+            <button class="button submitButton" onclick="submitValue('settle_millis')">Submit</button>
         </div>
     </div>
     <div class="setting-container">
@@ -277,10 +285,12 @@ void WebSocketSettings::handleWebSocketText(const String &cmd,
       scale.target_dose_single = value.toFloat();
     } else if (varName == "target_dose_double") {
       scale.target_dose_double = value.toFloat();
-    } else if (varName == "correction_dose_single") {
-      scale.correction_dose_single = value.toFloat();
-    } else if (varName == "correction_dose_double") {
-      scale.correction_dose_double = value.toFloat();
+    } else if (varName == "top_up_margin_single") {
+      scale.top_up_margin_single = value.toFloat();
+    } else if (varName == "top_up_margin_double") {
+      scale.top_up_margin_double = value.toFloat();
+    } else if (varName == "settle_millis") {
+      scale.settle_millis = value.toFloat();
     } else if (varName == "resetWiFi") {
       wifi.reset_flag = true;
     }
@@ -291,17 +301,19 @@ void WebSocketSettings::handleWebSocketText(const String &cmd,
 
   // Response contains all settings
   StaticJsonDocument<256> jsonDoc;
-  char cds_rounded[8], cdd_rounded[8];
-  sprintf(cds_rounded, "%1.2f", scale.correction_dose_single);
-  sprintf(cdd_rounded, "%1.2f", scale.correction_dose_double);
+  char cds_rounded[8], cdd_rounded[8], st_rounded[8];
+  sprintf(cds_rounded, "%1.2f", scale.top_up_margin_single);
+  sprintf(cdd_rounded, "%1.2f", scale.top_up_margin_double);
+  sprintf(st_rounded, "%1.2f", scale.settle_millis);
   jsonDoc["read_samples"] = scale.read_samples;
   jsonDoc["speed"] = scale.speed;
   jsonDoc["gain"] = scale.gain;
   jsonDoc["calibration_factor"] = scale.calibration_factor;
   jsonDoc["target_dose_single"] = scale.target_dose_single;
   jsonDoc["target_dose_double"] = scale.target_dose_double;
-  jsonDoc["correction_dose_single"] = cds_rounded;
-  jsonDoc["correction_dose_double"] = cdd_rounded;
+  jsonDoc["top_up_margin_single"] = cds_rounded;
+  jsonDoc["top_up_margin_double"] = cdd_rounded;
+  jsonDoc["settle_millis"] = st_rounded;
 
   serializeJson(jsonDoc, response);
 }

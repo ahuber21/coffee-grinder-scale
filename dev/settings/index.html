@@ -96,8 +96,8 @@
             document.getElementById('calibration_factor').value = response['calibration_factor'];
             document.getElementById('target_dose_single').value = response['target_dose_single'];
             document.getElementById('target_dose_double').value = response['target_dose_double'];
-            document.getElementById('correction_dose_single').value = response['correction_dose_single'];
-            document.getElementById('correction_dose_double').value = response['correction_dose_double'];
+            document.getElementById('top_up_margin_single').value = response['top_up_margin_single'];
+            document.getElementById('top_up_margin_double').value = response['top_up_margin_double'];
         };
         function setActiveButton(className, value) {
             const buttons = document.querySelectorAll(className);
@@ -168,8 +168,8 @@
     <div class="setting-container">
         <div class="description">Correction Dose Single</div>
         <div class="text-input">
-            <input type="text" id="correction_dose_single" placeholder="Enter value">
-            <button class="button submitButton" onclick="submitValue('correction_dose_single')">Submit</button>
+            <input type="text" id="top_up_margin_single" placeholder="Enter value">
+            <button class="button submitButton" onclick="submitValue('top_up_margin_single')">Submit</button>
         </div>
     </div>
     <div class="setting-container">
@@ -182,8 +182,8 @@
     <div class="setting-container">
         <div class="description">Correction Dose Double</div>
         <div class="text-input">
-            <input type="text" id="correction_dose_double" placeholder="Enter value">
-            <button class="button submitButton" onclick="submitValue('correction_dose_double')">Submit</button>
+            <input type="text" id="top_up_margin_double" placeholder="Enter value">
+            <button class="button submitButton" onclick="submitValue('top_up_margin_double')">Submit</button>
         </div>
     </div>
     <div class="setting-container">

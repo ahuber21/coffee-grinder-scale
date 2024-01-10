@@ -11,11 +11,12 @@ public:
     byte read_samples = 8;
     byte speed = 10;
     byte gain = 1;
-    float calibration_factor = 0.0;
-    float target_dose_single = 0.0;
-    float target_dose_double = 0.0;
-    float correction_dose_single = 0.0;
-    float correction_dose_double = 0.0;
+    float calibration_factor = 0.0f;
+    float target_dose_single = 0.0f;
+    float target_dose_double = 0.0f;
+    float top_up_margin_single = 0.0f;
+    float top_up_margin_double = 0.0f;
+    float settle_millis = 0.0f;
 
     bool is_changed = false;
   };

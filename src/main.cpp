@@ -28,18 +28,19 @@ WebSocketGraph graph;
 static const unsigned long timeout_millis = 30000;
 static const unsigned long finalize_screentime_millis = 5000;
 
-bool state_on_interrupt_was_debug = false;
 bool grinder_is_running = false;
 
 float target_grams = 0;
 float target_grams_corrected = 0; // includes the correction dose
 unsigned long grinder_started_millis = 0;
-unsigned long grinder_target_stop_millis = 0;
 unsigned long last_heartbeat_millis = 0;
 float last_grams = 0;
 unsigned long last_grams_millis = 0;
 float grams_per_seconds_total = 0;
 uint16_t grams_per_seconds_count = 0;
+
+unsigned long last_top_up_millis = 0;
+unsigned long top_up_stop_millis = 0;
 
 float stopping_last_grams = 0;
 unsigned long stopping_last_millis = 0;
@@ -53,11 +54,13 @@ volatile enum State {
   BUTTON_PRESSED,
   CONFIGURED,
   RUNNING,
+  TOPUP,
   STOPPING,
   FINALIZE,
   DEBUG,
 } state;
-State oldstate = IDLE;
+State old_state_loop = IDLE;
+State old_state_button_press = IDLE;
 
 volatile enum ButtonPins {
   left = BUTTON_LEFT,
@@ -74,6 +77,7 @@ void loopButtonPressed();
 void loopButtonPressedDebug();
 void loopConfigured();
 void loopRunning();
+void loopTopUp();
 void loopStopping();
 void loopFinalize();
 void loopDebug();
@@ -129,7 +133,8 @@ void setup() {
   attachInterrupt(
       digitalPinToInterrupt(BUTTON_LEFT),
       []() {
-        state_on_interrupt_was_debug = state == DEBUG;
+        old_state_button_press =
+            (state == BUTTON_PRESSED) ? old_state_button_press : state;
         state = BUTTON_PRESSED;
         button = left;
       },
@@ -138,7 +143,8 @@ void setup() {
   attachInterrupt(
       digitalPinToInterrupt(BUTTON_RIGHT),
       []() {
-        state_on_interrupt_was_debug = state == DEBUG;
+        old_state_button_press =
+            (state == BUTTON_PRESSED) ? old_state_button_press : state;
         state = BUTTON_PRESSED;
         button = right;
       },
@@ -147,7 +153,8 @@ void setup() {
   attachInterrupt(
       digitalPinToInterrupt(BUTTON_BACK),
       []() {
-        state_on_interrupt_was_debug = state == DEBUG;
+        old_state_button_press =
+            (state == BUTTON_PRESSED) ? old_state_button_press : state;
         state = BUTTON_PRESSED;
         button = back;
       },
@@ -178,7 +185,7 @@ void loop() {
   // read the ADC if it's ready - this is close to non-blocking
   scale.readADCIfReady();
 
-  if (state != oldstate) {
+  if (state != old_state_loop) {
     display.clear();
   }
 
@@ -187,15 +194,23 @@ void loop() {
     loopIdle();
     break;
   case BUTTON_PRESSED:
-    display.clear();
-    state_on_interrupt_was_debug ? loopButtonPressedDebug()
-                                 : loopButtonPressed();
+    if (old_state_button_press == DEBUG) {
+      loopButtonPressedDebug();
+    } else if (old_state_button_press == IDLE) {
+      loopButtonPressed();
+    } else {
+      // ignore button press
+      state = old_state_button_press;
+    }
     break;
   case CONFIGURED:
     loopConfigured();
     break;
   case RUNNING:
     loopRunning();
+    break;
+  case TOPUP:
+    loopTopUp();
     break;
   case STOPPING:
     loopStopping();
@@ -210,7 +225,7 @@ void loop() {
     break;
   }
 
-  oldstate = state;
+  old_state_loop = state;
 }
 
 void heartbeat() {
@@ -228,6 +243,9 @@ void heartbeat() {
       break;
     case RUNNING:
       message += "RUNNING";
+      break;
+    case TOPUP:
+      message += "TOPUP";
       break;
     case STOPPING:
       message += "STOPPING";
@@ -266,14 +284,14 @@ void loopButtonPressed() {
   switch (button) {
   case left:
     target_grams = settings.scale.target_dose_single;
-    target_grams_corrected = settings.scale.target_dose_single +
-                             settings.scale.correction_dose_single;
+    target_grams_corrected =
+        settings.scale.target_dose_single - settings.scale.top_up_margin_single;
     state = CONFIGURED;
     break;
   case right:
     target_grams = settings.scale.target_dose_double;
-    target_grams_corrected = settings.scale.target_dose_double +
-                             settings.scale.correction_dose_double;
+    target_grams_corrected =
+        settings.scale.target_dose_double - settings.scale.top_up_margin_double;
     state = CONFIGURED;
     break;
   case back:
@@ -316,7 +334,6 @@ void loopConfigured() {
   grinderOn();
   logger.println("Grinder started");
   grinder_started_millis = millis();
-  grinder_target_stop_millis = grinder_started_millis + timeout_millis;
 
   // update display
   display.clear();
@@ -333,13 +350,10 @@ void loopConfigured() {
 }
 
 void loopRunning() {
-  // we are assuming a more or less constant rate
-  // therefore we calculate the grams per second and extrapolate the stopping
-  // time
-
   unsigned long int now = millis();
 
-  if (now >= grinder_target_stop_millis) {
+  if (now - grinder_started_millis > timeout_millis) {
+    // timeout - no top up
     state = STOPPING;
     return;
   }
@@ -356,8 +370,8 @@ void loopRunning() {
     return;
   }
 
-  if (grams > target_grams) {
-    state = STOPPING;
+  if (grams > target_grams_corrected) {
+    state = TOPUP;
     return;
   }
 
@@ -393,24 +407,12 @@ void loopRunning() {
     return;
   }
 
-  // update the target stop time
-  unsigned long int target_millis_calculated =
-      1000 * target_grams_corrected / avg_rate;
-  if (avg_rate == 0 || target_millis_calculated > timeout_millis) {
-    target_millis_calculated = timeout_millis;
-  }
-  grinder_target_stop_millis =
-      grinder_started_millis + target_millis_calculated;
-
   // send formatted log message
   char buffer[130];
-  float total = target_millis_calculated / 1000.;
-  float eta = (grinder_target_stop_millis - now) / 1000.;
-  sprintf(
-      buffer,
-      "TIME %5.2f s | EST RUNTIME %5.2f s | ETA %5.2f s | WEIGHT %+5.2f g | "
-      "RATE %+3.2f g/s | RATE (AVG) %+3.2f g/s",
-      time, total, eta, grams, rate, avg_rate);
+  sprintf(buffer,
+          "TIME %5.2f s | WEIGHT %+5.2f g | RATE %+3.2f g/s | RATE (AVG) "
+          "%+3.2f g/s",
+          time, grams, rate, avg_rate);
   logger.println(buffer);
 
   // update display
@@ -418,6 +420,52 @@ void loopRunning() {
                         VerticalAlignment::THREE_ROW_TOP);
   display.displayString(String(grams, 2) + " g",
                         VerticalAlignment::THREE_ROW_CENTER);
+  display.displayString(String(target_grams, 2) + " g",
+                        VerticalAlignment::THREE_ROW_BOTTOM);
+}
+
+void loopTopUp() {
+  // stop the grinder
+  // wait to stabilize
+  // top up if necessary, based on weight calculation
+  auto now = millis();
+  float grams = scale.getUnits();
+  float time = (now - grinder_started_millis) / 1000.;
+  display.displayString(String(time, 2) + " s",
+                        VerticalAlignment::THREE_ROW_TOP);
+  display.displayString(String(grams, 2) + " g",
+                        VerticalAlignment::THREE_ROW_CENTER);
+  display.displayString("TOPUP", VerticalAlignment::THREE_ROW_BOTTOM);
+
+  if (grams >= target_grams - 0.05) {
+    logger.println("Target weight reached - stopping");
+    // close enough to target weight
+    state = STOPPING;
+    return;
+  }
+
+  bool settled = (now - last_top_up_millis) > settings.scale.settle_millis;
+  if (!grinder_is_running && settled) {
+    // grinder was turned off and things should be settled now
+    float avg_rate = (grams_per_seconds_count > 0)
+                         ? grams_per_seconds_total / grams_per_seconds_count
+                         : 0.1;
+    if (!(avg_rate > 0)) {
+      logger.println("Zero avg_rate?");
+      state = STOPPING;
+      return;
+    }
+    float top_up_seconds = (target_grams - grams) / avg_rate;
+    top_up_seconds = top_up_seconds > 1.0f ? 1.0f : top_up_seconds;
+    top_up_stop_millis = grinder_started_millis + 1000. * top_up_seconds;
+    logger.println("Top up for " + String(top_up_seconds, 2) + " s");
+    grinderOn();
+  }
+  if (grinder_is_running && now > top_up_stop_millis) {
+    logger.println("Top up done - waiting for settle");
+    grinderOff();
+    last_top_up_millis = now;
+  }
 }
 
 void loopStopping() {
