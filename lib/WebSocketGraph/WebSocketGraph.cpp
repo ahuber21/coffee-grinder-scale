@@ -222,8 +222,11 @@ void WebSocketGraph::updateGraphData(float seconds, float weight) {
   _lastSecondsValue = seconds;
 
   StaticJsonDocument<64> jsonDoc;
-  jsonDoc["seconds"] = seconds;
-  jsonDoc["weight"] = weight;
+  char s[8], w[8];
+  sprintf(s, "%1.2f", seconds);
+  sprintf(w, "%1.2f", weight);
+  jsonDoc["seconds"] = s;
+  jsonDoc["weight"] = w;
   String jsonString;
   serializeJson(jsonDoc, jsonString);
   _ws.textAll(jsonString.c_str());
@@ -232,7 +235,6 @@ void WebSocketGraph::updateGraphData(float seconds, float weight) {
 void WebSocketGraph::finalizeGraph() {
   StaticJsonDocument<20> jsonDoc;
   jsonDoc["finalize"] = true;
-  _ws.textAll("{'finalize':true}");
   String jsonString;
   serializeJson(jsonDoc, jsonString);
   _ws.textAll(jsonString.c_str());
