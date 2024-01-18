@@ -214,7 +214,7 @@ void WebSocketGraph::resetGraph(float target_weight) {
 }
 
 void WebSocketGraph::updateGraphData(float seconds, float weight) {
-  if ((seconds - _lastSecondsValue < 0.3) && (weight - _lastWeightValue < 0.1))
+  if ((seconds - _lastSecondsValue < 0.2) && (weight - _lastWeightValue < 0.1))
     return;
 
   // cache to limit update rate
