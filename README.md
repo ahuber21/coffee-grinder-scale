@@ -25,6 +25,7 @@ ESP32 project to control a coffee grinder by weight.
 
 * OTA updates for wire-free development (awesome in combination with the websocket logger!).
 * GUI using a small TFT and Adafruit libraries.
+  * Introduced the concept of FPS to reduce flickering.
 * Configure two buttons for two pre-configured doses (grams).
 * Fast, precise, responsive readout of ADS1232.
 * Confirm button press to avoid accidental starts.
