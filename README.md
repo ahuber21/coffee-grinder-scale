@@ -7,9 +7,11 @@ ESP32 project to control a coffee grinder by weight.
 ## Features
 
 * Control your grinder from an ESP32.
+  * State-machine approach with rich functionality and error handling.
 * Control the ESP32 from your browser.
   * Websocket-based implementation of a logger, settings, and a weight graph.
   * Using [esphome](https://github.com/esphome/) libraries: ESPAsyncWebServer, AsyncTCP.
+  * Settings are automatically persisted in EEPROM.
 
 <div style="flex: 0 0 300px;">
     <img src="https://github.com/ahuber21/coffee-grinder-scale/blob/main/.doc/console.png" width="300" alt="Console">
@@ -21,7 +23,7 @@ ESP32 project to control a coffee grinder by weight.
     <img src="https://github.com/ahuber21/coffee-grinder-scale/blob/main/.doc/graph.png" width="300" alt="Graph">
 </div>
 
-
+* OTA updates for wire-free development (awesome in combination with the websocket logger!).
 * GUI using a small TFT and Adafruit libraries.
 * Configure two buttons for two pre-configured doses (grams).
 * Fast, precise, responsive readout of ADS1232.
