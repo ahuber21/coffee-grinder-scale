@@ -353,8 +353,6 @@ void loopConfirm() {
   display.displayString("CONFIRM", TWO_ROW_TOP);
   display.displayString(String(target_grams) + " g", TWO_ROW_BOTTOM);
 
-  logger.println("button_pressed_millis = " + String(button_pressed_millis));
-
   if ((millis() - button_pressed_millis) > confirm_timeout_millis) {
     // go back to idle
     state = IDLE;
@@ -481,6 +479,8 @@ void loopTopUp() {
   display.displayString(String(grams, 2) + " g",
                         VerticalAlignment::THREE_ROW_CENTER);
   display.displayString("TOPUP", VerticalAlignment::THREE_ROW_BOTTOM);
+
+  graph.updateGraphData(time, grams);
 
   if (grams >= target_grams - 0.05) {
     logger.println("Target weight reached - stopping");
