@@ -26,32 +26,41 @@ WebSocketSettings settings;
 WebSocketGraph graph;
 
 static const unsigned long timeout_millis = 30000;
-static const unsigned long finalize_screentime_millis = 5000;
+static const unsigned long finalize_screentime_millis = 3000;
+static const unsigned long confirm_timeout_millis = 3000;
+static const unsigned long button_debounce_millis = 250;
 
 bool grinder_is_running = false;
 
 float target_grams = 0;
 float target_grams_corrected = 0; // includes the correction dose
+
+// various millis to keep track of when stuff happened
 unsigned long grinder_started_millis = 0;
 unsigned long last_heartbeat_millis = 0;
-float last_grams = 0;
+unsigned long button_pressed_millis = 0;
 unsigned long last_grams_millis = 0;
+unsigned long last_top_up_millis = 0;
+unsigned long top_up_stop_millis = 0;
+unsigned long stopping_last_millis = 0;
+unsigned long finalize_millis = 0;
+
+// various grams values to calculate differences between iterations
+float last_grams = 0;
+float stopping_last_grams = 0;
+
+// to calculate the grams per second rate for the current run
 float grams_per_seconds_total = 0;
 uint16_t grams_per_seconds_count = 0;
 
-unsigned long last_top_up_millis = 0;
-unsigned long top_up_stop_millis = 0;
-
-float stopping_last_grams = 0;
-unsigned long stopping_last_millis = 0;
-
-unsigned long finalize_millis = 0;
+// determined in finalize, displayed in stopping
 float finalize_time = 0;
 float finalize_grams = 0;
 
 volatile enum State {
   IDLE = 0,
   BUTTON_PRESSED,
+  CONFIRM,
   CONFIGURED,
   RUNNING,
   TOPUP,
@@ -62,11 +71,15 @@ volatile enum State {
 State old_state_loop = IDLE;
 State old_state_button_press = IDLE;
 
-volatile enum ButtonPins {
+enum ButtonPin {
+  none = 0,
   left = BUTTON_LEFT,
   right = BUTTON_RIGHT,
   back = BUTTON_BACK,
-} button;
+};
+
+volatile ButtonPin button;      // the button that was currently pressed
+volatile ButtonPin last_button; // the button that was previously pressed
 
 void setupDisplay();
 void setupWifi();
@@ -75,6 +88,7 @@ void setupScale();
 void loopIdle();
 void loopButtonPressed();
 void loopButtonPressedDebug();
+void loopConfirm();
 void loopConfigured();
 void loopRunning();
 void loopTopUp();
@@ -88,6 +102,24 @@ void heartbeat();
 
 void grinderOn();
 void grinderOff();
+
+template <ButtonPin pin> void button_interrupt() {
+  if ((millis() - button_pressed_millis) < button_debounce_millis) {
+    return;
+  }
+  if (state == CONFIRM) {
+    // go to configured if same button is pressed again
+    // go to idle if the button is different
+    state = (pin == last_button) ? CONFIGURED : IDLE;
+  } else {
+    old_state_button_press =
+        (state == BUTTON_PRESSED) ? old_state_button_press : state;
+    state = BUTTON_PRESSED;
+    button = pin;
+  }
+  // reset the last_button to avoid auto-confirm / -cancel in the next run
+  last_button = none;
+}
 
 void setup() {
   Serial.begin(115200);
@@ -130,25 +162,11 @@ void setup() {
   logger.println("Scale ready");
 
   pinMode(BUTTON_LEFT, INPUT_PULLDOWN);
-  attachInterrupt(
-      digitalPinToInterrupt(BUTTON_LEFT),
-      []() {
-        old_state_button_press =
-            (state == BUTTON_PRESSED) ? old_state_button_press : state;
-        state = BUTTON_PRESSED;
-        button = left;
-      },
-      RISING);
+  attachInterrupt(digitalPinToInterrupt(BUTTON_LEFT), button_interrupt<left>,
+                  RISING);
   pinMode(BUTTON_RIGHT, INPUT_PULLDOWN);
-  attachInterrupt(
-      digitalPinToInterrupt(BUTTON_RIGHT),
-      []() {
-        old_state_button_press =
-            (state == BUTTON_PRESSED) ? old_state_button_press : state;
-        state = BUTTON_PRESSED;
-        button = right;
-      },
-      RISING);
+  attachInterrupt(digitalPinToInterrupt(BUTTON_RIGHT), button_interrupt<right>,
+                  RISING);
   pinMode(BUTTON_BACK, INPUT_PULLDOWN);
   attachInterrupt(
       digitalPinToInterrupt(BUTTON_BACK),
@@ -185,7 +203,11 @@ void loop() {
   // read the ADC if it's ready - this is close to non-blocking
   scale.readADCIfReady();
 
-  if (state != old_state_loop) {
+  // don't call expensive functions between check and setting old_state_loop
+  // as new interrupts may occur in the meantime
+  bool need_to_clear = state != old_state_loop;
+  old_state_loop = state;
+  if (need_to_clear) {
     display.clear();
   }
 
@@ -202,6 +224,9 @@ void loop() {
       // ignore button press
       state = old_state_button_press;
     }
+    break;
+  case CONFIRM:
+    loopConfirm();
     break;
   case CONFIGURED:
     loopConfigured();
@@ -224,8 +249,6 @@ void loop() {
   default:
     break;
   }
-
-  old_state_loop = state;
 }
 
 void heartbeat() {
@@ -240,6 +263,9 @@ void heartbeat() {
       break;
     case CONFIGURED:
       message += "CONFIGURED";
+      break;
+    case CONFIRM:
+      message += "CONFIRM";
       break;
     case RUNNING:
       message += "RUNNING";
@@ -281,18 +307,21 @@ void loopIdle() {
 }
 
 void loopButtonPressed() {
+  button_pressed_millis = millis();
+  last_button = button;
+
   switch (button) {
   case left:
     target_grams = settings.scale.target_dose_single;
     target_grams_corrected =
         settings.scale.target_dose_single - settings.scale.top_up_margin_single;
-    state = CONFIGURED;
+    state = CONFIRM;
     break;
   case right:
     target_grams = settings.scale.target_dose_double;
     target_grams_corrected =
         settings.scale.target_dose_double - settings.scale.top_up_margin_double;
-    state = CONFIGURED;
+    state = CONFIRM;
     break;
   case back:
     state = DEBUG;
@@ -317,6 +346,18 @@ void loopButtonPressedDebug() {
   default:
     state = IDLE;
     break;
+  }
+}
+
+void loopConfirm() {
+  display.displayString("CONFIRM", TWO_ROW_TOP);
+  display.displayString(String(target_grams) + " g", TWO_ROW_BOTTOM);
+
+  logger.println("button_pressed_millis = " + String(button_pressed_millis));
+
+  if ((millis() - button_pressed_millis) > confirm_timeout_millis) {
+    // go back to idle
+    state = IDLE;
   }
 }
 
@@ -365,10 +406,18 @@ void loopRunning() {
   // update graph
   graph.updateGraphData(time, grams);
 
+  // update display top line (time)
+  display.displayString("R - " + String(time, 2) + " s",
+                        VerticalAlignment::THREE_ROW_TOP);
+
   // wait until something is happening
   if (grams < 1) {
     return;
   }
+
+  // update display grams
+  display.displayString(String(grams, 2) + " g",
+                        VerticalAlignment::THREE_ROW_CENTER);
 
   if (grams > target_grams_corrected) {
     state = TOPUP;
@@ -415,11 +464,7 @@ void loopRunning() {
           time, grams, rate, avg_rate);
   logger.println(buffer);
 
-  // update display
-  display.displayString("R - " + String(time, 2) + " s",
-                        VerticalAlignment::THREE_ROW_TOP);
-  display.displayString(String(grams, 2) + " g",
-                        VerticalAlignment::THREE_ROW_CENTER);
+  // update display bottom (always stays the same)
   display.displayString(String(target_grams, 2) + " g",
                         VerticalAlignment::THREE_ROW_BOTTOM);
 }
@@ -444,9 +489,9 @@ void loopTopUp() {
     return;
   }
 
-  bool settled = (now - last_top_up_millis) > settings.scale.settle_millis;
-  if (!grinder_is_running && settled) {
-    // grinder was turned off and things should be settled now
+  if (!grinder_is_running &&
+      ((now - last_top_up_millis) > settings.scale.settle_millis)) {
+    // grinder was turned off
     float avg_rate = (grams_per_seconds_count > 0)
                          ? grams_per_seconds_total / grams_per_seconds_count
                          : 0.1;
@@ -456,12 +501,12 @@ void loopTopUp() {
       return;
     }
     float top_up_seconds = (target_grams - grams) / avg_rate;
+    top_up_seconds = top_up_seconds < 0.4f ? 0.4f : top_up_seconds;
     top_up_seconds = top_up_seconds > 1.0f ? 1.0f : top_up_seconds;
-    top_up_stop_millis = grinder_started_millis + 1000. * top_up_seconds;
+    top_up_stop_millis = now + 1000. * top_up_seconds;
     logger.println("Top up for " + String(top_up_seconds, 2) + " s");
     grinderOn();
-  }
-  if (grinder_is_running && now > top_up_stop_millis) {
+  } else if (grinder_is_running && (now > top_up_stop_millis)) {
     logger.println("Top up done - waiting for settle");
     grinderOff();
     last_top_up_millis = now;
