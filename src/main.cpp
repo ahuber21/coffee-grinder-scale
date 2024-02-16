@@ -25,10 +25,16 @@ WebSocketLogger logger;
 WebSocketSettings settings;
 WebSocketGraph graph;
 
+// overall timeout when running the grinder
 static const unsigned long timeout_millis = 30000;
-static const unsigned long finalize_screentime_millis = 3000;
-static const unsigned long confirm_timeout_millis = 3000;
-static const unsigned long button_debounce_millis = 250;
+// how long the final result is displayed
+static const unsigned long finalize_screentime_millis = 2000;
+// how long the confirm screen is shown
+static const unsigned long confirm_timeout_millis = 2000;
+// button debounce, accept one button press each X milliseconds
+static const unsigned long button_debounce_millis = 150;
+// minimum time to hold the button to be counted as true press (filter noise)
+static const unsigned long button_debounce_min_hold = 20;
 
 bool grinder_is_running = false;
 
@@ -38,6 +44,7 @@ float target_grams_corrected = 0; // includes the correction dose
 // various millis to keep track of when stuff happened
 unsigned long grinder_started_millis = 0;
 unsigned long last_heartbeat_millis = 0;
+unsigned long button_pressed_filter_millis = 0;
 unsigned long button_pressed_millis = 0;
 unsigned long last_grams_millis = 0;
 unsigned long last_top_up_millis = 0;
@@ -59,6 +66,7 @@ float finalize_grams = 0;
 
 volatile enum State {
   IDLE = 0,
+  BUTTON_FILTER,
   BUTTON_PRESSED,
   CONFIRM,
   CONFIGURED,
@@ -86,6 +94,7 @@ void setupWifi();
 void setupScale();
 
 void loopIdle();
+void loopButtonFilter();
 void loopButtonPressed();
 void loopButtonPressedDebug();
 void loopConfirm();
@@ -104,19 +113,23 @@ void grinderOn();
 void grinderOff();
 
 template <ButtonPin pin> void button_interrupt() {
-  if ((millis() - button_pressed_millis) < button_debounce_millis) {
+  auto now = millis();
+  button_pressed_filter_millis = now;
+
+  if ((now - button_pressed_millis) < button_debounce_millis) {
     return;
   }
+
   if (state == CONFIRM) {
     // go to configured if same button is pressed again
     // go to idle if the button is different
     state = (pin == last_button) ? CONFIGURED : IDLE;
-  } else {
-    old_state_button_press =
-        (state == BUTTON_PRESSED) ? old_state_button_press : state;
-    state = BUTTON_PRESSED;
+  } else if (state == IDLE) {
+    old_state_button_press = IDLE;
+    state = BUTTON_FILTER;
     button = pin;
   }
+
   // reset the last_button to avoid auto-confirm / -cancel in the next run
   last_button = none;
 }
@@ -161,12 +174,12 @@ void setup() {
   setupScale();
   logger.println("Scale ready");
 
-  pinMode(BUTTON_LEFT, INPUT_PULLDOWN);
+  pinMode(BUTTON_LEFT, INPUT_PULLUP);
   attachInterrupt(digitalPinToInterrupt(BUTTON_LEFT), button_interrupt<left>,
-                  RISING);
-  pinMode(BUTTON_RIGHT, INPUT_PULLDOWN);
+                  FALLING);
+  pinMode(BUTTON_RIGHT, INPUT_PULLUP);
   attachInterrupt(digitalPinToInterrupt(BUTTON_RIGHT), button_interrupt<right>,
-                  RISING);
+                  FALLING);
   pinMode(BUTTON_BACK, INPUT_PULLDOWN);
   attachInterrupt(
       digitalPinToInterrupt(BUTTON_BACK),
@@ -215,6 +228,9 @@ void loop() {
   case IDLE:
     loopIdle();
     break;
+  case BUTTON_FILTER:
+    loopButtonFilter();
+    break;
   case BUTTON_PRESSED:
     if (old_state_button_press == DEBUG) {
       loopButtonPressedDebug();
@@ -257,6 +273,9 @@ void heartbeat() {
     switch (state) {
     case IDLE:
       message += "IDLE";
+      break;
+    case BUTTON_FILTER:
+      message += "BUTTON_FILTER";
       break;
     case BUTTON_PRESSED:
       message += "BUTTON_PRESSED";
@@ -306,9 +325,28 @@ void loopIdle() {
   display.displayString(String(grams, 2) + " g", VerticalAlignment::CENTER);
 }
 
+void loopButtonFilter() {
+  auto now = millis();
+
+  if (now - button_pressed_filter_millis > button_debounce_min_hold) {
+    // we held the button long enough, it's probably not noise, can move on
+    state = BUTTON_PRESSED;
+    return;
+  }
+
+  // read the state of the pressed button
+  int button_state = digitalRead(button);
+
+  // interrupt is falling, check if button is still in correct state
+  if (button_state != LOW) {
+    // just noise, ignore
+    state = IDLE;
+  }
+}
+
 void loopButtonPressed() {
-  button_pressed_millis = millis();
   last_button = button;
+  button_pressed_millis = millis();
 
   switch (button) {
   case left:
