@@ -6,6 +6,7 @@
 
 // needs to be included after WiFiManager.h
 // which does not properly protect some defines
+#include <API.h>
 #include <Display.h>
 #include <ESPAsyncWebServer.h>
 #include <WebSocketGraph.h>
@@ -24,6 +25,7 @@ Display display(DISPLAY_SCK_PIN, DISPLAY_MISO_PIN, DISPLAY_MOSI_PIN,
                 DISPLAY_RESET_PIN, DISPLAY_BACKLIGHT_PIN);
 
 AsyncWebServer server(SERVER_PORT);
+API api;
 WebSocketLogger logger;
 WebSocketSettings settings;
 WebSocketGraph graph;
@@ -153,6 +155,9 @@ void setup() {
   server.begin();
   logger.begin(&server);
   logger.println("Logger ready");
+
+  api.begin(server);
+  logger.println("API ready");
 
   settings.begin(&server, &logger);
   logger.println("Settings ready");
@@ -324,6 +329,19 @@ void loopIdle() {
 
   if (settings.wifi.reset_flag) {
     resetWifi();
+  }
+
+  if (api.isNewValueReceived()) {
+    float requested_grams = api.getNewValue();
+    logger.println("API request for " + String(requested_grams, 2) + " g");
+    target_grams = requested_grams;
+    // 1.0 hardcoded for now
+    target_grams_corrected = requested_grams - 1.0f;
+    // "virtually" press right button -> left cancel, right confirm
+    last_button = right;
+    button_pressed_millis = millis();
+    state = CONFIRM;
+    return;
   }
 
   if (millis() - state_change_to_idle_millis > 60 * 1000) {
