@@ -223,12 +223,21 @@ private:
   SPIClass m_spiDisplay;
   Adafruit_ST7735 m_display;
 
+  // SPI pins
+  const uint8_t m_sck;
+  const uint8_t m_miso;
+  const uint8_t m_mosi;
+  const uint8_t m_ss;
+
   // Display backlight pin
   const uint8_t m_backlightPin;
 
   // limit the number of displayString operations per second
   uint8_t m_fps;
   uint32_t m_lastDisplayRefreshMillis[VA_MAX];
+
+  // are we turned on or off?
+  bool m_turned_on;
 };
 
 #endif // DISPLAY_H

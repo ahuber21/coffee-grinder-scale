@@ -7,19 +7,19 @@ TextColor colorBottom = colors;
 
 Display::Display(uint8_t sck, uint8_t miso, uint8_t mosi, uint8_t ss,
                  uint8_t dc, uint8_t cs, uint8_t reset, uint8_t backlight)
-    : m_spiDisplay(HSPI), m_display(&m_spiDisplay, cs, dc, reset),
-      m_backlightPin(25), m_fps(16) {
+    : m_spiDisplay(HSPI), m_display(&m_spiDisplay, cs, dc, reset), m_sck(sck),
+      m_miso(miso), m_mosi(mosi), m_ss(ss), m_backlightPin(backlight),
+      m_fps(16), m_turned_on(false) {
   memset(m_lastDisplayRefreshMillis, 0, sizeof(uint32_t) * VA_MAX);
 }
 
 void Display::begin() {
-  ledcSetup(1, 100, 8);
-  m_spiDisplay.begin(14, 12, 13, 15);
-  ledcAttachPin(m_backlightPin, 1);
-  ledcWrite(1, 0xFFFFFFFF);
+  m_spiDisplay.begin(m_sck, m_miso, m_mosi, m_ss);
   m_display.initR(INITR_MINI160x80);
   m_display.invertDisplay(false);
-  setBrightness(100);
+  ledcAttachPin(m_backlightPin, 1);
+  ledcSetup(1, 100, 8);
+  wakeUp();
 }
 
 void Display::displayString(const String &text, VerticalAlignment alignment) {
@@ -27,6 +27,8 @@ void Display::displayString(const String &text, VerticalAlignment alignment) {
 }
 
 void Display::displayString(const char *text, VerticalAlignment alignment) {
+  wakeUp();
+
   uint32_t now = millis();
   if (now - m_lastDisplayRefreshMillis[(int)alignment] < 1000.0f / m_fps) {
     return;
@@ -93,17 +95,20 @@ void Display::clear() {
 }
 
 void Display::shutDown() {
+  if (!m_turned_on) {
+    return;
+  }
+  m_turned_on = false;
   clear();
-  ledcWrite(1, 0);
-  // detach pwm
-  ledcDetachPin(m_backlightPin);
-  pinMode(m_backlightPin, OUTPUT);
-  digitalWrite(m_backlightPin, 0);
+  setBrightness(0);
 }
 
 void Display::wakeUp() {
-  ledcAttachPin(m_backlightPin, 1);
-  ledcSetup(1, 100, 8);
+  if (m_turned_on) {
+    return;
+  }
+  m_turned_on = true;
+  setBrightness(1);
   clear();
 }
 

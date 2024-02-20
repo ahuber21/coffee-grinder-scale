@@ -45,6 +45,7 @@ float target_grams = 0;
 float target_grams_corrected = 0; // includes the correction dose
 
 // various millis to keep track of when stuff happened
+unsigned long state_change_to_idle_millis = 0;
 unsigned long grinder_started_millis = 0;
 unsigned long last_heartbeat_millis = 0;
 unsigned long button_pressed_filter_millis = 0;
@@ -195,6 +196,7 @@ void setup() {
       RISING);
 
   display.clear();
+  state_change_to_idle_millis = millis();
   state = IDLE;
 }
 
@@ -324,9 +326,13 @@ void loopIdle() {
     resetWifi();
   }
 
-  float grams = scale.getUnits();
-  display.displayString(String(grams, GRAMS_DIGITS) + " g",
-                        VerticalAlignment::CENTER);
+  if (millis() - state_change_to_idle_millis > 60 * 1000) {
+    display.shutDown();
+  } else {
+    float grams = scale.getUnits();
+    display.displayString(String(grams, GRAMS_DIGITS) + " g",
+                          VerticalAlignment::CENTER);
+  }
 }
 
 void loopButtonFilter() {
@@ -397,6 +403,7 @@ void loopConfirm() {
 
   if ((millis() - button_pressed_millis) > confirm_timeout_millis) {
     // go back to idle
+    state_change_to_idle_millis = millis();
     state = IDLE;
   }
 }
@@ -617,6 +624,7 @@ void loopFinalize() {
 
   if (millis() - finalize_millis > finalize_screentime_millis) {
     display.clear();
+    state_change_to_idle_millis = millis();
     state = IDLE;
   }
 }
@@ -644,7 +652,6 @@ void setupDisplay() {
   display.begin();
   display.wakeUp();
   display.setRotation(3);
-  display.setBrightness(1);
   display.clear();
   display.drawBitmap(0, 0, (unsigned char *)bootLogo);
 }
