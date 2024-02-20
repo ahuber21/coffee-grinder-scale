@@ -27,6 +27,7 @@ ESP32 project to control a coffee grinder by weight.
 * GUI using a small TFT and Adafruit libraries.
   * Introduced the concept of FPS to reduce flickering.
 * Configure two buttons for two pre-configured doses (grams).
+  * Including some logic to filter sporadic glitches and self-triggering
 * Fast, precise, responsive readout of ADS1232.
 * Confirm button press to avoid accidental starts.
 * Top-up logic to gradually converge to desired dose.
@@ -38,4 +39,5 @@ This project is using the hardware from jousis' espresso-scale (https://gitlab.c
 
 My grinder is the Eureka Mignon. The hardware mod is based on this [Tech Dregs YouTube video](https://www.youtube.com/watch?v=ksemL5_kvDw). Note that the power supply of the 220 V version of the grinder is different and it doesn't seem to be capable of running the ESP32. I'm therefore using an external wall plug.
 
-The case is still in development. I'm still learning how to use FreeCAD. I'll add it eventually.
+The case is very basic, but works for me. I'm using [these buttons](https://www.amazon.de/gp/product/B0BF51N8CK/ref=ppx_yo_dt_b_search_asin_image?ie=UTF8&th=1&language=en_GB), but ever since I added them I'm experiencing glitches that I had to correct in software (see `loopButtonFilter`). If you want to build this, maybe try different buttons, and play around with adding other pull-ups/pull-downs and filter caps.
+
