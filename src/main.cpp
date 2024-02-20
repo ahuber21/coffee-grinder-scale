@@ -14,6 +14,9 @@
 
 #include "defines.h"
 
+#define GRAMS_DIGITS 1
+#define TIME_DIGITS 1
+
 ADS1232 scale = ADS1232(ADC_PDWN_PIN, ADC_SCLK_PIN, ADC_DOUT_PIN, ADC_SPEED_PIN,
                         ADC_GAIN1_PIN, ADC_GAIN0_PIN);
 Display display(DISPLAY_SCK_PIN, DISPLAY_MISO_PIN, DISPLAY_MOSI_PIN,
@@ -322,7 +325,8 @@ void loopIdle() {
   }
 
   float grams = scale.getUnits();
-  display.displayString(String(grams, 2) + " g", VerticalAlignment::CENTER);
+  display.displayString(String(grams, GRAMS_DIGITS) + " g",
+                        VerticalAlignment::CENTER);
 }
 
 void loopButtonFilter() {
@@ -414,7 +418,7 @@ void loopConfigured() {
 
   // update display
   display.clear();
-  display.displayString(String(target_grams, 2) + " g",
+  display.displayString(String(target_grams, GRAMS_DIGITS) + " g",
                         VerticalAlignment::THREE_ROW_BOTTOM);
 
   // initial values
@@ -443,7 +447,7 @@ void loopRunning() {
   graph.updateGraphData(time, grams);
 
   // update display top line (time)
-  display.displayString("R - " + String(time, 2) + " s",
+  display.displayString("R - " + String(time, TIME_DIGITS) + " s",
                         VerticalAlignment::THREE_ROW_TOP);
 
   // wait until something is happening
@@ -452,13 +456,8 @@ void loopRunning() {
   }
 
   // update display grams
-  display.displayString(String(grams, 2) + " g",
+  display.displayString(String(grams, GRAMS_DIGITS) + " g",
                         VerticalAlignment::THREE_ROW_CENTER);
-
-  if (grams > target_grams_corrected) {
-    state = TOPUP;
-    return;
-  }
 
   // calculate weight increase
   float delta_grams = grams - last_grams;
@@ -470,6 +469,12 @@ void loopRunning() {
   // calculate rate
   float rate = 1000. * delta_grams / delta_millis;
   if (rate < 0) {
+    return;
+  }
+
+  // continue to next state if we're consistently above target
+  if (grams > last_grams && (last_grams > target_grams_corrected)) {
+    state = TOPUP;
     return;
   }
 
@@ -501,7 +506,7 @@ void loopRunning() {
   logger.println(buffer);
 
   // update display bottom (always stays the same)
-  display.displayString(String(target_grams, 2) + " g",
+  display.displayString(String(target_grams, GRAMS_DIGITS) + " g",
                         VerticalAlignment::THREE_ROW_BOTTOM);
 }
 
@@ -512,24 +517,25 @@ void loopTopUp() {
   auto now = millis();
   float grams = scale.getUnits();
   float time = (now - grinder_started_millis) / 1000.;
-  display.displayString(String(time, 2) + " s",
+  display.displayString(String(time, TIME_DIGITS) + " s",
                         VerticalAlignment::THREE_ROW_TOP);
-  display.displayString(String(grams, 2) + " g",
+  display.displayString(String(grams, GRAMS_DIGITS) + " g",
                         VerticalAlignment::THREE_ROW_CENTER);
   display.displayString("TOPUP", VerticalAlignment::THREE_ROW_BOTTOM);
 
   graph.updateGraphData(time, grams);
 
-  if (grams >= target_grams - 0.05) {
-    logger.println("Target weight reached - stopping");
-    // close enough to target weight
-    state = STOPPING;
-    return;
-  }
-
   if (!grinder_is_running &&
       ((now - last_top_up_millis) > settings.scale.settle_millis)) {
-    // grinder was turned off
+    // grinder was turned off, move to next step if weight is enough
+    if (grams >= target_grams - 0.05) {
+      logger.println("Target weight reached - stopping");
+      // close enough to target weight
+      state = STOPPING;
+      return;
+    }
+
+    // calculate next top off time based on avg_rate
     float avg_rate = (grams_per_seconds_count > 0)
                          ? grams_per_seconds_total / grams_per_seconds_count
                          : 0.1;
@@ -538,11 +544,12 @@ void loopTopUp() {
       state = STOPPING;
       return;
     }
+    // calculate how long we should run, only allowing a window of values
     float top_up_seconds = (target_grams - grams) / avg_rate;
     top_up_seconds = top_up_seconds < 0.4f ? 0.4f : top_up_seconds;
     top_up_seconds = top_up_seconds > 1.0f ? 1.0f : top_up_seconds;
     top_up_stop_millis = now + 1000. * top_up_seconds;
-    logger.println("Top up for " + String(top_up_seconds, 2) + " s");
+    logger.println("Top up for " + String(top_up_seconds, TIME_DIGITS) + " s");
     grinderOn();
   } else if (grinder_is_running && (now > top_up_stop_millis)) {
     logger.println("Top up done - waiting for settle");
@@ -562,9 +569,9 @@ void loopStopping() {
 
   // update display
   float time = (millis() - grinder_started_millis) / 1000.;
-  display.displayString(String(time, 2) + " s",
+  display.displayString(String(time, TIME_DIGITS) + " s",
                         VerticalAlignment::THREE_ROW_TOP);
-  display.displayString(String(grams, 2) + " g",
+  display.displayString(String(grams, GRAMS_DIGITS) + " g",
                         VerticalAlignment::THREE_ROW_CENTER);
 
   auto now = millis();
@@ -600,9 +607,9 @@ void loopStopping() {
 }
 
 void loopFinalize() {
-  display.displayString(String(finalize_time, 2) + " s",
+  display.displayString(String(finalize_time, TIME_DIGITS) + " s",
                         VerticalAlignment::THREE_ROW_TOP);
-  display.displayString(String(finalize_grams, 2) + " g",
+  display.displayString(String(finalize_grams, TIME_DIGITS) + " g",
                         VerticalAlignment::THREE_ROW_CENTER);
   display.displayString("FINAL", VerticalAlignment::THREE_ROW_BOTTOM);
 
