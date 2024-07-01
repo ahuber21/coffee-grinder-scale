@@ -1,5 +1,11 @@
 .vscode
+.vscode*
+*.workspace
 .pio
+.sync*
+.browse*
+.cache
+.platformio
 
 secrets.h
 
