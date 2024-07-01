@@ -1,4 +1,4 @@
-#include "display.h"
+#include "Display.h"
 
 TextColor colors = {ST7735_WHITE, ST7735_BLACK};
 TextColor colorTop = colors;
