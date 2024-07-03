@@ -33,7 +33,7 @@ WebSocketGraph graph;
 // overall timeout when running the grinder
 static const unsigned long timeout_millis = 30000;
 // how long the final result is displayed
-static const unsigned long finalize_screentime_millis = 2000;
+static const unsigned long finalize_screentime_millis = 5000;
 // how long the confirm screen is shown
 static const unsigned long confirm_timeout_millis = 2000;
 // button debounce, accept one button press each X milliseconds
@@ -82,7 +82,9 @@ volatile enum State {
   FINALIZE,
   DEBUG,
 } state;
+// previous state when in loop
 State old_state_loop = IDLE;
+// previous state when button press interrupt is handled
 State old_state_button_press = IDLE;
 
 enum ButtonPin {
@@ -449,6 +451,7 @@ void loopConfigured() {
   // initial values
   last_grams = scale.getUnits();
   last_grams_millis = millis();
+  stopping_last_grams = 0;
   grams_per_seconds_total = 0;
   grams_per_seconds_count = 0;
 
@@ -472,7 +475,7 @@ void loopRunning() {
   graph.updateGraphData(time, grams);
 
   // update display top line (time)
-  display.displayString("R - " + String(time, TIME_DIGITS) + " s",
+  display.displayString(String(time, TIME_DIGITS) + " s",
                         VerticalAlignment::THREE_ROW_TOP);
 
   // wait until something is happening
@@ -602,7 +605,7 @@ void loopStopping() {
   auto now = millis();
 
   // give it some time to settle, don't check too often
-  if (now - stopping_last_millis < 500) {
+  if (now - stopping_last_millis < settings.scale.settle_millis) {
     return;
   }
 
