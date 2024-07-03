@@ -601,7 +601,8 @@ void loopStopping() {
 
   auto now = millis();
 
-  if (now - stopping_last_millis < 200) {
+  // give it some time to settle, don't check too often
+  if (now - stopping_last_millis < 500) {
     return;
   }
 
@@ -613,7 +614,7 @@ void loopStopping() {
   // graph update
   graph.updateGraphData(time, grams);
 
-  if (delta_grams > 0.1) {
+  if (delta_grams > 0.07) {
     logger.println("Waiting to stabilize");
     display.displayString("STABILIZING", VerticalAlignment::THREE_ROW_BOTTOM);
     return;
