@@ -338,8 +338,9 @@ void loopIdle() {
     float requested_grams = api.getNewValue();
     logger.println("API request for " + String(requested_grams, 2) + " g");
     target_grams = requested_grams;
-    // 1.0 hardcoded for now
-    target_grams_corrected = requested_grams - 1.0f;
+    // correction hardcoded for now
+    float correction = requested_grams > 1.5f ? 1.5f : 0.0f;
+    target_grams_corrected = requested_grams - correction;
     // "virtually" press right button -> left cancel, right confirm
     last_button = right;
     button_pressed_millis = millis();
@@ -576,7 +577,7 @@ void loopTopUp() {
     // calculate how long we should run, only allowing a window of values
     float top_up_seconds = (target_grams - grams) / avg_rate;
     top_up_seconds = top_up_seconds < 0.4f ? 0.4f : top_up_seconds;
-    top_up_seconds = top_up_seconds > 1.0f ? 1.0f : top_up_seconds;
+    top_up_seconds = top_up_seconds > 1.3f ? 1.3f : top_up_seconds;
     top_up_stop_millis = now + 1000. * top_up_seconds;
     logger.println("Top up for " + String(top_up_seconds, TIME_DIGITS) + " s");
     grinderOn();
