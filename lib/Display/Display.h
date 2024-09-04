@@ -210,6 +210,9 @@ public:
 
   void setRotation(uint8_t rotation);
 
+  uint8_t getFps() { return m_fps; }
+  void setFps(uint8_t fps) { m_fps = fps; };
+
   void displayString(const String &text, VerticalAlignment alignment);
   void displayString(const char *text, VerticalAlignment alignment);
 
