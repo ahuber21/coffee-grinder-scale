@@ -57,6 +57,7 @@ unsigned long last_top_up_millis = 0;
 unsigned long top_up_stop_millis = 0;
 unsigned long stopping_last_millis = 0;
 unsigned long finalize_millis = 0;
+unsigned long debug_last_print_millis = 0;
 
 // various grams values to calculate differences between iterations
 float last_grams = 0;
@@ -655,10 +656,13 @@ void loopDebug() {
   IPAddress ip = WiFi.localIP();
   display.displayString(ip.toString(), VerticalAlignment::CENTER);
 
-  auto raw = scale.getRaw();
-  logger.println("Cal: " + String(settings.scale.calibration_factor, 10));
-  logger.println("Raw: " + String(raw));
-  logger.println("Grams: " + String(scale.getUnits()));
+  if (millis() - debug_last_print_millis > 1000) {
+    auto raw = scale.getRaw();
+    logger.println("Cal: " + String(settings.scale.calibration_factor, 10));
+    logger.println("Raw: " + String(raw));
+    logger.println("Grams: " + String(scale.getUnits()));
+    debug_last_print_millis = millis();
+  }
 }
 
 void grinderOn() {
