@@ -35,6 +35,11 @@ void Display::displayString(const char *text, VerticalAlignment alignment) {
   }
   m_lastDisplayRefreshMillis[(int)alignment] = now;
 
+  // fix displaying -0.00 and show 0.00 instead
+  if (strcmp(text, "-0.00") == 0) {
+    text = "0.00";
+  }
+
   int16_t x, y;
   uint16_t w, h;
 
