@@ -9,6 +9,7 @@
 #include <API.h>
 #include <Display.h>
 #include <ESPAsyncWebServer.h>
+#include <TopupLogger.h>
 #include <WebSocketGraph.h>
 #include <WebSocketLogger.h>
 #include <WebSocketSettings.h>
@@ -29,6 +30,7 @@ API api;
 WebSocketLogger logger;
 WebSocketSettings settings;
 WebSocketGraph graph;
+TopupLogger topupLogger;
 
 // overall timeout when running the grinder
 static const unsigned long timeout_millis = 30000;
@@ -47,21 +49,25 @@ float target_grams = 0;
 float target_grams_corrected = 0; // includes the correction dose
 
 // various millis to keep track of when stuff happened
-unsigned long state_change_to_idle_millis = 0;
-unsigned long grinder_started_millis = 0;
-unsigned long last_heartbeat_millis = 0;
 unsigned long button_pressed_filter_millis = 0;
 unsigned long button_pressed_millis = 0;
-unsigned long last_grams_millis = 0;
-unsigned long last_top_up_millis = 0;
-unsigned long top_up_stop_millis = 0;
-unsigned long stopping_last_millis = 0;
-unsigned long finalize_millis = 0;
 unsigned long debug_last_print_millis = 0;
+unsigned long finalize_millis = 0;
+unsigned long grinder_runtime_millis = 0; // how long the grinder was on for
+unsigned long grinder_started_millis = 0; // when the grinder was started
+unsigned long grinder_stopped_millis = 0; // when the grinder was stopped
+unsigned long last_grams_millis = 0;
+unsigned long last_heartbeat_millis = 0;
+unsigned long last_top_up_millis = 0;
+unsigned long state_change_to_idle_millis = 0;
+unsigned long stopping_last_millis = 0;
+unsigned long top_up_stop_millis = 0;
 
 // various grams values to calculate differences between iterations
-float last_grams = 0;
-float stopping_last_grams = 0;
+float grams_on_grinder_on = 0.0f; // grams when grinder was turned on
+float last_grams = 0.0f;
+float stopping_last_grams = 0.0f;
+float top_up_grams_delta = 0.0f;
 
 // to calculate the grams per second rate for the current run
 float grams_per_seconds_total = 0;
@@ -167,6 +173,8 @@ void setup() {
 
   graph.begin(&server);
   logger.println("Graph ready");
+
+  topupLogger.begin("http://192.168.0.112:8000/api/log", &logger);
 
   ArduinoOTA.begin();
   ArduinoOTA.onStart([]() { display.clear(); });
@@ -442,8 +450,6 @@ void loopConfigured() {
 
   // start grinder
   grinderOn();
-  logger.println("Grinder started");
-  grinder_started_millis = millis();
 
   // update display
   display.clear();
@@ -557,7 +563,11 @@ void loopTopUp() {
 
   if (!grinder_is_running &&
       ((now - last_top_up_millis) > settings.scale.settle_millis)) {
-    // grinder was turned off, move to next step if weight is enough
+    // grinder was turned off
+    // log how much was added and the time the grinder ran
+    float delta_grams = grams - grams_on_grinder_on;
+    topupLogger.logTopupData(grinder_runtime_millis, delta_grams);
+
     if (grams >= target_grams - 0.05) {
       logger.println("Target weight reached - stopping");
       // close enough to target weight
@@ -576,7 +586,7 @@ void loopTopUp() {
     }
     // calculate how long we should run, only allowing a window of values
     float top_up_seconds = (target_grams - grams) / avg_rate;
-    top_up_seconds = top_up_seconds < 0.4f ? 0.4f : top_up_seconds;
+    top_up_seconds = top_up_seconds < 0.5f ? 0.5f : top_up_seconds;
     top_up_seconds = top_up_seconds > 1.3f ? 1.3f : top_up_seconds;
     top_up_stop_millis = now + 1000. * top_up_seconds;
     logger.println("Top up for " + String(top_up_seconds, TIME_DIGITS) + " s");
@@ -592,7 +602,6 @@ void loopStopping() {
   if (grinder_is_running) {
     // stop grinder
     grinderOff();
-    logger.println("Grinder stopped");
   }
 
   float grams = scale.getUnits();
@@ -667,11 +676,17 @@ void loopDebug() {
 }
 
 void grinderOn() {
+  grams_on_grinder_on = scale.getUnits();
   digitalWrite(GRINDER_RELAY_PIN, HIGH);
+  logger.println("Grinder started");
+  grinder_started_millis = millis();
   grinder_is_running = true;
 }
 void grinderOff() {
   digitalWrite(GRINDER_RELAY_PIN, LOW);
+  logger.println("Grinder stopped");
+  grinder_stopped_millis = millis();
+  grinder_runtime_millis = grinder_stopped_millis - grinder_started_millis;
   grinder_is_running = false;
 }
 
