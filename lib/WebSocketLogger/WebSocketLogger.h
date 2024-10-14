@@ -1,5 +1,5 @@
 /**
- * \file wslogger.h
+ * \file WebSocketLogger.h
  * @author Andreas Huber (ahuber1121@gmail.com)
  * \brief Creates a websocket that can be attached to a server for logging
  * @version 0.1
