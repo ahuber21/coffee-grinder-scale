@@ -512,7 +512,6 @@ void loopRunning() {
 
   // continue to next state if we're consistently above target
   if (grams > last_grams && (last_grams > target_grams_corrected)) {
-    grinderOff();
     state = TOPUP;
     return;
   }
