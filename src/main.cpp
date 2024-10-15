@@ -59,6 +59,7 @@ unsigned long grinder_stopped_millis = 0; // when the grinder was stopped
 unsigned long last_grams_millis = 0;
 unsigned long last_heartbeat_millis = 0;
 unsigned long last_top_up_millis = 0;
+unsigned long session_started_millis = 0; // when the grind session was started
 unsigned long state_change_to_idle_millis = 0;
 unsigned long stopping_last_millis = 0;
 unsigned long top_up_stop_millis = 0;
@@ -450,6 +451,7 @@ void loopConfigured() {
 
   // start grinder
   grinderOn();
+  session_started_millis = millis();
 
   // update display
   display.clear();
@@ -469,7 +471,7 @@ void loopConfigured() {
 void loopRunning() {
   unsigned long int now = millis();
 
-  if (now - grinder_started_millis > timeout_millis) {
+  if (now - session_started_millis > timeout_millis) {
     // timeout - no top up
     state = STOPPING;
     return;
@@ -477,7 +479,7 @@ void loopRunning() {
 
   float grams = scale.getUnits();
 
-  float time = (now - grinder_started_millis) / 1000.;
+  float time = (now - session_started_millis) / 1000.;
 
   // update graph
   graph.updateGraphData(time, grams);
@@ -510,6 +512,7 @@ void loopRunning() {
 
   // continue to next state if we're consistently above target
   if (grams > last_grams && (last_grams > target_grams_corrected)) {
+    grinderOff();
     state = TOPUP;
     return;
   }
@@ -552,7 +555,7 @@ void loopTopUp() {
   // top up if necessary, based on weight calculation
   auto now = millis();
   float grams = scale.getUnits();
-  float time = (now - grinder_started_millis) / 1000.;
+  float time = (now - session_started_millis) / 1000.;
   display.displayString(String(time, TIME_DIGITS) + " s",
                         VerticalAlignment::THREE_ROW_TOP);
   display.displayString(String(grams, GRAMS_DIGITS) + " g",
@@ -592,8 +595,8 @@ void loopTopUp() {
     logger.println("Top up for " + String(top_up_seconds, TIME_DIGITS) + " s");
     grinderOn();
   } else if (grinder_is_running && (now > top_up_stop_millis)) {
-    logger.println("Top up done - waiting for settle");
     grinderOff();
+    logger.println("Top up done - waiting for settle");
     last_top_up_millis = now;
   }
 }
@@ -607,7 +610,7 @@ void loopStopping() {
   float grams = scale.getUnits();
 
   // update display
-  float time = (millis() - grinder_started_millis) / 1000.;
+  float time = (millis() - session_started_millis) / 1000.;
   display.displayString(String(time, TIME_DIGITS) + " s",
                         VerticalAlignment::THREE_ROW_TOP);
   display.displayString(String(grams, GRAMS_DIGITS) + " g",
@@ -624,7 +627,7 @@ void loopStopping() {
   float delta_grams = abs(grams - stopping_last_grams);
   stopping_last_grams = grams;
 
-  time = (now - grinder_started_millis) / 1000.;
+  time = (now - session_started_millis) / 1000.;
   // graph update
   graph.updateGraphData(time, grams);
 
