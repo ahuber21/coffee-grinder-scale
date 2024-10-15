@@ -30,7 +30,8 @@ void TopupLogger::logTopupData(unsigned long runTimeMillis,
   AsyncClient *client = new AsyncClient();
   client->onError([this](void *arg, AsyncClient *client, int error) {
     if (_logger)
-      _logger->println(String("Connect Error: ") + error);
+      _logger->println(String("Connect Error: ") +
+                       client->errorToString(error));
     delete client;
   });
 
@@ -54,7 +55,7 @@ void TopupLogger::logTopupData(unsigned long runTimeMillis,
     client->write(request.c_str());
   });
 
-  if (!client->connect(IPAddress(192, 168, 0, 112), 80)) {
+  if (!client->connect(IPAddress(192, 168, 0, 112), 8000)) {
     if (_logger)
       _logger->println("Connect failed");
     delete client;
