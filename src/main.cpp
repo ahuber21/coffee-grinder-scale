@@ -9,7 +9,7 @@
 #include <API.h>
 #include <Display.h>
 #include <ESPAsyncWebServer.h>
-#include <TopupLogger.h>
+#include <ProgressLogger.h>
 #include <WebSocketGraph.h>
 #include <WebSocketLogger.h>
 #include <WebSocketSettings.h>
@@ -30,7 +30,8 @@ API api;
 WebSocketLogger logger;
 WebSocketSettings settings;
 WebSocketGraph graph;
-TopupLogger topupLogger;
+ProgressLogger progressLogger;  // log during normal runtime
+ProgressLogger topupLogger;     // log during topup
 
 // overall timeout when running the grinder
 static const unsigned long timeout_millis = 30000;
@@ -178,7 +179,8 @@ void setup() {
   graph.begin(&server);
   logger.println("Graph ready");
 
-  topupLogger.begin("http://192.168.0.112:8000/api/log", &logger);
+  progressLogger.begin("http://192.168.0.112:8000/api/log/progress", &logger);
+  topupLogger.begin("http://192.168.0.112:8000/api/log/topup", &logger);
 
   ArduinoOTA.begin();
   ArduinoOTA.onStart([]() { display.clear(); });
@@ -503,6 +505,9 @@ void loopRunning() {
   // update graph
   graph.updateGraphData(time, grams);
 
+  // log progress
+  progressLogger.logData(now - session_started_millis, grams);
+
   // update display top line (time)
   display.displayString(String(time, TIME_DIGITS) + " s",
                         VerticalAlignment::THREE_ROW_TOP);
@@ -587,7 +592,7 @@ void loopTopUp() {
     // grinder was turned off
     // log how much was added and the time the grinder ran
     float delta_grams = grams - grams_on_grinder_on;
-    topupLogger.logTopupData(grinder_runtime_millis, delta_grams);
+    topupLogger.logData(grinder_runtime_millis, delta_grams);
 
     if (grams >= target_grams - 0.05) {
       logger.println("Target weight reached - stopping");
