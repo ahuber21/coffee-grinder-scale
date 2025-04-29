@@ -7,7 +7,7 @@
 #include "WebSocketLogger.h"
 
 ProgressLogger::ProgressLogger()
-    : _last_log_millis(0), _endpoint(nullptr), _logger(nullptr) {}
+    : _last_log_millis(0), _endpoint(""), _logger(nullptr) {}
 
 void ProgressLogger::begin(const char *endpoint,
                            const WebSocketLogger *logger) {
@@ -21,7 +21,7 @@ void ProgressLogger::logData(unsigned long runTimeMillis, float weight) {
     return;
   }
 
-  if (millis() - _last_log_millis < 100) {
+  if (millis() - _last_log_millis < 250) {
     // Avoid sending too frequently
     return;
   }
@@ -55,7 +55,7 @@ void ProgressLogger::logData(unsigned long runTimeMillis, float weight) {
           delete client;
         });
 
-    String request = "POST /api/log HTTP/1.1\r\n";
+    String request = "POST " + _endpoint + " HTTP/1.1\r\n";
     request += "Host: " + String(client->remoteIP().toString()) + "\r\n";
     request += "Content-Type: application/json\r\n";
     request += "Content-Length: " + String(payload.length()) + "\r\n";

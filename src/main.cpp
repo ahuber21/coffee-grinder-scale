@@ -179,8 +179,8 @@ void setup() {
   graph.begin(&server);
   logger.println("Graph ready");
 
-  progressLogger.begin("http://192.168.0.112:8000/api/log/progress", &logger);
-  topupLogger.begin("http://192.168.0.112:8000/api/log/topup", &logger);
+  progressLogger.begin("/api/log/progress", &logger);
+  topupLogger.begin("/api/log/topup", &logger);
 
   ArduinoOTA.begin();
   ArduinoOTA.onStart([]() { display.clear(); });

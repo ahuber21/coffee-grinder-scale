@@ -23,6 +23,6 @@ class ProgressLogger {
 
  private:
   unsigned long _last_log_millis;
-  const char *_endpoint;
+  String _endpoint;
   const WebSocketLogger *_logger;
 };
