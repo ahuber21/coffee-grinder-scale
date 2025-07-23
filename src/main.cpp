@@ -243,9 +243,6 @@ void loop() {
   // read the ADC if it's ready - this is close to non-blocking
   scale.readADCIfReady();
 
-  // update the progress logger
-  progressLogger.update();
-
   // don't call expensive functions between check and setting old_state_loop
   // as new interrupts may occur in the meantime
   bool need_to_clear = state != old_state_loop;

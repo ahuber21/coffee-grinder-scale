@@ -12,36 +12,17 @@
 #pragma once
 
 #include <Arduino.h>
-#include <vector>
-
-#define SEND_INTERVAL 10000 // 10 seconds interval for sending data
-#define SEND_TIMEOUT 1000 // 1 second timeout for sending data
 
 class WebSocketLogger;
-
-struct LogEntry {
-  unsigned long runTimeMillis;
-  float weight;
-};
 
 class ProgressLogger {
  public:
   ProgressLogger();
-  void begin(const char *endpoint, const WebSocketLogger *logger,
-             unsigned long minLogInterval = 200);
+  void begin(const char *endpoint, const WebSocketLogger *logger);
   void logData(unsigned long runTimeMillis, float weight);
-  void update();
 
-  private:
-  void sendBufferedData();
-  void handleSendingTimeout();
-
-  unsigned long _min_log_interval = 200; // 5 Hz default (ms)
+ private:
+  unsigned long _last_log_millis;
   String _endpoint;
   const WebSocketLogger *_logger;
-  std::vector<LogEntry> _buffer;
-  bool _sending = false;
-  unsigned long _sending_start_millis = 0;
-  size_t _max_buffer_size = 100; // Maximum buffer size before sending
-
 };
