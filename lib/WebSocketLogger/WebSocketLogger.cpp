@@ -1,5 +1,7 @@
 #include "WebSocketLogger.h"
 #include <ESPAsyncWebServer.h>
+#include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
 
 namespace wslogger {
 const char PROGMEM index_html[] = R"rawliteral(
@@ -166,6 +168,8 @@ void onWebSocketEvent(AsyncWebSocket *server, AsyncWebSocketClient *client,
 }
 } // namespace wslogger
 
+static portMUX_TYPE s_logMux = portMUX_INITIALIZER_UNLOCKED;
+
 WebSocketLogger::WebSocketLogger() : _ws("/WebSocketLogger") {}
 
 void WebSocketLogger::begin(AsyncWebServer *srv) {
@@ -176,10 +180,12 @@ void WebSocketLogger::begin(AsyncWebServer *srv) {
 }
 
 void WebSocketLogger::print(const String &message) const {
+  portENTER_CRITICAL(&s_logMux);
   Serial.print(message);
   for (auto *client : _ws.getClients()) {
     if (client->status() == WS_CONNECTED) {
       client->text(message);
     }
   }
+  portEXIT_CRITICAL(&s_logMux);
 }

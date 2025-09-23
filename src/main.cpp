@@ -9,7 +9,7 @@
 #include <API.h>
 #include <Display.h>
 #include <ESPAsyncWebServer.h>
-#include <ProgressLogger.h>
+#include <WebSocketMetrics.h>
 #include <WebSocketGraph.h>
 #include <WebSocketLogger.h>
 #include <WebSocketSettings.h>
@@ -30,8 +30,7 @@ API api;
 WebSocketLogger logger;
 WebSocketSettings settings;
 WebSocketGraph graph;
-ProgressLogger progressLogger;  // log during normal runtime
-ProgressLogger topupLogger;     // log during topup
+WebSocketMetrics metrics;
 
 // overall timeout when running the grinder
 static const unsigned long timeout_millis = 30000;
@@ -78,6 +77,8 @@ uint16_t grams_per_seconds_count = 0;
 // determined in finalize, displayed in stopping
 float finalize_time = 0;
 float finalize_grams = 0;
+// ensure finalize events (graph + metrics) are only broadcast once
+bool finalize_broadcast_done = false;
 
 volatile enum State {
   IDLE = 0,
@@ -132,7 +133,7 @@ void grinderOn();
 void grinderOff();
 
 template <ButtonPin pin>
-void button_interrupt() {
+void IRAM_ATTR button_interrupt() {
   auto now = millis();
   button_pressed_filter_millis = now;
 
@@ -179,8 +180,7 @@ void setup() {
   graph.begin(&server);
   logger.println("Graph ready");
 
-  progressLogger.begin("/api/log/progress", &logger);
-  topupLogger.begin("/api/log/topup", &logger);
+  metrics.begin(&server, &logger);
 
   ArduinoOTA.begin();
   ArduinoOTA.onStart([]() { display.clear(); });
@@ -207,15 +207,13 @@ void setup() {
   attachInterrupt(digitalPinToInterrupt(BUTTON_RIGHT), button_interrupt<right>,
                   FALLING);
   pinMode(BUTTON_BACK, INPUT_PULLDOWN);
-  attachInterrupt(
-      digitalPinToInterrupt(BUTTON_BACK),
-      []() {
-        old_state_button_press =
-            (state == BUTTON_PRESSED) ? old_state_button_press : state;
-        state = BUTTON_PRESSED;
-        button = back;
-      },
-      RISING);
+  auto back_button_isr = []() IRAM_ATTR {
+    old_state_button_press =
+        (state == BUTTON_PRESSED) ? old_state_button_press : state;
+    state = BUTTON_PRESSED;
+    button = back;
+  };
+  attachInterrupt(digitalPinToInterrupt(BUTTON_BACK), back_button_isr, RISING);
 
   display.clear();
   state_change_to_idle_millis = millis();
@@ -464,9 +462,10 @@ void loopTare() {
 }
 
 void loopConfigured() {
-  // reset graph
+  // reset graph & metrics target
   graph.resetGraph(target_grams);
   graph.updateGraphData(0.0f, 0.0f);
+  metrics.sendTarget(target_grams);
 
   display.displayString("T", VerticalAlignment::CENTER);
 
@@ -502,11 +501,9 @@ void loopRunning() {
 
   float time = (now - session_started_millis) / 1000.;
 
-  // update graph
+  // update graph + metrics
   graph.updateGraphData(time, grams);
-
-  // log progress
-  progressLogger.logData(now - session_started_millis, grams);
+  metrics.sendProgress(time, grams);
 
   // update display top line (time)
   display.displayString(String(time, TIME_DIGITS) + " s",
@@ -591,8 +588,8 @@ void loopTopUp() {
       ((now - last_top_up_millis) > settings.scale.settle_millis)) {
     // grinder was turned off
     // log how much was added and the time the grinder ran
-    float delta_grams = grams - grams_on_grinder_on;
-    topupLogger.logData(grinder_runtime_millis, delta_grams);
+  float delta_grams = grams - grams_on_grinder_on;
+  metrics.sendTopUp(grinder_runtime_millis, delta_grams);
 
     if (grams >= target_grams - 0.05) {
       logger.println("Target weight reached - stopping");
@@ -669,17 +666,22 @@ void loopStopping() {
   finalize_millis = millis();
   finalize_grams = grams;
   finalize_time = time;
+  finalize_broadcast_done = false; // allow one-time finalize broadcast next loop
   state = FINALIZE;
 }
 
 void loopFinalize() {
   display.displayString(String(finalize_time, TIME_DIGITS) + " s",
                         VerticalAlignment::THREE_ROW_TOP);
-  display.displayString(String(finalize_grams, TIME_DIGITS) + " g",
+  display.displayString(String(finalize_grams, GRAMS_DIGITS) + " g",
                         VerticalAlignment::THREE_ROW_CENTER);
   display.displayString("FINAL", VerticalAlignment::THREE_ROW_BOTTOM);
-
-  graph.finalizeGraph();
+  if (!finalize_broadcast_done) {
+    // send finalize events only once to avoid flooding websockets / heap
+    graph.finalizeGraph();
+    metrics.sendFinalize(finalize_time, finalize_grams);
+    finalize_broadcast_done = true;
+  }
 
   if (millis() - finalize_millis > finalize_screentime_millis) {
     display.clear();
