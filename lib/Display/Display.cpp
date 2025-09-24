@@ -77,6 +77,10 @@ void Display::displayString(const char *text, VerticalAlignment alignment) {
     y = DISPLAY_HEIGHT - h;
     break;
 
+  case GRINDING_LAYOUT:
+    // This case is handled by displayGrindingLayout(), not here
+    return;
+
   default:
     break;
   }
@@ -120,4 +124,137 @@ void Display::wakeUp() {
 void Display::setBrightness(uint8_t brightness) {
   uint32_t duty = 0xFFFFFFFF / 100 * brightness;
   ledcWrite(1, duty);
+}
+
+void Display::displayGrindingLayout(float currentGrams, float targetGrams, float seconds,
+                                   uint16_t currentColor, uint16_t targetColor, uint16_t timeColor) {
+  wakeUp();
+
+  // Check if colors changed to force immediate refresh
+  static uint16_t lastCurrentColorForFPS = 0xFFFF;
+  bool colorChanged = (currentColor != lastCurrentColorForFPS);
+
+  uint32_t now = millis();
+  if (!colorChanged && (now - m_lastDisplayRefreshMillis[GRINDING_LAYOUT] < 1000.0f / m_fps)) {
+    return;
+  }
+  m_lastDisplayRefreshMillis[GRINDING_LAYOUT] = now;
+  lastCurrentColorForFPS = currentColor;
+
+  // Clear screen when content or colors change significantly
+  static float lastCurrentGrams = -999.0f;
+  static float lastTargetGrams = -999.0f;
+  static uint16_t lastCurrentColor = 0xFFFF; // Invalid color to force first refresh
+  if (abs(currentGrams - lastCurrentGrams) > 0.05f ||
+      abs(targetGrams - lastTargetGrams) > 0.5f ||
+      currentColor != lastCurrentColor) {
+    m_display.fillScreen(ST7735_BLACK);
+    lastCurrentGrams = currentGrams;
+    lastTargetGrams = targetGrams;
+    lastCurrentColor = currentColor;
+  }
+
+  // Format strings - fix negative zero display
+  char currentStr[16], targetStr[16], timeStr[16];
+  float displayGrams = currentGrams;
+  if (displayGrams < 0.05 && displayGrams > -0.05) {
+    displayGrams = 0.0; // Avoid -0.0 display
+  }
+  sprintf(currentStr, "%.1f", displayGrams);
+  sprintf(targetStr, "/%.0fg", targetGrams);
+  sprintf(timeStr, "%.1fs", seconds);
+
+  // --- STATIC FONT SIZES (optimized for 0.0-99.9 range) ---
+  uint8_t currentSize = 3; // Size 3 works well for up to "99.9"
+  uint8_t targetSize = 2;  // Size 2 for target "/36g"
+
+  int16_t x, y;
+  uint16_t w, h;
+
+  // --- DRAW CURRENT WEIGHT ---
+  m_display.setTextSize(currentSize);
+  m_display.getTextBounds(currentStr, 0, 0, &x, &y, &w, &h);
+  uint16_t currentW = w;
+  uint16_t currentH = h;
+
+  // Get target text dimensions
+  m_display.setTextSize(targetSize);
+  m_display.getTextBounds(targetStr, 0, 0, &x, &y, &w, &h);
+  uint16_t targetW = w;
+
+  // Center both texts together as a unit
+  uint16_t totalWidth = currentW + targetW + 3; // Total width including gap
+  int16_t currentX = (DISPLAY_WIDTH - totalWidth) / 2;
+  int16_t currentY = 5; // Small top margin
+
+  m_display.setTextColor(currentColor, ST7735_BLACK);
+  m_display.setCursor(currentX, currentY);
+  m_display.setTextSize(currentSize);
+  m_display.print(currentStr);
+
+  // --- DRAW TARGET SUFFIX ---
+
+  // Position target text right after current weight, aligned to bottom
+  int16_t targetX = currentX + currentW + 3; // Right after current + small gap
+  int16_t targetY = currentY + currentH - (targetSize * 8); // Align to bottom of current weight
+
+  m_display.setCursor(targetX, targetY);
+  m_display.setTextSize(targetSize);
+  m_display.setTextColor(targetColor, ST7735_BLACK);
+  m_display.print(targetStr);
+
+  // --- TIME (bottom of screen, more readable) ---
+  uint8_t timeSize = 2; // Increased from 1 to 2 for better readability
+  m_display.setTextSize(timeSize);
+  m_display.getTextBounds(timeStr, 0, 0, &x, &y, &w, &h);
+
+  int16_t timeX = (DISPLAY_WIDTH - w) / 2;
+  int16_t timeY = DISPLAY_HEIGHT - h - 2; // Bottom margin
+
+  m_display.setCursor(timeX, timeY);
+  m_display.setTextSize(timeSize);
+  m_display.setTextColor(timeColor, ST7735_BLACK);
+  m_display.print(timeStr);
+}
+
+void Display::displayIdleLayout(float currentGrams) {
+  wakeUp();
+
+  uint32_t now = millis();
+  if (now - m_lastDisplayRefreshMillis[CENTER] < 1000.0f / m_fps) {
+    return;
+  }
+  m_lastDisplayRefreshMillis[CENTER] = now;
+
+  // Clear screen only if content changed significantly
+  static float lastDisplayedGrams = -999.0f;
+  if (abs(currentGrams - lastDisplayedGrams) > 0.05f) {
+    m_display.fillScreen(ST7735_BLACK);
+    lastDisplayedGrams = currentGrams;
+  }
+
+  // Format string - fix negative zero display
+  char currentStr[16];
+  float displayGrams = currentGrams;
+  if (displayGrams < 0.05 && displayGrams > -0.05) {
+    displayGrams = 0.0; // Avoid -0.0 display
+  }
+  sprintf(currentStr, "%.1f g", displayGrams);
+
+  // Use large font size for idle display (reduced to fit negative weights)
+  uint8_t currentSize = 3; // Reduced from 4 to prevent line wrapping with negative weights
+
+  int16_t x, y;
+  uint16_t w, h;
+  m_display.setTextSize(currentSize);
+  m_display.getTextBounds(currentStr, 0, 0, &x, &y, &w, &h);
+
+  // Center on screen
+  int16_t currentX = (DISPLAY_WIDTH - w) / 2;
+  int16_t currentY = (DISPLAY_HEIGHT - h) / 2;
+
+  m_display.setTextColor(ST7735_WHITE, ST7735_BLACK);
+  m_display.setCursor(currentX, currentY);
+  m_display.setTextSize(currentSize);
+  m_display.print(currentStr);
 }

@@ -35,7 +35,7 @@ WebSocketMetrics metrics;
 // overall timeout when running the grinder
 static const unsigned long timeout_millis = 30000;
 // how long the final result is displayed
-static const unsigned long finalize_screentime_millis = 5000;
+static const unsigned long finalize_screentime_millis = 8000; // Show green final results for 8 seconds
 // how long the confirm screen is shown
 static const unsigned long confirm_timeout_millis = 2000;
 // button debounce, accept one button press each X milliseconds
@@ -373,8 +373,7 @@ void loopIdle() {
     if ((-0.3 < grams) && (grams < 0.3)) {
       grams = 0.0f;
     }
-    display.displayString(String(grams, GRAMS_DIGITS) + " g",
-                          VerticalAlignment::CENTER);
+    display.displayIdleLayout(grams);
   }
 }
 
@@ -505,18 +504,13 @@ void loopRunning() {
   graph.updateGraphData(time, grams);
   metrics.sendProgress(time, grams);
 
-  // update display top line (time)
-  display.displayString(String(time, TIME_DIGITS) + " s",
-                        VerticalAlignment::THREE_ROW_TOP);
+  // Use new grinding layout with large current weight
+  display.displayGrindingLayout(grams, target_grams, time);
 
   // wait until something is happening
   if (grams < 1) {
     return;
   }
-
-  // update display grams
-  display.displayString(String(grams, GRAMS_DIGITS) + " g",
-                        VerticalAlignment::THREE_ROW_CENTER);
 
   // calculate weight increase
   float delta_grams = grams - last_grams;
@@ -564,9 +558,7 @@ void loopRunning() {
           time, grams, rate, avg_rate);
   logger.println(buffer);
 
-  // update display bottom (always stays the same)
-  display.displayString(String(target_grams, GRAMS_DIGITS) + " g",
-                        VerticalAlignment::THREE_ROW_BOTTOM);
+  // Display is handled by displayGrindingLayout above
 }
 
 void loopTopUp() {
@@ -576,11 +568,13 @@ void loopTopUp() {
   auto now = millis();
   float grams = scale.getUnits();
   float time = (now - session_started_millis) / 1000.;
-  display.displayString(String(time, TIME_DIGITS) + " s",
-                        VerticalAlignment::THREE_ROW_TOP);
-  display.displayString(String(grams, GRAMS_DIGITS) + " g",
-                        VerticalAlignment::THREE_ROW_CENTER);
-  display.displayString("TOPUP", VerticalAlignment::THREE_ROW_BOTTOM);
+
+  // Use new grinding layout with cyan current weight for topup
+  display.displayGrindingLayout(grams, target_grams, time,
+                               ST7735_CYAN,        // Current weight: cyan (you said you like it)
+                               ST7735_WHITE,       // Target: white (clean)
+                               ST7735_WHITE);      // Time: white (clean)
+  // Note: TOPUP indicator could be added as overlay, but layout already shows state clearly
 
   graph.updateGraphData(time, grams);
 
@@ -629,12 +623,9 @@ void loopStopping() {
 
   float grams = scale.getUnits();
 
-  // update display
+  // update display with modern layout
   float time = (millis() - session_started_millis) / 1000.;
-  display.displayString(String(time, TIME_DIGITS) + " s",
-                        VerticalAlignment::THREE_ROW_TOP);
-  display.displayString(String(grams, GRAMS_DIGITS) + " g",
-                        VerticalAlignment::THREE_ROW_CENTER);
+  display.displayGrindingLayout(grams, target_grams, time);
 
   auto now = millis();
 
@@ -653,7 +644,7 @@ void loopStopping() {
 
   if (delta_grams > 0.07) {
     logger.println("Waiting to stabilize");
-    display.displayString("STABILIZING", VerticalAlignment::THREE_ROW_BOTTOM);
+    // The layout already shows the current state clearly
     return;
   }
 
@@ -671,11 +662,11 @@ void loopStopping() {
 }
 
 void loopFinalize() {
-  display.displayString(String(finalize_time, TIME_DIGITS) + " s",
-                        VerticalAlignment::THREE_ROW_TOP);
-  display.displayString(String(finalize_grams, GRAMS_DIGITS) + " g",
-                        VerticalAlignment::THREE_ROW_CENTER);
-  display.displayString("FINAL", VerticalAlignment::THREE_ROW_BOTTOM);
+  // Use the same modern layout but with GREEN current weight for final results
+  display.displayGrindingLayout(finalize_grams, target_grams, finalize_time,
+                               ST7735_GREEN,       // Current weight: green
+                               ST7735_WHITE,       // Target: white (clean)
+                               ST7735_WHITE);      // Time: white (clean)
   if (!finalize_broadcast_done) {
     // send finalize events only once to avoid flooding websockets / heap
     graph.finalizeGraph();

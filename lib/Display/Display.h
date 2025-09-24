@@ -28,6 +28,7 @@ enum VerticalAlignment {
   THREE_ROW_TOP,
   THREE_ROW_CENTER,
   THREE_ROW_BOTTOM,
+  GRINDING_LAYOUT,  // New: large current weight + small target + time
   VA_MAX,
 };
 
@@ -215,6 +216,15 @@ public:
 
   void displayString(const String &text, VerticalAlignment alignment);
   void displayString(const char *text, VerticalAlignment alignment);
+
+  // New: Advanced grinding layout with large current + small target + time
+  void displayGrindingLayout(float currentGrams, float targetGrams, float seconds,
+                           uint16_t currentColor = ST7735_WHITE,
+                           uint16_t targetColor = ST7735_WHITE,
+                           uint16_t timeColor = ST7735_WHITE);
+
+  // New: Idle layout with large current weight only
+  void displayIdleLayout(float currentGrams);
 
   void drawBitmap(int16_t x, int16_t y, uint8_t *bitmap,
                   uint16_t color = ST7735_WHITE, int16_t w = DISPLAY_WIDTH,
