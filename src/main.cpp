@@ -35,7 +35,7 @@ WebSocketMetrics metrics;
 // overall timeout when running the grinder
 static const unsigned long timeout_millis = 30000;
 // how long the final result is displayed
-static const unsigned long finalize_screentime_millis = 8000; // Show green final results for 8 seconds
+static const unsigned long finalize_screentime_millis = 8000;
 // how long the confirm screen is shown
 static const unsigned long confirm_timeout_millis = 2000;
 // button debounce, accept one button press each X milliseconds
@@ -504,7 +504,6 @@ void loopRunning() {
   graph.updateGraphData(time, grams);
   metrics.sendProgress(time, grams);
 
-  // Use new grinding layout with large current weight
   display.displayGrindingLayout(grams, target_grams, time, ST7735_WHITE, ST7735_WHITE, ST7735_WHITE, metrics.getClientCount() > 0);
 
   // wait until something is happening
@@ -569,13 +568,9 @@ void loopTopUp() {
   float grams = scale.getUnits();
   float time = (now - session_started_millis) / 1000.;
 
-  // Use new grinding layout with cyan current weight for topup
   display.displayGrindingLayout(grams, target_grams, time,
-                               ST7735_CYAN,        // Current weight: cyan (you said you like it)
-                               ST7735_WHITE,       // Target: white (clean)
-                               ST7735_WHITE,       // Time: white (clean)
-                               metrics.getClientCount() > 0);  // Show connection indicator
-  // Note: TOPUP indicator could be added as overlay, but layout already shows state clearly
+                               ST7735_CYAN, ST7735_WHITE, ST7735_WHITE,
+                               metrics.getClientCount() > 0);
 
   graph.updateGraphData(time, grams);
 
@@ -624,13 +619,10 @@ void loopStopping() {
 
   float grams = scale.getUnits();
 
-  // update display with modern layout - use cyan like topup since we're still in transition
   float time = (millis() - session_started_millis) / 1000.;
   display.displayGrindingLayout(grams, target_grams, time,
-                               ST7735_CYAN,        // Current weight: cyan (same as topup)
-                               ST7735_WHITE,       // Target: white (clean)
-                               ST7735_WHITE,       // Time: white (clean)
-                               metrics.getClientCount() > 0);  // Show connection indicator
+                               ST7735_CYAN, ST7735_WHITE, ST7735_WHITE,
+                               metrics.getClientCount() > 0);
 
   auto now = millis();
 
@@ -667,12 +659,9 @@ void loopStopping() {
 }
 
 void loopFinalize() {
-  // Use the same modern layout but with GREEN current weight for final results
   display.displayGrindingLayout(finalize_grams, target_grams, finalize_time,
-                               ST7735_GREEN,       // Current weight: green
-                               ST7735_WHITE,       // Target: white (clean)
-                               ST7735_WHITE,       // Time: white (clean)
-                               metrics.getClientCount() > 0);  // Show connection indicator
+                               ST7735_GREEN, ST7735_WHITE, ST7735_WHITE,
+                               metrics.getClientCount() > 0);
   if (!finalize_broadcast_done) {
     // send finalize events only once to avoid flooding websockets / heap
     graph.finalizeGraph();

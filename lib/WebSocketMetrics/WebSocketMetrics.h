@@ -18,7 +18,6 @@ public:
   void sendTopUp(unsigned long runtimeMillis, float deltaGrams);
   void sendFinalize(float seconds, float finalWeight);
 
-  // Get number of connected clients for connection indicator
   uint32_t getClientCount() const;
 
 private:

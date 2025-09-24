@@ -78,7 +78,6 @@ void Display::displayString(const char *text, VerticalAlignment alignment) {
     break;
 
   case GRINDING_LAYOUT:
-    // This case is handled by displayGrindingLayout(), not here
     return;
 
   default:
@@ -131,7 +130,7 @@ void Display::displayGrindingLayout(float currentGrams, float targetGrams, float
                                    bool showConnectionIndicator) {
   wakeUp();
 
-  // Check if colors changed to force immediate refresh
+  // Force immediate refresh on color changes (bypass FPS limit)
   static uint16_t lastCurrentColorForFPS = 0xFFFF;
   bool colorChanged = (currentColor != lastCurrentColorForFPS);
 
@@ -145,7 +144,7 @@ void Display::displayGrindingLayout(float currentGrams, float targetGrams, float
   // Clear screen when content or colors change significantly
   static float lastCurrentGrams = -999.0f;
   static float lastTargetGrams = -999.0f;
-  static uint16_t lastCurrentColor = 0xFFFF; // Invalid color to force first refresh
+  static uint16_t lastCurrentColor = 0xFFFF;
   if (abs(currentGrams - lastCurrentGrams) > 0.05f ||
       abs(targetGrams - lastTargetGrams) > 0.5f ||
       currentColor != lastCurrentColor) {
@@ -155,19 +154,19 @@ void Display::displayGrindingLayout(float currentGrams, float targetGrams, float
     lastCurrentColor = currentColor;
   }
 
-  // Format strings - fix negative zero display
+  // Format strings and fix negative zero display
   char currentStr[16], targetStr[16], timeStr[16];
   float displayGrams = currentGrams;
   if (displayGrams < 0.05 && displayGrams > -0.05) {
-    displayGrams = 0.0; // Avoid -0.0 display
+    displayGrams = 0.0;
   }
   sprintf(currentStr, "%.1f", displayGrams);
   sprintf(targetStr, "/%.0fg", targetGrams);
   sprintf(timeStr, "%.1fs", seconds);
 
-  // --- STATIC FONT SIZES (optimized for 0.0-99.9 range) ---
-  uint8_t currentSize = 3; // Size 3 works well for up to "99.9"
-  uint8_t targetSize = 2;  // Size 2 for target "/36g"
+  // Static font sizes (optimized for 0.0-99.9g range)
+  uint8_t currentSize = 3;
+  uint8_t targetSize = 2;
 
   int16_t x, y;
   uint16_t w, h;
@@ -184,40 +183,36 @@ void Display::displayGrindingLayout(float currentGrams, float targetGrams, float
   uint16_t targetW = w;
 
   // Center both texts together as a unit
-  uint16_t totalWidth = currentW + targetW + 3; // Total width including gap
+  uint16_t totalWidth = currentW + targetW + 3;
   int16_t currentX = (DISPLAY_WIDTH - totalWidth) / 2;
-  int16_t currentY = 5; // Small top margin
+  int16_t currentY = 5;
 
   m_display.setTextColor(currentColor, ST7735_BLACK);
   m_display.setCursor(currentX, currentY);
   m_display.setTextSize(currentSize);
   m_display.print(currentStr);
 
-  // --- DRAW TARGET SUFFIX ---
-
   // Position target text right after current weight, aligned to bottom
-  int16_t targetX = currentX + currentW + 3; // Right after current + small gap
-  int16_t targetY = currentY + currentH - (targetSize * 8); // Align to bottom of current weight
+  int16_t targetX = currentX + currentW + 3;
+  int16_t targetY = currentY + currentH - (targetSize * 8);
 
   m_display.setCursor(targetX, targetY);
   m_display.setTextSize(targetSize);
   m_display.setTextColor(targetColor, ST7735_BLACK);
   m_display.print(targetStr);
 
-  // --- TIME (bottom of screen, more readable) ---
-  uint8_t timeSize = 2; // Increased from 1 to 2 for better readability
+  uint8_t timeSize = 2;
   m_display.setTextSize(timeSize);
   m_display.getTextBounds(timeStr, 0, 0, &x, &y, &w, &h);
 
   int16_t timeX = (DISPLAY_WIDTH - w) / 2;
-  int16_t timeY = DISPLAY_HEIGHT - h - 2; // Bottom margin
+  int16_t timeY = DISPLAY_HEIGHT - h - 2;
 
   m_display.setCursor(timeX, timeY);
   m_display.setTextSize(timeSize);
   m_display.setTextColor(timeColor, ST7735_BLACK);
   m_display.print(timeStr);
 
-  // Draw connection indicator if requested
   if (showConnectionIndicator) {
     drawConnectionIndicator(true);
   }
@@ -239,16 +234,15 @@ void Display::displayIdleLayout(float currentGrams, bool showConnectionIndicator
     lastDisplayedGrams = currentGrams;
   }
 
-  // Format string - fix negative zero display
+  // Format string and fix negative zero display
   char currentStr[16];
   float displayGrams = currentGrams;
   if (displayGrams < 0.05 && displayGrams > -0.05) {
-    displayGrams = 0.0; // Avoid -0.0 display
+    displayGrams = 0.0;
   }
   sprintf(currentStr, "%.1f g", displayGrams);
 
-  // Use large font size for idle display (reduced to fit negative weights)
-  uint8_t currentSize = 3; // Reduced from 4 to prevent line wrapping with negative weights
+  uint8_t currentSize = 3; // Sized to fit negative weights without wrapping
 
   int16_t x, y;
   uint16_t w, h;
@@ -264,7 +258,6 @@ void Display::displayIdleLayout(float currentGrams, bool showConnectionIndicator
   m_display.setTextSize(currentSize);
   m_display.print(currentStr);
 
-  // Draw connection indicator if requested
   if (showConnectionIndicator) {
     drawConnectionIndicator(true);
   }
@@ -272,11 +265,9 @@ void Display::displayIdleLayout(float currentGrams, bool showConnectionIndicator
 
 void Display::drawConnectionIndicator(bool isConnected) {
   if (isConnected) {
-    // Draw small green filled circle in top-right corner
-    int16_t x = DISPLAY_WIDTH - 8;  // 8 pixels from right edge
-    int16_t y = 4;                  // 4 pixels from top edge
-    int16_t radius = 3;             // Small 3-pixel radius dot
+    int16_t x = DISPLAY_WIDTH - 8;
+    int16_t y = 4;
+    int16_t radius = 3;
     m_display.fillCircle(x, y, radius, ST7735_GREEN);
   }
-  // If not connected, don't draw anything (background will remain black)
 }
