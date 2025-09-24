@@ -221,10 +221,12 @@ public:
   void displayGrindingLayout(float currentGrams, float targetGrams, float seconds,
                            uint16_t currentColor = ST7735_WHITE,
                            uint16_t targetColor = ST7735_WHITE,
-                           uint16_t timeColor = ST7735_WHITE);
+                           uint16_t timeColor = ST7735_WHITE,
+                           bool showConnectionIndicator = false);  // New: Idle layout with large current weight only
+  void displayIdleLayout(float currentGrams, bool showConnectionIndicator = false);
 
-  // New: Idle layout with large current weight only
-  void displayIdleLayout(float currentGrams);
+  // Connection indicator: small green dot in top-right corner
+  void drawConnectionIndicator(bool isConnected);
 
   void drawBitmap(int16_t x, int16_t y, uint8_t *bitmap,
                   uint16_t color = ST7735_WHITE, int16_t w = DISPLAY_WIDTH,

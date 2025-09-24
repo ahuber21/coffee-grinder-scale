@@ -89,3 +89,7 @@ void WebSocketMetrics::sendFinalize(float seconds, float finalWeight) {
   serializeJson(doc, buf, sizeof(buf));
   broadcastAndStore(buf);
 }
+
+uint32_t WebSocketMetrics::getClientCount() const {
+  return _ws.count();
+}

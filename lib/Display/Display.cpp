@@ -127,7 +127,8 @@ void Display::setBrightness(uint8_t brightness) {
 }
 
 void Display::displayGrindingLayout(float currentGrams, float targetGrams, float seconds,
-                                   uint16_t currentColor, uint16_t targetColor, uint16_t timeColor) {
+                                   uint16_t currentColor, uint16_t targetColor, uint16_t timeColor,
+                                   bool showConnectionIndicator) {
   wakeUp();
 
   // Check if colors changed to force immediate refresh
@@ -215,9 +216,14 @@ void Display::displayGrindingLayout(float currentGrams, float targetGrams, float
   m_display.setTextSize(timeSize);
   m_display.setTextColor(timeColor, ST7735_BLACK);
   m_display.print(timeStr);
+
+  // Draw connection indicator if requested
+  if (showConnectionIndicator) {
+    drawConnectionIndicator(true);
+  }
 }
 
-void Display::displayIdleLayout(float currentGrams) {
+void Display::displayIdleLayout(float currentGrams, bool showConnectionIndicator) {
   wakeUp();
 
   uint32_t now = millis();
@@ -257,4 +263,20 @@ void Display::displayIdleLayout(float currentGrams) {
   m_display.setCursor(currentX, currentY);
   m_display.setTextSize(currentSize);
   m_display.print(currentStr);
+
+  // Draw connection indicator if requested
+  if (showConnectionIndicator) {
+    drawConnectionIndicator(true);
+  }
+}
+
+void Display::drawConnectionIndicator(bool isConnected) {
+  if (isConnected) {
+    // Draw small green filled circle in top-right corner
+    int16_t x = DISPLAY_WIDTH - 8;  // 8 pixels from right edge
+    int16_t y = 4;                  // 4 pixels from top edge
+    int16_t radius = 3;             // Small 3-pixel radius dot
+    m_display.fillCircle(x, y, radius, ST7735_GREEN);
+  }
+  // If not connected, don't draw anything (background will remain black)
 }

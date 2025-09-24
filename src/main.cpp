@@ -373,7 +373,7 @@ void loopIdle() {
     if ((-0.3 < grams) && (grams < 0.3)) {
       grams = 0.0f;
     }
-    display.displayIdleLayout(grams);
+    display.displayIdleLayout(grams, metrics.getClientCount() > 0);
   }
 }
 
@@ -505,7 +505,7 @@ void loopRunning() {
   metrics.sendProgress(time, grams);
 
   // Use new grinding layout with large current weight
-  display.displayGrindingLayout(grams, target_grams, time);
+  display.displayGrindingLayout(grams, target_grams, time, ST7735_WHITE, ST7735_WHITE, ST7735_WHITE, metrics.getClientCount() > 0);
 
   // wait until something is happening
   if (grams < 1) {
@@ -573,7 +573,8 @@ void loopTopUp() {
   display.displayGrindingLayout(grams, target_grams, time,
                                ST7735_CYAN,        // Current weight: cyan (you said you like it)
                                ST7735_WHITE,       // Target: white (clean)
-                               ST7735_WHITE);      // Time: white (clean)
+                               ST7735_WHITE,       // Time: white (clean)
+                               metrics.getClientCount() > 0);  // Show connection indicator
   // Note: TOPUP indicator could be added as overlay, but layout already shows state clearly
 
   graph.updateGraphData(time, grams);
@@ -623,9 +624,13 @@ void loopStopping() {
 
   float grams = scale.getUnits();
 
-  // update display with modern layout
+  // update display with modern layout - use cyan like topup since we're still in transition
   float time = (millis() - session_started_millis) / 1000.;
-  display.displayGrindingLayout(grams, target_grams, time);
+  display.displayGrindingLayout(grams, target_grams, time,
+                               ST7735_CYAN,        // Current weight: cyan (same as topup)
+                               ST7735_WHITE,       // Target: white (clean)
+                               ST7735_WHITE,       // Time: white (clean)
+                               metrics.getClientCount() > 0);  // Show connection indicator
 
   auto now = millis();
 
@@ -666,7 +671,8 @@ void loopFinalize() {
   display.displayGrindingLayout(finalize_grams, target_grams, finalize_time,
                                ST7735_GREEN,       // Current weight: green
                                ST7735_WHITE,       // Target: white (clean)
-                               ST7735_WHITE);      // Time: white (clean)
+                               ST7735_WHITE,       // Time: white (clean)
+                               metrics.getClientCount() > 0);  // Show connection indicator
   if (!finalize_broadcast_done) {
     // send finalize events only once to avoid flooding websockets / heap
     graph.finalizeGraph();
