@@ -127,7 +127,7 @@ void Display::setBrightness(uint8_t brightness) {
 
 void Display::displayGrindingLayout(float currentGrams, float targetGrams, float seconds,
                                    uint16_t currentColor, uint16_t targetColor, uint16_t timeColor,
-                                   bool showConnectionIndicator) {
+                                   uint16_t connectionIndicatorColor) {
   wakeUp();
 
   // Force immediate refresh on color changes (bypass FPS limit)
@@ -161,7 +161,7 @@ void Display::displayGrindingLayout(float currentGrams, float targetGrams, float
     displayGrams = 0.0;
   }
   sprintf(currentStr, "%.1f", displayGrams);
-  sprintf(targetStr, "/%.0fg", targetGrams);
+  sprintf(targetStr, "/%.1fg", targetGrams);
   sprintf(timeStr, "%.1fs", seconds);
 
   // Static font sizes (optimized for 0.0-99.9g range)
@@ -213,12 +213,10 @@ void Display::displayGrindingLayout(float currentGrams, float targetGrams, float
   m_display.setTextColor(timeColor, ST7735_BLACK);
   m_display.print(timeStr);
 
-  if (showConnectionIndicator) {
-    drawConnectionIndicator(true);
-  }
+  drawConnectionIndicator(connectionIndicatorColor);
 }
 
-void Display::displayIdleLayout(float currentGrams, bool showConnectionIndicator) {
+void Display::displayIdleLayout(float currentGrams, uint16_t connectionIndicatorColor) {
   wakeUp();
 
   uint32_t now = millis();
@@ -258,16 +256,14 @@ void Display::displayIdleLayout(float currentGrams, bool showConnectionIndicator
   m_display.setTextSize(currentSize);
   m_display.print(currentStr);
 
-  if (showConnectionIndicator) {
-    drawConnectionIndicator(true);
-  }
+  drawConnectionIndicator(connectionIndicatorColor);
 }
 
-void Display::drawConnectionIndicator(bool isConnected) {
-  if (isConnected) {
+void Display::drawConnectionIndicator(uint16_t color) {
+  if (color != 0) {  // 0 means no indicator
     int16_t x = DISPLAY_WIDTH - 8;
     int16_t y = 4;
     int16_t radius = 3;
-    m_display.fillCircle(x, y, radius, ST7735_GREEN);
+    m_display.fillCircle(x, y, radius, color);
   }
 }

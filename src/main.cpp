@@ -13,6 +13,7 @@
 #include <WebSocketGraph.h>
 #include <WebSocketLogger.h>
 #include <WebSocketSettings.h>
+#include <RawDataWebSocket.h>
 
 #include "defines.h"
 
@@ -31,6 +32,7 @@ WebSocketLogger logger;
 WebSocketSettings settings;
 WebSocketGraph graph;
 WebSocketMetrics metrics;
+RawDataWebSocket rawData;
 
 // overall timeout when running the grinder
 static const unsigned long timeout_millis = 30000;
@@ -132,6 +134,8 @@ void heartbeat();
 void grinderOn();
 void grinderOff();
 
+uint16_t getConnectionIndicatorColor();
+
 template <ButtonPin pin>
 void IRAM_ATTR button_interrupt() {
   auto now = millis();
@@ -181,6 +185,9 @@ void setup() {
   logger.println("Graph ready");
 
   metrics.begin(&server, &logger);
+
+  rawData.begin(server, "/RawDataWebSocket", 25.0f);
+  logger.println("Raw data WebSocket ready");
 
   ArduinoOTA.begin();
   ArduinoOTA.onStart([]() { display.clear(); });
@@ -373,7 +380,7 @@ void loopIdle() {
     if ((-0.3 < grams) && (grams < 0.3)) {
       grams = 0.0f;
     }
-    display.displayIdleLayout(grams, metrics.getClientCount() > 0);
+    display.displayIdleLayout(grams, getConnectionIndicatorColor());
   }
 }
 
@@ -504,7 +511,10 @@ void loopRunning() {
   graph.updateGraphData(time, grams);
   metrics.sendProgress(time, grams);
 
-  display.displayGrindingLayout(grams, target_grams, time, ST7735_WHITE, ST7735_WHITE, ST7735_WHITE, metrics.getClientCount() > 0);
+  // log raw ADC data during grinding
+  rawData.sendRawData(scale.getRaw(), grams, now - session_started_millis);
+
+  display.displayGrindingLayout(grams, target_grams, time, ST7735_WHITE, ST7735_WHITE, ST7735_WHITE, getConnectionIndicatorColor());
 
   // wait until something is happening
   if (grams < 1) {
@@ -570,9 +580,12 @@ void loopTopUp() {
 
   display.displayGrindingLayout(grams, target_grams, time,
                                ST7735_CYAN, ST7735_WHITE, ST7735_WHITE,
-                               metrics.getClientCount() > 0);
+                               getConnectionIndicatorColor());
 
   graph.updateGraphData(time, grams);
+
+  // log raw ADC data during topup
+  rawData.sendRawData(scale.getRaw(), grams, now - session_started_millis);
 
   if (!grinder_is_running &&
       ((now - last_top_up_millis) > settings.scale.settle_millis)) {
@@ -622,9 +635,12 @@ void loopStopping() {
   float time = (millis() - session_started_millis) / 1000.;
   display.displayGrindingLayout(grams, target_grams, time,
                                ST7735_CYAN, ST7735_WHITE, ST7735_WHITE,
-                               metrics.getClientCount() > 0);
+                               getConnectionIndicatorColor());
 
   auto now = millis();
+
+  // log raw ADC data during stopping phase
+  rawData.sendRawData(scale.getRaw(), grams, now - session_started_millis);
 
   // give it some time to settle, don't check too often
   if (now - stopping_last_millis < settings.scale.settle_millis) {
@@ -661,7 +677,7 @@ void loopStopping() {
 void loopFinalize() {
   display.displayGrindingLayout(finalize_grams, target_grams, finalize_time,
                                ST7735_GREEN, ST7735_WHITE, ST7735_WHITE,
-                               metrics.getClientCount() > 0);
+                               getConnectionIndicatorColor());
   if (!finalize_broadcast_done) {
     // send finalize events only once to avoid flooding websockets / heap
     graph.finalizeGraph();
@@ -748,4 +764,19 @@ void resetWifi() {
   settings.wifi.reset_flag = false;
 
   ESP.restart();
+}
+
+uint16_t getConnectionIndicatorColor() {
+  bool hasMetrics = metrics.getClientCount() > 0;
+  bool hasRawData = rawData.getClientCount() > 0;
+
+  if (hasMetrics && hasRawData) {
+    return ST7735_GREEN;  // Both connected
+  } else if (hasMetrics) {
+    return ST7735_YELLOW; // Only metrics (old logger) connected
+  } else if (hasRawData) {
+    return ST7735_BLUE;   // Only raw data connected
+  } else {
+    return 0;             // No connections - no indicator
+  }
 }

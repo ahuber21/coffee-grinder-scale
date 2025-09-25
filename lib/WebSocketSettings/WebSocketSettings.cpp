@@ -243,6 +243,10 @@ void WebSocketSettings::onWebSocketEvent(AsyncWebSocket *server,
                                          uint8_t *data, size_t len) {
   switch (type) {
   case WS_EVT_CONNECT:
+    // Limit to single connection for security - settings should have exclusive access
+    if (server->count() > 1) {
+      client->close(1008, "Only one settings connection allowed");
+    }
     _logger->println("WebSocket client connected");
     break;
   case WS_EVT_DISCONNECT:
