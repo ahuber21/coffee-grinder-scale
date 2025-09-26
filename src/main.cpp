@@ -512,7 +512,9 @@ void loopRunning() {
   metrics.sendProgress(time, grams);
 
   // log raw ADC data during grinding
-  rawData.sendRawData(scale.getRaw(), grams, now - session_started_millis);
+  bool isStable;
+  int32_t rawValue = scale.getRaw(isStable);
+  rawData.sendRawData(rawValue, grams, now - session_started_millis, isStable);
 
   display.displayGrindingLayout(grams, target_grams, time, ST7735_WHITE, ST7735_WHITE, ST7735_WHITE, getConnectionIndicatorColor());
 
@@ -585,7 +587,9 @@ void loopTopUp() {
   graph.updateGraphData(time, grams);
 
   // log raw ADC data during topup
-  rawData.sendRawData(scale.getRaw(), grams, now - session_started_millis);
+  bool isStable;
+  int32_t rawValue = scale.getRaw(isStable);
+  rawData.sendRawData(rawValue, grams, now - session_started_millis, isStable);
 
   if (!grinder_is_running &&
       ((now - last_top_up_millis) > settings.scale.settle_millis)) {
@@ -640,7 +644,9 @@ void loopStopping() {
   auto now = millis();
 
   // log raw ADC data during stopping phase
-  rawData.sendRawData(scale.getRaw(), grams, now - session_started_millis);
+  bool isStable;
+  int32_t rawValue = scale.getRaw(isStable);
+  rawData.sendRawData(rawValue, grams, now - session_started_millis, isStable);
 
   // give it some time to settle, don't check too often
   if (now - stopping_last_millis < settings.scale.settle_millis) {
