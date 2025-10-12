@@ -2,6 +2,7 @@
 #include <ESPAsyncWebServer.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
+#include <vector>
 
 namespace wslogger {
 const char PROGMEM index_html[] = R"rawliteral(
@@ -132,25 +133,35 @@ void onConnect(AsyncWebServerRequest *request) {
 
 void handleWebSocketData(AsyncWebSocketClient *client, uint8_t *data,
                          size_t len) {
-  // Process the received data, for example, interpret it as a string
-  String message = "";
-  for (size_t i = 0; i < len; i++) {
-    message += (char)data[i];
+  // Reject oversized messages to prevent memory exhaustion
+  if (!client || !data || len == 0 || len > 1024) {
+    return;
   }
 
-  // Log the message to the Serial and send it back to the WebSocket client
+  String message;
+  message.reserve(len + 1);
+  message = String((char*)data, len);
+
   Serial.println("Received message: " + message);
-  client->text("Echo: " + message);
+
+  if (client->status() == WS_CONNECTED) {
+    client->text("Echo: " + message);
+  }
 }
 void sendWelcomeMessage(AsyncWebSocketClient *client) {
-  // Send a welcome message to the newly connected client
-  client->text("Welcome to the Eureka web socket logger");
+  if (client && client->status() == WS_CONNECTED) {
+    client->text("Welcome to the Eureka web socket logger");
+  }
 }
 
 void onWebSocketEvent(AsyncWebSocket *server, AsyncWebSocketClient *client,
                       AwsEventType type, void *arg, uint8_t *data, size_t len) {
   switch (type) {
   case WS_EVT_CONNECT:
+    if (server->count() > 3) {
+      client->close(1008, "Too many connections");
+      return;
+    }
     Serial.println("WebSocket client connected");
     sendWelcomeMessage(client);
     break;
@@ -158,11 +169,18 @@ void onWebSocketEvent(AsyncWebSocket *server, AsyncWebSocketClient *client,
     Serial.println("WebSocket client disconnected");
     break;
   case WS_EVT_DATA:
-    handleWebSocketData(client, data, len);
+    // Only process complete text frames
+    if (arg) {
+      AwsFrameInfo *info = (AwsFrameInfo *)arg;
+      if (info->opcode == WS_TEXT && info->final && info->index == 0 && info->len == len) {
+        handleWebSocketData(client, data, len);
+      }
+    }
     break;
   case WS_EVT_PONG:
     break;
   case WS_EVT_ERROR:
+    Serial.println("WebSocket error occurred");
     break;
   }
 }
@@ -180,12 +198,21 @@ void WebSocketLogger::begin(AsyncWebServer *srv) {
 }
 
 void WebSocketLogger::print(const String &message) const {
-  portENTER_CRITICAL(&s_logMux);
   Serial.print(message);
+
+  // Minimize critical section duration to prevent watchdog timeouts
+  std::vector<AsyncWebSocketClient*> clients;
+  portENTER_CRITICAL(&s_logMux);
   for (auto *client : _ws.getClients()) {
+    if (client && client->status() == WS_CONNECTED) {
+      clients.push_back(client);
+    }
+  }
+  portEXIT_CRITICAL(&s_logMux);
+
+  for (auto *client : clients) {
     if (client->status() == WS_CONNECTED) {
       client->text(message);
     }
   }
-  portEXIT_CRITICAL(&s_logMux);
 }
