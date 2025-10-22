@@ -106,7 +106,6 @@ const char PROGMEM config_html[] = R"rawliteral(
             document.getElementById('target_dose_double').value = response['target_dose_double'];
             document.getElementById('top_up_margin_single').value = response['top_up_margin_single'];
             document.getElementById('top_up_margin_double').value = response['top_up_margin_double'];
-            document.getElementById('settle_millis').value = response['settle_millis'];
         };
         function setActiveButton(className, value) {
             const buttons = document.querySelectorAll(className);
@@ -193,13 +192,6 @@ const char PROGMEM config_html[] = R"rawliteral(
         <div class="text-input">
             <input type="text" id="top_up_margin_double" placeholder="Enter value">
             <button class="button submitButton" onclick="submitValue('top_up_margin_double')">Submit</button>
-        </div>
-    </div>
-    <div class="setting-container">
-        <div class="description">Scale settle time [ms]</div>
-        <div class="text-input">
-            <input type="text" id="settle_millis" placeholder="Enter value">
-            <button class="button submitButton" onclick="submitValue('settle_millis')">Submit</button>
         </div>
     </div>
     <div class="setting-container">
@@ -293,8 +285,6 @@ void WebSocketSettings::handleWebSocketText(const String &cmd,
       scale.top_up_margin_single = value.toFloat();
     } else if (varName == "top_up_margin_double") {
       scale.top_up_margin_double = value.toFloat();
-    } else if (varName == "settle_millis") {
-      scale.settle_millis = value.toFloat();
     } else if (varName == "resetWiFi") {
       wifi.reset_flag = true;
     }
@@ -305,10 +295,9 @@ void WebSocketSettings::handleWebSocketText(const String &cmd,
 
   // Response contains all settings
   StaticJsonDocument<256> jsonDoc;
-  char cds_rounded[8], cdd_rounded[8], st_rounded[8];
+  char cds_rounded[8], cdd_rounded[8];
   sprintf(cds_rounded, "%1.2f", scale.top_up_margin_single);
   sprintf(cdd_rounded, "%1.2f", scale.top_up_margin_double);
-  sprintf(st_rounded, "%1.2f", scale.settle_millis);
   jsonDoc["read_samples"] = scale.read_samples;
   jsonDoc["speed"] = scale.speed;
   jsonDoc["gain"] = scale.gain;
@@ -317,7 +306,6 @@ void WebSocketSettings::handleWebSocketText(const String &cmd,
   jsonDoc["target_dose_double"] = scale.target_dose_double;
   jsonDoc["top_up_margin_single"] = cds_rounded;
   jsonDoc["top_up_margin_double"] = cdd_rounded;
-  jsonDoc["settle_millis"] = st_rounded;
 
   serializeJson(jsonDoc, response);
 }

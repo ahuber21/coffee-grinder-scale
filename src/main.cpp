@@ -44,6 +44,9 @@ static const unsigned long confirm_timeout_millis = 2000;
 static const unsigned long button_debounce_millis = 150;
 // minimum time to hold the button to be counted as true press (filter noise)
 static const unsigned long button_debounce_min_hold = 20;
+// stability detection timeouts
+static const unsigned long stability_min_wait_millis = 300;
+static const unsigned long stability_max_wait_millis = 1500;
 
 bool grinder_is_running = false;
 
@@ -63,13 +66,12 @@ unsigned long last_heartbeat_millis = 0;
 unsigned long last_top_up_millis = 0;
 unsigned long session_started_millis = 0;  // when the grind session was started
 unsigned long state_change_to_idle_millis = 0;
-unsigned long stopping_last_millis = 0;
+unsigned long stability_wait_start_millis = 0;
 unsigned long top_up_stop_millis = 0;
 
 // various grams values to calculate differences between iterations
 float grams_on_grinder_on = 0.0f;  // grams when grinder was turned on
 float last_grams = 0.0f;
-float stopping_last_grams = 0.0f;
 float top_up_grams_delta = 0.0f;
 
 // to calculate the grams per second rate for the current run
@@ -487,7 +489,6 @@ void loopConfigured() {
   // initial values
   last_grams = scale.getUnits();
   last_grams_millis = millis();
-  stopping_last_grams = 0;
   grams_per_seconds_total = 0;
   grams_per_seconds_count = 0;
 
@@ -586,17 +587,25 @@ void loopTopUp() {
 
   graph.updateGraphData(time, grams);
 
-  // log raw ADC data during topup
   bool isStable;
   int32_t rawValue = scale.getRaw(isStable);
   rawData.sendRawData(rawValue, grams, now - session_started_millis, isStable);
 
-  if (!grinder_is_running &&
-      ((now - last_top_up_millis) > settings.scale.settle_millis)) {
-    // grinder was turned off
-    // log how much was added and the time the grinder ran
-  float delta_grams = grams - grams_on_grinder_on;
-  metrics.sendTopUp(grinder_runtime_millis, delta_grams);
+  if (!grinder_is_running) {
+    unsigned long wait_time = now - last_top_up_millis;
+
+    // Enforce minimum wait time
+    if (wait_time < stability_min_wait_millis) {
+      return;
+    }
+
+    // Check stability or enforce maximum wait time
+    if (!isStable && wait_time < stability_max_wait_millis) {
+      return;
+    }
+
+    float delta_grams = grams - grams_on_grinder_on;
+    metrics.sendTopUp(grinder_runtime_millis, delta_grams);
 
     if (grams >= target_grams - 0.05) {
       logger.println("Target weight reached - stopping");
@@ -630,40 +639,28 @@ void loopTopUp() {
 
 void loopStopping() {
   if (grinder_is_running) {
-    // stop grinder
     grinderOff();
+    stability_wait_start_millis = millis();
+    return;
   }
 
+  auto now = millis();
   float grams = scale.getUnits();
+  float time = (now - session_started_millis) / 1000.;
 
-  float time = (millis() - session_started_millis) / 1000.;
   display.displayGrindingLayout(grams, target_grams, time,
                                ST7735_CYAN, ST7735_WHITE, ST7735_WHITE,
                                getConnectionIndicatorColor());
 
-  auto now = millis();
-
-  // log raw ADC data during stopping phase
   bool isStable;
   int32_t rawValue = scale.getRaw(isStable);
   rawData.sendRawData(rawValue, grams, now - session_started_millis, isStable);
 
-  // give it some time to settle, don't check too often
-  if (now - stopping_last_millis < settings.scale.settle_millis) {
-    return;
-  }
+  unsigned long wait_time = now - stability_wait_start_millis;
 
-  stopping_last_millis = now;
-  float delta_grams = abs(grams - stopping_last_grams);
-  stopping_last_grams = grams;
-
-  time = (now - session_started_millis) / 1000.;
-  // graph update
-  graph.updateGraphData(time, grams);
-
-  if (delta_grams > 0.07) {
+  // Check for stability or enforce maximum wait time
+  if (!isStable && wait_time < stability_max_wait_millis) {
     logger.println("Waiting to stabilize");
-    // The layout already shows the current state clearly
     return;
   }
 
@@ -673,10 +670,13 @@ void loopStopping() {
           time, grams, target_grams);
   logger.println(buffer);
 
+  time = (now - session_started_millis) / 1000.;
+  graph.updateGraphData(time, grams);
+
   finalize_millis = millis();
   finalize_grams = grams;
   finalize_time = time;
-  finalize_broadcast_done = false; // allow one-time finalize broadcast next loop
+  finalize_broadcast_done = false;
   state = FINALIZE;
 }
 

@@ -16,7 +16,6 @@ public:
     float target_dose_double = 0.0f;
     float top_up_margin_single = 0.0f;
     float top_up_margin_double = 0.0f;
-    float settle_millis = 0.0f;
 
     bool is_changed = false;
   };
