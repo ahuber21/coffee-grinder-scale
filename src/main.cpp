@@ -686,6 +686,17 @@ void loopFinalize() {
                                getConnectionIndicatorColor());
   if (!finalize_broadcast_done) {
     // send finalize events only once to avoid flooding websockets / heap
+
+    // Send final raw data point
+    bool isStable;
+    int32_t rawValue = scale.getRaw(isStable);
+    unsigned long timestamp = millis() - session_started_millis;
+    rawData.sendRawData(rawValue, finalize_grams, timestamp, isStable);
+
+    // Send completion event
+    rawData.sendComplete();
+
+    // Send other finalize events
     graph.finalizeGraph();
     metrics.sendFinalize(finalize_time, finalize_grams);
     finalize_broadcast_done = true;
