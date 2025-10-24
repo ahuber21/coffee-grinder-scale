@@ -45,7 +45,7 @@ static const unsigned long button_debounce_millis = 150;
 // minimum time to hold the button to be counted as true press (filter noise)
 static const unsigned long button_debounce_min_hold = 20;
 // stability detection timeouts
-static const unsigned long stability_min_wait_millis = 300;
+static const unsigned long stability_min_wait_millis = 500;
 static const unsigned long stability_max_wait_millis = 1500;
 
 bool grinder_is_running = false;
@@ -607,7 +607,7 @@ void loopTopUp() {
     float delta_grams = grams - grams_on_grinder_on;
     metrics.sendTopUp(grinder_runtime_millis, delta_grams);
 
-    if (grams >= target_grams - 0.05) {
+    if (grams >= target_grams - 0.08) {
       logger.println("Target weight reached - stopping");
       // close enough to target weight
       state = STOPPING;
