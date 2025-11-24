@@ -188,7 +188,7 @@ void setup() {
 
   metrics.begin(&server, &logger);
 
-  rawData.begin(server, "/RawDataWebSocket", 25.0f);
+  rawData.begin(server, "/RawDataWebSocket", 10.0f);
   logger.println("Raw data WebSocket ready");
 
   ArduinoOTA.begin();
