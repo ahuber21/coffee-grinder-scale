@@ -35,7 +35,7 @@ void Display::displayString(const char *text, VerticalAlignment alignment) {
   }
   m_lastDisplayRefreshMillis[(int)alignment] = now;
 
-  // fix displaying -0.00 and show 0.00 instead
+  // Fix displaying -0.00 and show 0.00 instead
   if (strcmp(text, "-0.00") == 0) {
     text = "0.00";
   }
@@ -43,11 +43,11 @@ void Display::displayString(const char *text, VerticalAlignment alignment) {
   int16_t x, y;
   uint16_t w, h;
 
-  // find appropriate text size
+  // Find appropriate text size
   uint8_t size = 2;
   m_display.setTextSize(size);
   m_display.getTextBounds(text, 0, 0, &x, &y, &w, &h);
-  while (w > DISPLAY_WIDTH) {
+  while (w > DISPLAY_WIDTH && size > 1) {
     m_display.setTextSize(--size);
     m_display.getTextBounds(text, 0, 0, &x, &y, &w, &h);
   }
@@ -121,92 +121,116 @@ void Display::wakeUp() {
 }
 
 void Display::setBrightness(uint8_t brightness) {
-  uint32_t duty = 0xFFFFFFFF / 100 * brightness;
+  uint32_t duty = 0xFFFFFFFFu / 100u * brightness;
   ledcWrite(1, duty);
 }
 
 void Display::displayGrindingLayout(float currentGrams, float targetGrams, float seconds,
-                                   uint16_t currentColor, uint16_t targetColor, uint16_t timeColor,
-                                   uint16_t connectionIndicatorColor) {
+                                    uint16_t currentColor, uint16_t targetColor,
+                                    uint16_t timeColor, uint16_t connectionIndicatorColor) {
   wakeUp();
 
-  // Force immediate refresh on color changes (bypass FPS limit)
+  // State for frame pacing and change detection
   static uint16_t lastCurrentColorForFPS = 0xFFFF;
-  bool colorChanged = (currentColor != lastCurrentColorForFPS);
+  static char lastCurrentStr[16] = "";
+  static char lastTargetStr[16] = "";
+  static char lastTimeStr[16] = "";
+  static uint16_t lastCurrentColor = 0xFFFF;
+  static uint16_t lastTargetColor = 0xFFFF;
+  static uint16_t lastTimeColor = 0xFFFF;
 
-  uint32_t now = millis();
-  if (!colorChanged && (now - m_lastDisplayRefreshMillis[GRINDING_LAYOUT] < 1000.0f / m_fps)) {
+  const uint32_t now = millis();
+  const bool colorChangedForFPS = (currentColor != lastCurrentColorForFPS);
+
+  // Format strings with fixed width to ensure full overwrite
+  char currentStr[16];
+  char targetStr[16];
+  char timeStr[16];
+
+  float displayGrams = currentGrams;
+  if (displayGrams > -0.05f && displayGrams < 0.05f) {
+    displayGrams = 0.0f;
+  }
+
+  snprintf(currentStr, sizeof(currentStr), "%5.1f", displayGrams);
+  snprintf(targetStr, sizeof(targetStr), "/%4.1f", targetGrams);
+  snprintf(timeStr, sizeof(timeStr), "%5.1fs", seconds);
+
+  const bool sameCurrent =
+      (strcmp(currentStr, lastCurrentStr) == 0) && (currentColor == lastCurrentColor);
+  const bool sameTarget =
+      (strcmp(targetStr, lastTargetStr) == 0) && (targetColor == lastTargetColor);
+  const bool sameTime =
+      (strcmp(timeStr, lastTimeStr) == 0) && (timeColor == lastTimeColor);
+
+  // Skip if nothing visible changed
+  if (!colorChangedForFPS && sameCurrent && sameTarget && sameTime) {
+    return;
+  }
+
+  // FPS limit if color is unchanged
+  if (!colorChangedForFPS &&
+      (now - m_lastDisplayRefreshMillis[GRINDING_LAYOUT] < 1000.0f / m_fps)) {
     return;
   }
   m_lastDisplayRefreshMillis[GRINDING_LAYOUT] = now;
   lastCurrentColorForFPS = currentColor;
 
-  // Clear screen when content or colors change significantly
-  static float lastCurrentGrams = -999.0f;
-  static float lastTargetGrams = -999.0f;
-  static uint16_t lastCurrentColor = 0xFFFF;
-  if (abs(currentGrams - lastCurrentGrams) > 0.05f ||
-      abs(targetGrams - lastTargetGrams) > 0.5f ||
-      currentColor != lastCurrentColor) {
-    m_display.fillScreen(ST7735_BLACK);
-    lastCurrentGrams = currentGrams;
-    lastTargetGrams = targetGrams;
-    lastCurrentColor = currentColor;
-  }
-
-  // Format strings and fix negative zero display
-  char currentStr[16], targetStr[16], timeStr[16];
-  float displayGrams = currentGrams;
-  if (displayGrams < 0.05 && displayGrams > -0.05) {
-    displayGrams = 0.0;
-  }
-  sprintf(currentStr, "%.1f", displayGrams);
-  sprintf(targetStr, "/%.1fg", targetGrams);
-  sprintf(timeStr, "%.1fs", seconds);
+  // Update last state
+  strncpy(lastCurrentStr, currentStr, sizeof(lastCurrentStr));
+  lastCurrentStr[sizeof(lastCurrentStr) - 1] = '\0';
+  strncpy(lastTargetStr, targetStr, sizeof(lastTargetStr));
+  lastTargetStr[sizeof(lastTargetStr) - 1] = '\0';
+  strncpy(lastTimeStr, timeStr, sizeof(lastTimeStr));
+  lastTimeStr[sizeof(lastTimeStr) - 1] = '\0';
+  lastCurrentColor = currentColor;
+  lastTargetColor = targetColor;
+  lastTimeColor = timeColor;
 
   // Static font sizes (optimized for 0.0-99.9g range)
-  uint8_t currentSize = 3;
-  uint8_t targetSize = 2;
+  const uint8_t currentSize = 3;
+  const uint8_t targetSize = 2;
 
   int16_t x, y;
   uint16_t w, h;
 
-  // --- DRAW CURRENT WEIGHT ---
+  // Current weight bounds
   m_display.setTextSize(currentSize);
   m_display.getTextBounds(currentStr, 0, 0, &x, &y, &w, &h);
-  uint16_t currentW = w;
-  uint16_t currentH = h;
+  const uint16_t currentW = w;
+  const uint16_t currentH = h;
 
-  // Get target text dimensions
+  // Target text bounds
   m_display.setTextSize(targetSize);
   m_display.getTextBounds(targetStr, 0, 0, &x, &y, &w, &h);
-  uint16_t targetW = w;
+  const uint16_t targetW = w;
 
-  // Center both texts together as a unit
-  uint16_t totalWidth = currentW + targetW + 3;
-  int16_t currentX = (DISPLAY_WIDTH - totalWidth) / 2;
-  int16_t currentY = 5;
+  // Horizontal centering as a unit
+  const uint16_t totalWidth = currentW + targetW + 3;
+  const int16_t currentX = (DISPLAY_WIDTH - totalWidth) / 2;
+  const int16_t currentY = 5;
 
   m_display.setTextColor(currentColor, ST7735_BLACK);
   m_display.setCursor(currentX, currentY);
   m_display.setTextSize(currentSize);
   m_display.print(currentStr);
 
-  // Position target text right after current weight, aligned to bottom
-  int16_t targetX = currentX + currentW + 3;
-  int16_t targetY = currentY + currentH - (targetSize * 8);
+  // Target right of current, baseline aligned
+  const int16_t targetX = currentX + currentW + 3;
+  const int16_t targetY = currentY + currentH - (targetSize * 8);
 
   m_display.setCursor(targetX, targetY);
   m_display.setTextSize(targetSize);
   m_display.setTextColor(targetColor, ST7735_BLACK);
   m_display.print(targetStr);
 
-  uint8_t timeSize = 2;
+  // Time string
+  const uint8_t timeSize = 2;
   m_display.setTextSize(timeSize);
   m_display.getTextBounds(timeStr, 0, 0, &x, &y, &w, &h);
 
-  int16_t timeX = (DISPLAY_WIDTH - w) / 2;
-  int16_t timeY = DISPLAY_HEIGHT - h - 2;
+  const int16_t timeX = (DISPLAY_WIDTH - w) / 2;
+  const int16_t timeY = DISPLAY_HEIGHT - h - 2;
 
   m_display.setCursor(timeX, timeY);
   m_display.setTextSize(timeSize);
@@ -219,37 +243,45 @@ void Display::displayGrindingLayout(float currentGrams, float targetGrams, float
 void Display::displayIdleLayout(float currentGrams, uint16_t connectionIndicatorColor) {
   wakeUp();
 
-  uint32_t now = millis();
+  static char lastCurrentStr[16] = "";
+  static uint16_t lastConnectionColor = 0xFFFF;
+
+  const uint32_t now = millis();
+
+  // Format string with fixed width for stable overwrite
+  char currentStr[16];
+  float displayGrams = currentGrams;
+  if (displayGrams > -0.05f && displayGrams < 0.05f) {
+    displayGrams = 0.0f;
+  }
+  snprintf(currentStr, sizeof(currentStr), "%5.1f g", displayGrams);
+
+  const bool sameText = (strcmp(currentStr, lastCurrentStr) == 0);
+  const bool sameIndicator = (connectionIndicatorColor == lastConnectionColor);
+
+  // Skip if nothing visible changed
+  if (sameText && sameIndicator) {
+    return;
+  }
+
   if (now - m_lastDisplayRefreshMillis[CENTER] < 1000.0f / m_fps) {
     return;
   }
   m_lastDisplayRefreshMillis[CENTER] = now;
 
-  // Clear screen only if content changed significantly
-  static float lastDisplayedGrams = -999.0f;
-  if (abs(currentGrams - lastDisplayedGrams) > 0.05f) {
-    m_display.fillScreen(ST7735_BLACK);
-    lastDisplayedGrams = currentGrams;
-  }
+  strncpy(lastCurrentStr, currentStr, sizeof(lastCurrentStr));
+  lastCurrentStr[sizeof(lastCurrentStr) - 1] = '\0';
+  lastConnectionColor = connectionIndicatorColor;
 
-  // Format string and fix negative zero display
-  char currentStr[16];
-  float displayGrams = currentGrams;
-  if (displayGrams < 0.05 && displayGrams > -0.05) {
-    displayGrams = 0.0;
-  }
-  sprintf(currentStr, "%.1f g", displayGrams);
-
-  uint8_t currentSize = 3; // Sized to fit negative weights without wrapping
+  const uint8_t currentSize = 3; // Sized to fit negative weights without wrapping
 
   int16_t x, y;
   uint16_t w, h;
   m_display.setTextSize(currentSize);
   m_display.getTextBounds(currentStr, 0, 0, &x, &y, &w, &h);
 
-  // Center on screen
-  int16_t currentX = (DISPLAY_WIDTH - w) / 2;
-  int16_t currentY = (DISPLAY_HEIGHT - h) / 2;
+  const int16_t currentX = (DISPLAY_WIDTH - w) / 2;
+  const int16_t currentY = (DISPLAY_HEIGHT - h) / 2;
 
   m_display.setTextColor(ST7735_WHITE, ST7735_BLACK);
   m_display.setCursor(currentX, currentY);
@@ -261,9 +293,9 @@ void Display::displayIdleLayout(float currentGrams, uint16_t connectionIndicator
 
 void Display::drawConnectionIndicator(uint16_t color) {
   if (color != 0) {  // 0 means no indicator
-    int16_t x = DISPLAY_WIDTH - 8;
-    int16_t y = 4;
-    int16_t radius = 3;
+    const int16_t x = DISPLAY_WIDTH - 8;
+    const int16_t y = 4;
+    const int16_t radius = 3;
     m_display.fillCircle(x, y, radius, color);
   }
 }
