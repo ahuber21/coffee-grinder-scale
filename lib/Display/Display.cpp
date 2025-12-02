@@ -9,7 +9,7 @@ Display::Display(uint8_t sck, uint8_t miso, uint8_t mosi, uint8_t ss,
                  uint8_t dc, uint8_t cs, uint8_t reset, uint8_t backlight)
     : m_spiDisplay(HSPI), m_display(&m_spiDisplay, cs, dc, reset), m_sck(sck),
       m_miso(miso), m_mosi(mosi), m_ss(ss), m_backlightPin(backlight),
-      m_fps(16), m_turned_on(false) {
+      m_fps(16), m_turned_on(false), m_forceRefresh(false) {
   memset(m_lastDisplayRefreshMillis, 0, sizeof(uint32_t) * VA_MAX);
 }
 
@@ -97,9 +97,14 @@ void Display::setTextColor(TextColor color) {
   m_display.setTextColor(color.foreground, color.background);
 }
 
+void Display::refresh() {
+  m_forceRefresh = true;
+}
+
 void Display::clear() {
   m_display.fillScreen(ST7735_BLACK);
   memset(m_lastDisplayRefreshMillis, 0, sizeof(uint32_t) * VA_MAX);
+  m_forceRefresh = true;
 }
 
 void Display::shutDown() {
@@ -130,17 +135,23 @@ void Display::displayGrindingLayout(float currentGrams, float targetGrams, float
                                     uint16_t timeColor, uint16_t connectionIndicatorColor) {
   wakeUp();
 
-  // State for frame pacing and change detection
-  static uint16_t lastCurrentColorForFPS = 0xFFFF;
-  static char lastCurrentStr[16] = "";
-  static char lastTargetStr[16] = "";
-  static char lastTimeStr[16] = "";
-  static uint16_t lastCurrentColor = 0xFFFF;
-  static uint16_t lastTargetColor = 0xFFFF;
-  static uint16_t lastTimeColor = 0xFFFF;
+  static uint16_t lastGrindingCurrentColorForFPS = 0xFFFF;
+  static char lastGrindingCurrentStr[16] = "";
+  static char lastGrindingTargetStr[16] = "";
+  static char lastGrindingTimeStr[16] = "";
+  static uint16_t lastGrindingCurrentColor = 0xFFFF;
+  static uint16_t lastGrindingTargetColor = 0xFFFF;
+  static uint16_t lastGrindingTimeColor = 0xFFFF;
+
+  if (m_forceRefresh) {
+    lastGrindingCurrentStr[0] = '\0';
+    lastGrindingTargetStr[0] = '\0';
+    lastGrindingTimeStr[0] = '\0';
+    m_forceRefresh = false;
+  }
 
   const uint32_t now = millis();
-  const bool colorChangedForFPS = (currentColor != lastCurrentColorForFPS);
+  const bool colorChangedForFPS = (currentColor != lastGrindingCurrentColorForFPS);
 
   // Format strings with fixed width to ensure full overwrite
   char currentStr[16];
@@ -152,16 +163,16 @@ void Display::displayGrindingLayout(float currentGrams, float targetGrams, float
     displayGrams = 0.0f;
   }
 
-  snprintf(currentStr, sizeof(currentStr), "%5.1f", displayGrams);
+  snprintf(currentStr, sizeof(currentStr), "%4.1f", displayGrams);
   snprintf(targetStr, sizeof(targetStr), "/%4.1f", targetGrams);
-  snprintf(timeStr, sizeof(timeStr), "%5.1fs", seconds);
+  snprintf(timeStr, sizeof(timeStr), "%4.1fs", seconds);
 
   const bool sameCurrent =
-      (strcmp(currentStr, lastCurrentStr) == 0) && (currentColor == lastCurrentColor);
+      (strcmp(currentStr, lastGrindingCurrentStr) == 0) && (currentColor == lastGrindingCurrentColor);
   const bool sameTarget =
-      (strcmp(targetStr, lastTargetStr) == 0) && (targetColor == lastTargetColor);
+      (strcmp(targetStr, lastGrindingTargetStr) == 0) && (targetColor == lastGrindingTargetColor);
   const bool sameTime =
-      (strcmp(timeStr, lastTimeStr) == 0) && (timeColor == lastTimeColor);
+      (strcmp(timeStr, lastGrindingTimeStr) == 0) && (timeColor == lastGrindingTimeColor);
 
   // Skip if nothing visible changed
   if (!colorChangedForFPS && sameCurrent && sameTarget && sameTime) {
@@ -174,18 +185,18 @@ void Display::displayGrindingLayout(float currentGrams, float targetGrams, float
     return;
   }
   m_lastDisplayRefreshMillis[GRINDING_LAYOUT] = now;
-  lastCurrentColorForFPS = currentColor;
+  lastGrindingCurrentColorForFPS = currentColor;
 
   // Update last state
-  strncpy(lastCurrentStr, currentStr, sizeof(lastCurrentStr));
-  lastCurrentStr[sizeof(lastCurrentStr) - 1] = '\0';
-  strncpy(lastTargetStr, targetStr, sizeof(lastTargetStr));
-  lastTargetStr[sizeof(lastTargetStr) - 1] = '\0';
-  strncpy(lastTimeStr, timeStr, sizeof(lastTimeStr));
-  lastTimeStr[sizeof(lastTimeStr) - 1] = '\0';
-  lastCurrentColor = currentColor;
-  lastTargetColor = targetColor;
-  lastTimeColor = timeColor;
+  strncpy(lastGrindingCurrentStr, currentStr, sizeof(lastGrindingCurrentStr));
+  lastGrindingCurrentStr[sizeof(lastGrindingCurrentStr) - 1] = '\0';
+  strncpy(lastGrindingTargetStr, targetStr, sizeof(lastGrindingTargetStr));
+  lastGrindingTargetStr[sizeof(lastGrindingTargetStr) - 1] = '\0';
+  strncpy(lastGrindingTimeStr, timeStr, sizeof(lastGrindingTimeStr));
+  lastGrindingTimeStr[sizeof(lastGrindingTimeStr) - 1] = '\0';
+  lastGrindingCurrentColor = currentColor;
+  lastGrindingTargetColor = targetColor;
+  lastGrindingTimeColor = timeColor;
 
   // Static font sizes (optimized for 0.0-99.9g range)
   const uint8_t currentSize = 3;
@@ -204,33 +215,34 @@ void Display::displayGrindingLayout(float currentGrams, float targetGrams, float
   m_display.setTextSize(targetSize);
   m_display.getTextBounds(targetStr, 0, 0, &x, &y, &w, &h);
   const uint16_t targetW = w;
+  const uint16_t targetH = h;
 
-  // Horizontal centering as a unit
-  const uint16_t totalWidth = currentW + targetW + 3;
-  const int16_t currentX = (DISPLAY_WIDTH - totalWidth) / 2;
-  const int16_t currentY = 5;
+  // Vertical layout
+  // Current weight at top
+  const int16_t currentX = (DISPLAY_WIDTH - currentW) / 2;
+  const int16_t currentY = 20;
 
   m_display.setTextColor(currentColor, ST7735_BLACK);
   m_display.setCursor(currentX, currentY);
   m_display.setTextSize(currentSize);
   m_display.print(currentStr);
 
-  // Target right of current, baseline aligned
-  const int16_t targetX = currentX + currentW + 3;
-  const int16_t targetY = currentY + currentH - (targetSize * 8);
+  // Target below current
+  const int16_t targetX = (DISPLAY_WIDTH - targetW) / 2;
+  const int16_t targetY = currentY + currentH + 10;
 
   m_display.setCursor(targetX, targetY);
   m_display.setTextSize(targetSize);
   m_display.setTextColor(targetColor, ST7735_BLACK);
   m_display.print(targetStr);
 
-  // Time string
+  // Time string at bottom
   const uint8_t timeSize = 2;
   m_display.setTextSize(timeSize);
   m_display.getTextBounds(timeStr, 0, 0, &x, &y, &w, &h);
 
   const int16_t timeX = (DISPLAY_WIDTH - w) / 2;
-  const int16_t timeY = DISPLAY_HEIGHT - h - 2;
+  const int16_t timeY = DISPLAY_HEIGHT - h - 10;
 
   m_display.setCursor(timeX, timeY);
   m_display.setTextSize(timeSize);
@@ -243,8 +255,14 @@ void Display::displayGrindingLayout(float currentGrams, float targetGrams, float
 void Display::displayIdleLayout(float currentGrams, uint16_t connectionIndicatorColor) {
   wakeUp();
 
-  static char lastCurrentStr[16] = "";
-  static uint16_t lastConnectionColor = 0xFFFF;
+  static char lastIdleCurrentStr[16] = "";
+  static uint16_t lastIdleConnectionColor = 0xFFFF;
+
+  if (m_forceRefresh) {
+    lastIdleCurrentStr[0] = '\0';
+    lastIdleConnectionColor = 0xFFFF;
+    m_forceRefresh = false;
+  }
 
   const uint32_t now = millis();
 
@@ -254,10 +272,10 @@ void Display::displayIdleLayout(float currentGrams, uint16_t connectionIndicator
   if (displayGrams > -0.05f && displayGrams < 0.05f) {
     displayGrams = 0.0f;
   }
-  snprintf(currentStr, sizeof(currentStr), "%5.1f g", displayGrams);
+  snprintf(currentStr, sizeof(currentStr), "%5.1f", displayGrams);
 
-  const bool sameText = (strcmp(currentStr, lastCurrentStr) == 0);
-  const bool sameIndicator = (connectionIndicatorColor == lastConnectionColor);
+  const bool sameText = (strcmp(currentStr, lastIdleCurrentStr) == 0);
+  const bool sameIndicator = (connectionIndicatorColor == lastIdleConnectionColor);
 
   // Skip if nothing visible changed
   if (sameText && sameIndicator) {
@@ -269,11 +287,11 @@ void Display::displayIdleLayout(float currentGrams, uint16_t connectionIndicator
   }
   m_lastDisplayRefreshMillis[CENTER] = now;
 
-  strncpy(lastCurrentStr, currentStr, sizeof(lastCurrentStr));
-  lastCurrentStr[sizeof(lastCurrentStr) - 1] = '\0';
-  lastConnectionColor = connectionIndicatorColor;
+  strncpy(lastIdleCurrentStr, currentStr, sizeof(lastIdleCurrentStr));
+  lastIdleCurrentStr[sizeof(lastIdleCurrentStr) - 1] = '\0';
+  lastIdleConnectionColor = connectionIndicatorColor;
 
-  const uint8_t currentSize = 3; // Sized to fit negative weights without wrapping
+  const uint8_t currentSize = 2; // Reduced to 2 to fit 80px width
 
   int16_t x, y;
   uint16_t w, h;

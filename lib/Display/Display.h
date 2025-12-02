@@ -5,19 +5,19 @@
 #include <Arduino.h>
 #include <SPI.h>
 
-#define DISPLAY_WIDTH 160
-#define DISPLAY_HEIGHT 80
+#define DISPLAY_WIDTH 80
+#define DISPLAY_HEIGHT 160
 
 // define for the smallest text size (1), how many columns(letters) fit.
 // this will affect padding/justify and dynamic font size
-// 15 for 96px, 20 for 128px , 26 for 160px
-#define DISPLAY_COLS_TS1 26
-// 7 for 96px, 9 for 128px, 12 for 160px
-#define DISPLAY_COLS_TS2 12
-// 5 for 96px, 6 for 128px,
-#define DISPLAY_COLS_TS3 6
-// 4 for 96px, 5 for 128px, 6 for 160px
-#define DISPLAY_COLS_TS4 6
+// 13 for 80px
+#define DISPLAY_COLS_TS1 13
+// 6 for 80px
+#define DISPLAY_COLS_TS2 6
+// 4 for 80px
+#define DISPLAY_COLS_TS3 4
+// 3 for 80px
+#define DISPLAY_COLS_TS4 3
 
 #define BUF_SIZE_PER_LINE 80
 
@@ -211,6 +211,8 @@ public:
 
   void setRotation(uint8_t rotation);
 
+  void refresh();
+
   uint8_t getFps() { return m_fps; }
   void setFps(uint8_t fps) { m_fps = fps; };
 
@@ -250,6 +252,7 @@ private:
 
   // are we turned on or off?
   bool m_turned_on;
+  bool m_forceRefresh;
 };
 
 #endif // DISPLAY_H

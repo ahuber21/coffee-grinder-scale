@@ -375,15 +375,11 @@ void loopIdle() {
     return;
   }
 
-  if (millis() - state_change_to_idle_millis > 60 * 1000) {
-    display.shutDown();
-  } else {
-    float grams = scale.getUnits();
-    if ((-0.3 < grams) && (grams < 0.3)) {
-      grams = 0.0f;
-    }
-    display.displayIdleLayout(grams, getConnectionIndicatorColor());
+  float grams = scale.getUnits();
+  if ((-0.3 < grams) && (grams < 0.3)) {
+    grams = 0.0f;
   }
+  display.displayIdleLayout(grams, getConnectionIndicatorColor());
 }
 
 void loopButtonFilter() {
@@ -456,6 +452,7 @@ void loopConfirm() {
     // go back to idle
     state_change_to_idle_millis = millis();
     state = IDLE;
+    display.refresh();
   }
 }
 
@@ -740,9 +737,9 @@ void grinderOff() {
 void setupDisplay() {
   display.begin();
   display.wakeUp();
-  display.setRotation(3);
+  display.setRotation(0);
   display.clear();
-  display.drawBitmap(0, 0, (unsigned char *)bootLogo);
+  display.displayString("Eureka", VerticalAlignment::CENTER);
 }
 
 void setupWifi() {
