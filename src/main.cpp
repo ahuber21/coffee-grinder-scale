@@ -445,8 +445,7 @@ void loopButtonPressedDebug() {
 }
 
 void loopConfirm() {
-  display.displayString("CONFIRM", TWO_ROW_TOP);
-  display.displayString(String(target_grams) + " g", TWO_ROW_BOTTOM);
+  display.displayConfirmLayout(target_grams);
 
   if ((millis() - button_pressed_millis) > confirm_timeout_millis) {
     // go back to idle

@@ -225,6 +225,7 @@ public:
                            uint16_t timeColor = ST7735_WHITE,
                            uint16_t connectionIndicatorColor = 0);
   void displayIdleLayout(float currentGrams, uint16_t connectionIndicatorColor = 0);
+  void displayConfirmLayout(float targetGrams);
   void drawConnectionIndicator(uint16_t color);
 
   void drawBitmap(int16_t x, int16_t y, uint8_t *bitmap,
