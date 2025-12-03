@@ -707,13 +707,19 @@ void loopFinalize() {
 
 void loopDebug() {
   IPAddress ip = WiFi.localIP();
-  display.displayString(ip.toString(), VerticalAlignment::CENTER);
+  display.displayString(ip.toString(), VerticalAlignment::TWO_ROW_TOP);
+
+  bool isStable;
+  auto raw = scale.getRaw(isStable);
 
   if (millis() - debug_last_print_millis > 1000) {
-    auto raw = scale.getRaw();
-    logger.println("Cal: " + String(settings.scale.calibration_factor, 10));
-    logger.println("Raw: " + String(raw));
-    logger.println("Grams: " + String(scale.getUnits()));
+    char logger_buffer[100];
+    sprintf(logger_buffer, "Cal: %f - Raw: %ld %s - Grams: %f", settings.scale.calibration_factor, raw, isStable ? "S" : "P", scale.getUnits());
+    logger.println(logger_buffer);
+    char buffer[12];
+    sprintf(buffer, "%d %s", raw, isStable ? "S" : "P");
+    display.displayString(buffer,
+                          VerticalAlignment::TWO_ROW_BOTTOM);
     debug_last_print_millis = millis();
   }
 }
