@@ -590,17 +590,16 @@ void loopTopUp() {
   if (!grinder_is_running) {
     unsigned long wait_time = now - last_top_up_millis;
 
-    // Enforce minimum wait time
-    if (wait_time < stability_min_wait_millis) {
-      return;
-    }
-
-    // Check stability or enforce maximum wait time
-    if (!isStable && wait_time < stability_max_wait_millis) {
-      return;
-    }
-
     float delta_grams = grams - grams_on_grinder_on;
+    bool enough_weight = delta_grams >= settings.scale.min_topup_grams;
+    bool enough_time = wait_time >= settings.scale.topup_timeout_ms;
+
+    if (!enough_time) {
+      if (!enough_weight || !isStable) {
+        return;
+      }
+    }
+
     metrics.sendTopUp(grinder_runtime_millis, delta_grams);
 
     if (grams >= target_grams - 0.08) {

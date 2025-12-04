@@ -87,6 +87,16 @@ const char PROGMEM config_html[] = R"rawliteral(
             border-radius: 5px;
             border: none;
         }
+        .section-header {
+            grid-column: 1 / -1;
+            color: #ffcc00;
+            font-size: 1.2em;
+            margin-top: 20px;
+            margin-bottom: 10px;
+            text-align: center;
+            border-bottom: 1px solid #ffcc00;
+            padding-bottom: 5px;
+        }
     </style>
     <script>
         const socket = new WebSocket('ws://' + window.location.hostname + '/WebSocketSettings');
@@ -106,6 +116,8 @@ const char PROGMEM config_html[] = R"rawliteral(
             document.getElementById('target_dose_double').value = response['target_dose_double'];
             document.getElementById('top_up_margin_single').value = response['top_up_margin_single'];
             document.getElementById('top_up_margin_double').value = response['top_up_margin_double'];
+            document.getElementById('min_topup_grams').value = response['min_topup_grams'];
+            document.getElementById('topup_timeout_ms').value = response['topup_timeout_ms'];
         };
         function setActiveButton(className, value) {
             const buttons = document.querySelectorAll(className);
@@ -192,6 +204,23 @@ const char PROGMEM config_html[] = R"rawliteral(
         <div class="text-input">
             <input type="text" id="top_up_margin_double" placeholder="Enter value">
             <button class="button submitButton" onclick="submitValue('top_up_margin_double')">Submit</button>
+        </div>
+    </div>
+
+    <div class="section-header">Advanced Config</div>
+
+    <div class="setting-container">
+        <div class="description">Min Top Up [g]</div>
+        <div class="text-input">
+            <input type="text" id="min_topup_grams" placeholder="Enter value">
+            <button class="button submitButton" onclick="submitValue('min_topup_grams')">Submit</button>
+        </div>
+    </div>
+    <div class="setting-container">
+        <div class="description">Top Up Timeout [ms]</div>
+        <div class="text-input">
+            <input type="text" id="topup_timeout_ms" placeholder="Enter value">
+            <button class="button submitButton" onclick="submitValue('topup_timeout_ms')">Submit</button>
         </div>
     </div>
     <div class="setting-container">
@@ -285,6 +314,10 @@ void WebSocketSettings::handleWebSocketText(const String &cmd,
       scale.top_up_margin_single = value.toFloat();
     } else if (varName == "top_up_margin_double") {
       scale.top_up_margin_double = value.toFloat();
+    } else if (varName == "min_topup_grams") {
+      scale.min_topup_grams = value.toFloat();
+    } else if (varName == "topup_timeout_ms") {
+      scale.topup_timeout_ms = value.toInt();
     } else if (varName == "resetWiFi") {
       wifi.reset_flag = true;
     }
@@ -294,10 +327,11 @@ void WebSocketSettings::handleWebSocketText(const String &cmd,
   }
 
   // Response contains all settings
-  StaticJsonDocument<256> jsonDoc;
-  char cds_rounded[8], cdd_rounded[8];
+  StaticJsonDocument<512> jsonDoc;
+  char cds_rounded[8], cdd_rounded[8], min_topup_rounded[8];
   sprintf(cds_rounded, "%1.2f", scale.top_up_margin_single);
   sprintf(cdd_rounded, "%1.2f", scale.top_up_margin_double);
+  sprintf(min_topup_rounded, "%1.2f", scale.min_topup_grams);
   jsonDoc["read_samples"] = scale.read_samples;
   jsonDoc["speed"] = scale.speed;
   jsonDoc["gain"] = scale.gain;
@@ -306,6 +340,8 @@ void WebSocketSettings::handleWebSocketText(const String &cmd,
   jsonDoc["target_dose_double"] = scale.target_dose_double;
   jsonDoc["top_up_margin_single"] = cds_rounded;
   jsonDoc["top_up_margin_double"] = cdd_rounded;
+  jsonDoc["min_topup_grams"] = min_topup_rounded;
+  jsonDoc["topup_timeout_ms"] = scale.topup_timeout_ms;
 
   serializeJson(jsonDoc, response);
 }
