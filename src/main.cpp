@@ -615,8 +615,15 @@ void loopTopUp() {
     bool enough_interval =
         (now - grinder_started_millis) >= settings.scale.min_topup_interval_ms;
 
+    // We always need a stable reading to make a decision
+    if (!isStable) {
+      return;
+    }
+
+    // If we haven't waited the minimum time yet, we can only proceed early if
+    // we have detected enough weight change AND respected the minimum interval
     if (!enough_time) {
-      if (!enough_weight || !isStable || !enough_interval) {
+      if (!enough_weight || !enough_interval) {
         return;
       }
     }
@@ -627,6 +634,12 @@ void loopTopUp() {
       logger.println("Target weight reached - stopping");
       // close enough to target weight
       state = STOPPING;
+      return;
+    }
+
+    // if we are here, we haven't reached target yet
+    // check if we are allowed to top up again
+    if (!enough_interval) {
       return;
     }
 
