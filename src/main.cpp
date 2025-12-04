@@ -350,6 +350,13 @@ void loopIdle() {
     resetWifi();
   }
 
+  if (settings.wifi.reboot_flag) {
+    display.clear();
+    display.displayString("Rebooting...", VerticalAlignment::CENTER);
+    delay(1000);
+    ESP.restart();
+  }
+
   if (api.isNewValueReceived()) {
     float requested_grams = api.getNewValue();
     logger.println("API request for " + String(requested_grams, 2) + " g");

@@ -30,6 +30,7 @@ public:
 
   struct WiFi {
     bool reset_flag = false;
+    bool reboot_flag = false;
   };
 
   WebSocketSettings();

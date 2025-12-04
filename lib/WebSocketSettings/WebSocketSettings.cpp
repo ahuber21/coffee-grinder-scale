@@ -87,6 +87,13 @@ const char PROGMEM config_html[] = R"rawliteral(
             border-radius: 5px;
             border: none;
         }
+        .orangeButton {
+            padding: 8px 15px;
+            background-color: #f39c12;
+            color: #ecf0f1;
+            border-radius: 5px;
+            border: none;
+        }
         .section-header {
             grid-column: 1 / -1;
             color: #ffcc00;
@@ -97,9 +104,69 @@ const char PROGMEM config_html[] = R"rawliteral(
             border-bottom: 1px solid #ffcc00;
             padding-bottom: 5px;
         }
+        .fab {
+            position: fixed;
+            bottom: 20px;
+            right: 20px;
+            width: 60px;
+            height: 60px;
+            border-radius: 50%;
+            background-color: #27ae60;
+            color: white;
+            font-size: 30px;
+            border: none;
+            box-shadow: 0 4px 8px rgba(0,0,0,0.3);
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: transform 0.2s;
+        }
+        .fab:active {
+            transform: scale(0.95);
+        }
+        .toast {
+            visibility: hidden;
+            min-width: 250px;
+            background-color: #333;
+            color: #fff;
+            text-align: center;
+            border-radius: 2px;
+            padding: 16px;
+            position: fixed;
+            z-index: 1;
+            left: 50%;
+            bottom: 30px;
+            transform: translateX(-50%);
+            font-size: 17px;
+        }
+        .toast.show {
+            visibility: visible;
+            -webkit-animation: fadein 0.5s, fadeout 0.5s 2.5s;
+            animation: fadein 0.5s, fadeout 0.5s 2.5s;
+        }
+        @-webkit-keyframes fadein {
+            from {bottom: 0; opacity: 0;}
+            to {bottom: 30px; opacity: 1;}
+        }
+        @keyframes fadein {
+            from {bottom: 0; opacity: 0;}
+            to {bottom: 30px; opacity: 1;}
+        }
+        @-webkit-keyframes fadeout {
+            from {bottom: 30px; opacity: 1;}
+            to {bottom: 0; opacity: 0;}
+        }
+        @keyframes fadeout {
+            from {bottom: 30px; opacity: 1;}
+            to {bottom: 0; opacity: 0;}
+        }
     </style>
     <script>
         const socket = new WebSocket('ws://' + window.location.hostname + '/WebSocketSettings');
+        let originalSettings = {};
+        let currentSettings = {};
+
         socket.onopen = function (event) {
             socket.send('get');
         };
@@ -108,23 +175,42 @@ const char PROGMEM config_html[] = R"rawliteral(
         };
         socket.onmessage = function (event) {
             const response = JSON.parse(event.data);
-            setActiveButton('.speedButton', response['speed']);
-            setActiveButton('.readSamplesButton', response['read_samples']);
-            setActiveButton('.gainButton', response['gain']);
-            document.getElementById('calibration_factor').value = response['calibration_factor'];
-            document.getElementById('target_dose_single').value = response['target_dose_single'];
-            document.getElementById('target_dose_double').value = response['target_dose_double'];
-            document.getElementById('top_up_margin_single').value = response['top_up_margin_single'];
-            document.getElementById('top_up_margin_double').value = response['top_up_margin_double'];
-            document.getElementById('min_topup_grams').value = response['min_topup_grams'];
-            document.getElementById('topup_timeout_ms').value = response['topup_timeout_ms'];
-            document.getElementById('grinding_timeout_ms').value = response['grinding_timeout_ms'];
-            document.getElementById('finalize_timeout_ms').value = response['finalize_timeout_ms'];
-            document.getElementById('confirm_timeout_ms').value = response['confirm_timeout_ms'];
-            document.getElementById('stability_min_wait_ms').value = response['stability_min_wait_ms'];
-            document.getElementById('stability_max_wait_ms').value = response['stability_max_wait_ms'];
-            document.getElementById('button_debounce_ms').value = response['button_debounce_ms'];
+
+            // If this is the first load, save as original
+            if (Object.keys(originalSettings).length === 0) {
+                originalSettings = {...response};
+            }
+            // Always update current settings
+            currentSettings = {...response};
+
+            updateUI(response);
         };
+
+        function updateUI(settings) {
+            setActiveButton('.speedButton', settings['speed']);
+            setActiveButton('.readSamplesButton', settings['read_samples']);
+            setActiveButton('.gainButton', settings['gain']);
+
+            setInputValue('calibration_factor', settings['calibration_factor']);
+            setInputValue('target_dose_single', settings['target_dose_single']);
+            setInputValue('target_dose_double', settings['target_dose_double']);
+            setInputValue('top_up_margin_single', settings['top_up_margin_single']);
+            setInputValue('top_up_margin_double', settings['top_up_margin_double']);
+            setInputValue('min_topup_grams', settings['min_topup_grams']);
+            setInputValue('topup_timeout_ms', settings['topup_timeout_ms']);
+            setInputValue('grinding_timeout_ms', settings['grinding_timeout_ms']);
+            setInputValue('finalize_timeout_ms', settings['finalize_timeout_ms']);
+            setInputValue('confirm_timeout_ms', settings['confirm_timeout_ms']);
+            setInputValue('stability_min_wait_ms', settings['stability_min_wait_ms']);
+            setInputValue('stability_max_wait_ms', settings['stability_max_wait_ms']);
+            setInputValue('button_debounce_ms', settings['button_debounce_ms']);
+        }
+
+        function setInputValue(id, value) {
+            const el = document.getElementById(id);
+            if (el) el.value = value;
+        }
+
         function setActiveButton(className, value) {
             const buttons = document.querySelectorAll(className);
             buttons.forEach(button => {
@@ -134,15 +220,53 @@ const char PROGMEM config_html[] = R"rawliteral(
                 }
             });
         }
-        function set(variable, value) {
-            socket.send(`set:${variable}:${value}`);
+
+        function updateValue(key, value) {
+            currentSettings[key] = value;
+            // Update UI immediately for buttons
+            if (key === 'speed') setActiveButton('.speedButton', value);
+            if (key === 'read_samples') setActiveButton('.readSamplesButton', value);
+            if (key === 'gain') setActiveButton('.gainButton', value);
         }
+
+        function saveSettings() {
+            let diff = {};
+            let hasChanges = false;
+            for (let key in currentSettings) {
+                // Simple comparison, might need type conversion if types mismatch
+                if (currentSettings[key] != originalSettings[key]) {
+                    diff[key] = currentSettings[key];
+                    hasChanges = true;
+                }
+            }
+
+            if (hasChanges) {
+                socket.send('batch:' + JSON.stringify(diff));
+                // Update original settings to match current
+                originalSettings = {...currentSettings};
+                showToast("Settings Saved!");
+            } else {
+                showToast("No changes to save");
+            }
+        }
+
         function resetWiFi() {
-            socket.send('set:resetWiFi:0');
+            if(confirm("Reset WiFi settings and reboot?")) {
+                socket.send('batch:{"resetWiFi":true}');
+            }
         }
-        function submitValue(variable) {
-            const inputValue = document.getElementById(variable).value;
-            set(variable, inputValue);
+
+        function rebootDevice() {
+            if(confirm("Reboot device?")) {
+                socket.send('batch:{"reboot":true}');
+            }
+        }
+
+        function showToast(message) {
+            var x = document.getElementById("toast");
+            x.innerText = message;
+            x.className = "toast show";
+            setTimeout(function(){ x.className = x.className.replace("show", ""); }, 3000);
         }
     </script>
 </head>
@@ -152,64 +276,59 @@ const char PROGMEM config_html[] = R"rawliteral(
     <div class="setting-container">
         <div class="description">Samples per ADC read</div>
         <div class="button-group">
-            <button class="button readSamplesButton" onclick="set('read_samples', '1')" data-value="1">1</button>
-            <button class="button readSamplesButton" onclick="set('read_samples', '2')" data-value="2">2</button>
-            <button class="button readSamplesButton" onclick="set('read_samples', '4')" data-value="4">4</button>
-            <button class="button readSamplesButton" onclick="set('read_samples', '8')" data-value="8">8</button>
-            <button class="button readSamplesButton" onclick="set('read_samples', '12')" data-value="12">12</button>
-            <button class="button readSamplesButton" onclick="set('read_samples', '24')" data-value="24">24</button>
-            <button class="button readSamplesButton" onclick="set('read_samples', '48')" data-value="48">48</button>
+            <button class="button readSamplesButton" onclick="updateValue('read_samples', 1)" data-value="1">1</button>
+            <button class="button readSamplesButton" onclick="updateValue('read_samples', 2)" data-value="2">2</button>
+            <button class="button readSamplesButton" onclick="updateValue('read_samples', 4)" data-value="4">4</button>
+            <button class="button readSamplesButton" onclick="updateValue('read_samples', 8)" data-value="8">8</button>
+            <button class="button readSamplesButton" onclick="updateValue('read_samples', 12)" data-value="12">12</button>
+            <button class="button readSamplesButton" onclick="updateValue('read_samples', 24)" data-value="24">24</button>
+            <button class="button readSamplesButton" onclick="updateValue('read_samples', 48)" data-value="48">48</button>
         </div>
     </div>
     <div class="setting-container">
         <div class="description">Speed (SPS)</div>
         <div class="button-group">
-            <button class="button speedButton" onclick="set('speed', '10')" data-value="10">10</button>
-            <button class="button speedButton" onclick="set('speed', '80')" data-value="80">80</button>
+            <button class="button speedButton" onclick="updateValue('speed', 10)" data-value="10">10</button>
+            <button class="button speedButton" onclick="updateValue('speed', 80)" data-value="80">80</button>
         </div>
     </div>
     <div class="setting-container">
         <div class="description">Gain</div>
         <div class="button-group">
-            <button class="button gainButton" onclick="set('gain', '1')" data-value="1">1</button>
-            <button class="button gainButton" onclick="set('gain', '2')" data-value="2">2</button>
-            <button class="button gainButton" onclick="set('gain', '64')" data-value="64">64</button>
-            <button class="button gainButton" onclick="set('gain', '128')" data-value="128">128</button>
+            <button class="button gainButton" onclick="updateValue('gain', 1)" data-value="1">1</button>
+            <button class="button gainButton" onclick="updateValue('gain', 2)" data-value="2">2</button>
+            <button class="button gainButton" onclick="updateValue('gain', 64)" data-value="64">64</button>
+            <button class="button gainButton" onclick="updateValue('gain', 128)" data-value="128">128</button>
         </div>
     </div>
     <div class="setting-container">
         <div class="description">Calibration Factor</div>
         <div class="text-input">
-            <input type="text" id="calibration_factor" placeholder="Enter value">
-            <button class="button submitButton" onclick="submitValue('calibration_factor')">Submit</button>
+            <input type="text" id="calibration_factor" placeholder="Enter value" oninput="updateValue('calibration_factor', this.value)">
         </div>
     </div>
     <div class="setting-container">
         <div class="description">Target Dose Single [g]</div>
         <div class="text-input">
-            <input type="text" id="target_dose_single" placeholder="Enter value">
-            <button class="button submitButton" onclick="submitValue('target_dose_single')">Submit</button>
+            <input type="text" id="target_dose_single" placeholder="Enter value" oninput="updateValue('target_dose_single', this.value)">
         </div>
     </div>
     <div class="setting-container">
         <div class="description">Top Up Margin Single [g]</div>
         <div class="text-input">
-            <input type="text" id="top_up_margin_single" placeholder="Enter value">
-            <button class="button submitButton" onclick="submitValue('top_up_margin_single')">Submit</button>
+            <input type="text" id="top_up_margin_single" placeholder="Enter value" oninput="updateValue('top_up_margin_single', this.value)">
         </div>
     </div>
     <div class="setting-container">
         <div class="description">Target Dose Double [g]</div>
         <div class="text-input">
-            <input type="text" id="target_dose_double" placeholder="Enter value">
-            <button class="button submitButton" onclick="submitValue('target_dose_double')">Submit</button>
+            <input type="text" id="target_dose_double" placeholder="Enter value" oninput="updateValue('target_dose_double', this.value)">
         </div>
     </div>
     <div class="setting-container">
         <div class="description">Top Up Margin Double [g]</div>
         <div class="text-input">
-            <input type="text" id="top_up_margin_double" placeholder="Enter value">
-            <button class="button submitButton" onclick="submitValue('top_up_margin_double')">Submit</button>
+            <input type="text" id="top_up_margin_double" placeholder="Enter value" oninput="updateValue('top_up_margin_double', this.value)">
         </div>
     </div>
 
@@ -218,57 +337,49 @@ const char PROGMEM config_html[] = R"rawliteral(
     <div class="setting-container">
         <div class="description">Min Top Up [g]</div>
         <div class="text-input">
-            <input type="text" id="min_topup_grams" placeholder="Enter value">
-            <button class="button submitButton" onclick="submitValue('min_topup_grams')">Submit</button>
+            <input type="text" id="min_topup_grams" placeholder="Enter value" oninput="updateValue('min_topup_grams', this.value)">
         </div>
     </div>
     <div class="setting-container">
         <div class="description">Top Up Timeout [ms]</div>
         <div class="text-input">
-            <input type="text" id="topup_timeout_ms" placeholder="Enter value">
-            <button class="button submitButton" onclick="submitValue('topup_timeout_ms')">Submit</button>
+            <input type="text" id="topup_timeout_ms" placeholder="Enter value" oninput="updateValue('topup_timeout_ms', this.value)">
         </div>
     </div>
     <div class="setting-container">
         <div class="description">Grinding Timeout [ms]</div>
         <div class="text-input">
-            <input type="text" id="grinding_timeout_ms" placeholder="Enter value">
-            <button class="button submitButton" onclick="submitValue('grinding_timeout_ms')">Submit</button>
+            <input type="text" id="grinding_timeout_ms" placeholder="Enter value" oninput="updateValue('grinding_timeout_ms', this.value)">
         </div>
     </div>
     <div class="setting-container">
         <div class="description">Finalize Timeout [ms]</div>
         <div class="text-input">
-            <input type="text" id="finalize_timeout_ms" placeholder="Enter value">
-            <button class="button submitButton" onclick="submitValue('finalize_timeout_ms')">Submit</button>
+            <input type="text" id="finalize_timeout_ms" placeholder="Enter value" oninput="updateValue('finalize_timeout_ms', this.value)">
         </div>
     </div>
     <div class="setting-container">
         <div class="description">Confirm Timeout [ms]</div>
         <div class="text-input">
-            <input type="text" id="confirm_timeout_ms" placeholder="Enter value">
-            <button class="button submitButton" onclick="submitValue('confirm_timeout_ms')">Submit</button>
+            <input type="text" id="confirm_timeout_ms" placeholder="Enter value" oninput="updateValue('confirm_timeout_ms', this.value)">
         </div>
     </div>
     <div class="setting-container">
         <div class="description">Stability Min Wait [ms]</div>
         <div class="text-input">
-            <input type="text" id="stability_min_wait_ms" placeholder="Enter value">
-            <button class="button submitButton" onclick="submitValue('stability_min_wait_ms')">Submit</button>
+            <input type="text" id="stability_min_wait_ms" placeholder="Enter value" oninput="updateValue('stability_min_wait_ms', this.value)">
         </div>
     </div>
     <div class="setting-container">
         <div class="description">Stability Max Wait [ms]</div>
         <div class="text-input">
-            <input type="text" id="stability_max_wait_ms" placeholder="Enter value">
-            <button class="button submitButton" onclick="submitValue('stability_max_wait_ms')">Submit</button>
+            <input type="text" id="stability_max_wait_ms" placeholder="Enter value" oninput="updateValue('stability_max_wait_ms', this.value)">
         </div>
     </div>
     <div class="setting-container">
         <div class="description">Button Debounce [ms]</div>
         <div class="text-input">
-            <input type="text" id="button_debounce_ms" placeholder="Enter value">
-            <button class="button submitButton" onclick="submitValue('button_debounce_ms')">Submit</button>
+            <input type="text" id="button_debounce_ms" placeholder="Enter value" oninput="updateValue('button_debounce_ms', this.value)">
         </div>
     </div>
     <div class="setting-container">
@@ -277,6 +388,15 @@ const char PROGMEM config_html[] = R"rawliteral(
             <button class="redButton" onclick="resetWiFi()">Reset WiFi</button>
         </div>
     </div>
+    <div class="setting-container">
+        <div class="description">Reboot Device</div>
+        <div class="button-group">
+            <button class="orangeButton" onclick="rebootDevice()">Reboot</button>
+        </div>
+    </div>
+
+    <button class="fab" onclick="saveSettings()">💾</button>
+    <div id="toast" class="toast">Settings Saved!</div>
 </body>
 
 </html>
@@ -338,52 +458,89 @@ void WebSocketSettings::onWebSocketEvent(AsyncWebSocket *server,
 
 void WebSocketSettings::handleWebSocketText(const String &cmd,
                                             String &response) {
-  // Extract command parts
-  int cIdx = cmd.indexOf(':');
-  String cmdType = cmd.substring(0, cIdx);
-  String varName = cmd.substring(cIdx + 1, cmd.indexOf(':', cIdx + 1));
-  String value = cmd.substring(cmd.indexOf(':', cIdx + 1) + 1);
-
   _logger->println(String("Handle cmd: " + cmd));
-  if (cmdType == "set") {
-    if (varName == "read_samples") {
-      scale.read_samples = value.toInt();
-    } else if (varName == "speed") {
-      scale.speed = value.toInt();
-    } else if (varName == "gain") {
-      scale.gain = value.toInt();
-    } else if (varName == "calibration_factor") {
-      scale.calibration_factor = value.toFloat();
-    } else if (varName == "target_dose_single") {
-      scale.target_dose_single = value.toFloat();
-    } else if (varName == "target_dose_double") {
-      scale.target_dose_double = value.toFloat();
-    } else if (varName == "top_up_margin_single") {
-      scale.top_up_margin_single = value.toFloat();
-    } else if (varName == "top_up_margin_double") {
-      scale.top_up_margin_double = value.toFloat();
-    } else if (varName == "min_topup_grams") {
-      scale.min_topup_grams = value.toFloat();
-    } else if (varName == "topup_timeout_ms") {
-      scale.topup_timeout_ms = value.toInt();
-    } else if (varName == "grinding_timeout_ms") {
-      scale.grinding_timeout_ms = value.toInt();
-    } else if (varName == "finalize_timeout_ms") {
-      scale.finalize_timeout_ms = value.toInt();
-    } else if (varName == "confirm_timeout_ms") {
-      scale.confirm_timeout_ms = value.toInt();
-    } else if (varName == "stability_min_wait_ms") {
-      scale.stability_min_wait_ms = value.toInt();
-    } else if (varName == "stability_max_wait_ms") {
-      scale.stability_max_wait_ms = value.toInt();
-    } else if (varName == "button_debounce_ms") {
-      scale.button_debounce_ms = value.toInt();
-    } else if (varName == "resetWiFi") {
-      wifi.reset_flag = true;
-    }
 
-    saveScaleToEEPROM();
-    scale.is_changed = true;
+  if (cmd.startsWith("batch:")) {
+    String jsonStr = cmd.substring(6);
+    DynamicJsonDocument doc(1024);
+    DeserializationError error = deserializeJson(doc, jsonStr);
+
+    if (!error) {
+      JsonObject obj = doc.as<JsonObject>();
+      bool changed = false;
+
+      if (obj.containsKey("read_samples")) { scale.read_samples = obj["read_samples"]; changed = true; }
+      if (obj.containsKey("speed")) { scale.speed = obj["speed"]; changed = true; }
+      if (obj.containsKey("gain")) { scale.gain = obj["gain"]; changed = true; }
+      if (obj.containsKey("calibration_factor")) { scale.calibration_factor = obj["calibration_factor"]; changed = true; }
+      if (obj.containsKey("target_dose_single")) { scale.target_dose_single = obj["target_dose_single"]; changed = true; }
+      if (obj.containsKey("target_dose_double")) { scale.target_dose_double = obj["target_dose_double"]; changed = true; }
+      if (obj.containsKey("top_up_margin_single")) { scale.top_up_margin_single = obj["top_up_margin_single"]; changed = true; }
+      if (obj.containsKey("top_up_margin_double")) { scale.top_up_margin_double = obj["top_up_margin_double"]; changed = true; }
+      if (obj.containsKey("min_topup_grams")) { scale.min_topup_grams = obj["min_topup_grams"]; changed = true; }
+      if (obj.containsKey("topup_timeout_ms")) { scale.topup_timeout_ms = obj["topup_timeout_ms"]; changed = true; }
+      if (obj.containsKey("grinding_timeout_ms")) { scale.grinding_timeout_ms = obj["grinding_timeout_ms"]; changed = true; }
+      if (obj.containsKey("finalize_timeout_ms")) { scale.finalize_timeout_ms = obj["finalize_timeout_ms"]; changed = true; }
+      if (obj.containsKey("confirm_timeout_ms")) { scale.confirm_timeout_ms = obj["confirm_timeout_ms"]; changed = true; }
+      if (obj.containsKey("stability_min_wait_ms")) { scale.stability_min_wait_ms = obj["stability_min_wait_ms"]; changed = true; }
+      if (obj.containsKey("stability_max_wait_ms")) { scale.stability_max_wait_ms = obj["stability_max_wait_ms"]; changed = true; }
+      if (obj.containsKey("button_debounce_ms")) { scale.button_debounce_ms = obj["button_debounce_ms"]; changed = true; }
+
+      if (obj.containsKey("resetWiFi") && obj["resetWiFi"]) { wifi.reset_flag = true; changed = true; }
+      if (obj.containsKey("reboot") && obj["reboot"]) { wifi.reboot_flag = true; changed = true; }
+
+      if (changed) {
+        saveScaleToEEPROM();
+        scale.is_changed = true;
+      }
+    }
+  } else {
+    // Extract command parts
+    int cIdx = cmd.indexOf(':');
+    String cmdType = cmd.substring(0, cIdx);
+    String varName = cmd.substring(cIdx + 1, cmd.indexOf(':', cIdx + 1));
+    String value = cmd.substring(cmd.indexOf(':', cIdx + 1) + 1);
+
+    if (cmdType == "set") {
+      if (varName == "read_samples") {
+        scale.read_samples = value.toInt();
+      } else if (varName == "speed") {
+        scale.speed = value.toInt();
+      } else if (varName == "gain") {
+        scale.gain = value.toInt();
+      } else if (varName == "calibration_factor") {
+        scale.calibration_factor = value.toFloat();
+      } else if (varName == "target_dose_single") {
+        scale.target_dose_single = value.toFloat();
+      } else if (varName == "target_dose_double") {
+        scale.target_dose_double = value.toFloat();
+      } else if (varName == "top_up_margin_single") {
+        scale.top_up_margin_single = value.toFloat();
+      } else if (varName == "top_up_margin_double") {
+        scale.top_up_margin_double = value.toFloat();
+      } else if (varName == "min_topup_grams") {
+        scale.min_topup_grams = value.toFloat();
+      } else if (varName == "topup_timeout_ms") {
+        scale.topup_timeout_ms = value.toInt();
+      } else if (varName == "grinding_timeout_ms") {
+        scale.grinding_timeout_ms = value.toInt();
+      } else if (varName == "finalize_timeout_ms") {
+        scale.finalize_timeout_ms = value.toInt();
+      } else if (varName == "confirm_timeout_ms") {
+        scale.confirm_timeout_ms = value.toInt();
+      } else if (varName == "stability_min_wait_ms") {
+        scale.stability_min_wait_ms = value.toInt();
+      } else if (varName == "stability_max_wait_ms") {
+        scale.stability_max_wait_ms = value.toInt();
+      } else if (varName == "button_debounce_ms") {
+        scale.button_debounce_ms = value.toInt();
+      } else if (varName == "resetWiFi") {
+        wifi.reset_flag = true;
+      }
+
+      saveScaleToEEPROM();
+      scale.is_changed = true;
+    }
   }
 
   // Response contains all settings
