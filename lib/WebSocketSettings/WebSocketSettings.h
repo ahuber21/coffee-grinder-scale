@@ -24,6 +24,7 @@ public:
     unsigned long stability_min_wait_ms = 500;
     unsigned long stability_max_wait_ms = 1500;
     unsigned long button_debounce_ms = 150;
+    unsigned long min_topup_runtime_ms = 500;
 
     bool is_changed = false;
   };

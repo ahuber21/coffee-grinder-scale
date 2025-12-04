@@ -204,6 +204,7 @@ const char PROGMEM config_html[] = R"rawliteral(
             setInputValue('stability_min_wait_ms', settings['stability_min_wait_ms']);
             setInputValue('stability_max_wait_ms', settings['stability_max_wait_ms']);
             setInputValue('button_debounce_ms', settings['button_debounce_ms']);
+            setInputValue('min_topup_runtime_ms', settings['min_topup_runtime_ms']);
         }
 
         function setInputValue(id, value) {
@@ -383,6 +384,12 @@ const char PROGMEM config_html[] = R"rawliteral(
         </div>
     </div>
     <div class="setting-container">
+        <div class="description">Min Top Up Runtime [ms]</div>
+        <div class="text-input">
+            <input type="text" id="min_topup_runtime_ms" placeholder="Enter value" oninput="updateValue('min_topup_runtime_ms', this.value)">
+        </div>
+    </div>
+    <div class="setting-container">
         <div class="description">Reset WiFi</div>
         <div class="button-group">
             <button class="redButton" onclick="resetWiFi()">Reset WiFi</button>
@@ -485,6 +492,7 @@ void WebSocketSettings::handleWebSocketText(const String &cmd,
       if (obj.containsKey("stability_min_wait_ms")) { scale.stability_min_wait_ms = obj["stability_min_wait_ms"]; changed = true; }
       if (obj.containsKey("stability_max_wait_ms")) { scale.stability_max_wait_ms = obj["stability_max_wait_ms"]; changed = true; }
       if (obj.containsKey("button_debounce_ms")) { scale.button_debounce_ms = obj["button_debounce_ms"]; changed = true; }
+      if (obj.containsKey("min_topup_runtime_ms")) { scale.min_topup_runtime_ms = obj["min_topup_runtime_ms"]; changed = true; }
 
       if (obj.containsKey("resetWiFi") && obj["resetWiFi"]) { wifi.reset_flag = true; changed = true; }
       if (obj.containsKey("reboot") && obj["reboot"]) { wifi.reboot_flag = true; changed = true; }
@@ -534,6 +542,8 @@ void WebSocketSettings::handleWebSocketText(const String &cmd,
         scale.stability_max_wait_ms = value.toInt();
       } else if (varName == "button_debounce_ms") {
         scale.button_debounce_ms = value.toInt();
+      } else if (varName == "min_topup_runtime_ms") {
+        scale.min_topup_runtime_ms = value.toInt();
       } else if (varName == "resetWiFi") {
         wifi.reset_flag = true;
       }
@@ -565,6 +575,7 @@ void WebSocketSettings::handleWebSocketText(const String &cmd,
   jsonDoc["stability_min_wait_ms"] = scale.stability_min_wait_ms;
   jsonDoc["stability_max_wait_ms"] = scale.stability_max_wait_ms;
   jsonDoc["button_debounce_ms"] = scale.button_debounce_ms;
+  jsonDoc["min_topup_runtime_ms"] = scale.min_topup_runtime_ms;
 
   serializeJson(jsonDoc, response);
 }

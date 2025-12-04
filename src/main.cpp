@@ -616,7 +616,8 @@ void loopTopUp() {
     }
     // calculate how long we should run, only allowing a window of values
     float top_up_seconds = (target_grams - grams) / avg_rate;
-    top_up_seconds = top_up_seconds < 0.5f ? 0.5f : top_up_seconds;
+    float min_seconds = settings.scale.min_topup_runtime_ms / 1000.0f;
+    top_up_seconds = top_up_seconds < min_seconds ? min_seconds : top_up_seconds;
     top_up_seconds = top_up_seconds > 1.3f ? 1.3f : top_up_seconds;
     top_up_stop_millis = now + 1000. * top_up_seconds;
     logger.println("Top up for " + String(top_up_seconds, TIME_DIGITS) + " s");
