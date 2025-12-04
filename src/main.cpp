@@ -839,27 +839,36 @@ void loopScreensaver() {
       return;
   }
 
-  String timeStr = "--:--:--";
+  unsigned long hours = 0;
+  unsigned long minutes = 0;
+  unsigned long seconds = 0;
+  unsigned long millis_part = 0;
+
+  bool show_uptime = true;
+
   if (settings.scale.last_coffee_timestamp > 0) {
       struct timeval tv;
       gettimeofday(&tv, NULL);
       time_t now = tv.tv_sec;
 
       // Check if time is valid (synced)
-      if (now < 1000000000) {
-          timeStr = "SYNCING...";
-      } else if (now > settings.scale.last_coffee_timestamp) {
+      if (now > 1000000000 && now > settings.scale.last_coffee_timestamp) {
           time_t diff = now - settings.scale.last_coffee_timestamp;
-          unsigned long hours = diff / 3600;
-          unsigned long minutes = (diff % 3600) / 60;
-          unsigned long seconds = diff % 60;
-          unsigned long millis_part = tv.tv_usec / 1000;
-
-          char buffer[20];
-          sprintf(buffer, "%02lu:%02lu:%02lu.%03lu", hours, minutes, seconds, millis_part);
-          timeStr = String(buffer);
+          hours = diff / 3600;
+          minutes = (diff % 3600) / 60;
+          seconds = diff % 60;
+          millis_part = tv.tv_usec / 1000;
+          show_uptime = false;
       }
   }
 
-  display.displayScreensaver(timeStr);
+  if (show_uptime) {
+      unsigned long now = millis();
+      hours = now / 3600000;
+      minutes = (now % 3600000) / 60000;
+      seconds = (now % 60000) / 1000;
+      millis_part = now % 1000;
+  }
+
+  display.displayScreensaver(hours, minutes, seconds, millis_part);
 }

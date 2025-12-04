@@ -7,9 +7,16 @@ TextColor colorBottom = colors;
 
 Display::Display(uint8_t sck, uint8_t miso, uint8_t mosi, uint8_t ss,
                  uint8_t dc, uint8_t cs, uint8_t reset, uint8_t backlight)
-    : m_spiDisplay(HSPI), m_display(&m_spiDisplay, cs, dc, reset), m_sck(sck),
-      m_miso(miso), m_mosi(mosi), m_ss(ss), m_backlightPin(backlight),
-      m_fps(16), m_turned_on(false), m_forceRefresh(false) {
+    : m_spiDisplay(HSPI),
+      m_display(&m_spiDisplay, cs, dc, reset),
+      m_sck(sck),
+      m_miso(miso),
+      m_mosi(mosi),
+      m_ss(ss),
+      m_backlightPin(backlight),
+      m_fps(16),
+      m_turned_on(false),
+      m_forceRefresh(false) {
   memset(m_lastDisplayRefreshMillis, 0, sizeof(uint32_t) * VA_MAX);
 }
 
@@ -22,11 +29,11 @@ void Display::begin() {
   wakeUp();
 }
 
-void Display::displayString(const String &text, VerticalAlignment alignment) {
+void Display::displayString(const String& text, VerticalAlignment alignment) {
   displayString(text.c_str(), alignment);
 }
 
-void Display::displayString(const char *text, VerticalAlignment alignment) {
+void Display::displayString(const char* text, VerticalAlignment alignment) {
   wakeUp();
 
   uint32_t now = millis();
@@ -53,35 +60,35 @@ void Display::displayString(const char *text, VerticalAlignment alignment) {
   }
 
   switch (alignment) {
-  case CENTER:
-    y = DISPLAY_HEIGHT / 2 - h / 2;
-    break;
+    case CENTER:
+      y = DISPLAY_HEIGHT / 2 - h / 2;
+      break;
 
-  case TWO_ROW_TOP:
-    y = 0;
-    break;
+    case TWO_ROW_TOP:
+      y = 0;
+      break;
 
-  case TWO_ROW_BOTTOM:
-    y = DISPLAY_HEIGHT - h;
-    break;
+    case TWO_ROW_BOTTOM:
+      y = DISPLAY_HEIGHT - h;
+      break;
 
-  case THREE_ROW_TOP:
-    y = 0;
-    break;
+    case THREE_ROW_TOP:
+      y = 0;
+      break;
 
-  case THREE_ROW_CENTER:
-    y = DISPLAY_HEIGHT / 2 - h / 2;
-    break;
+    case THREE_ROW_CENTER:
+      y = DISPLAY_HEIGHT / 2 - h / 2;
+      break;
 
-  case THREE_ROW_BOTTOM:
-    y = DISPLAY_HEIGHT - h;
-    break;
+    case THREE_ROW_BOTTOM:
+      y = DISPLAY_HEIGHT - h;
+      break;
 
-  case GRINDING_LAYOUT:
-    return;
+    case GRINDING_LAYOUT:
+      return;
 
-  default:
-    break;
+    default:
+      break;
   }
 
   x = DISPLAY_WIDTH / 2 - w / 2;
@@ -97,9 +104,7 @@ void Display::setTextColor(TextColor color) {
   m_display.setTextColor(color.foreground, color.background);
 }
 
-void Display::refresh() {
-  m_forceRefresh = true;
-}
+void Display::refresh() { m_forceRefresh = true; }
 
 void Display::clear() {
   m_display.fillScreen(ST7735_BLACK);
@@ -130,9 +135,10 @@ void Display::setBrightness(uint8_t brightness) {
   ledcWrite(1, duty);
 }
 
-void Display::displayGrindingLayout(float currentGrams, float targetGrams, float seconds,
-                                    uint16_t currentColor, uint16_t targetColor,
-                                    uint16_t timeColor, uint16_t connectionIndicatorColor) {
+void Display::displayGrindingLayout(float currentGrams, float targetGrams,
+                                    float seconds, uint16_t currentColor,
+                                    uint16_t targetColor, uint16_t timeColor,
+                                    uint16_t connectionIndicatorColor) {
   wakeUp();
 
   static uint16_t lastGrindingCurrentColorForFPS = 0xFFFF;
@@ -155,7 +161,8 @@ void Display::displayGrindingLayout(float currentGrams, float targetGrams, float
   }
 
   const uint32_t now = millis();
-  const bool colorChangedForFPS = (currentColor != lastGrindingCurrentColorForFPS);
+  const bool colorChangedForFPS =
+      (currentColor != lastGrindingCurrentColorForFPS);
 
   // Format strings with fixed width to ensure full overwrite
   char currentStr[16];
@@ -171,12 +178,12 @@ void Display::displayGrindingLayout(float currentGrams, float targetGrams, float
   snprintf(targetStr, sizeof(targetStr), "/%4.1f", targetGrams);
   snprintf(timeStr, sizeof(timeStr), "%4.1fs", seconds);
 
-  const bool sameCurrent =
-      (strcmp(currentStr, lastGrindingCurrentStr) == 0) && (currentColor == lastGrindingCurrentColor);
-  const bool sameTarget =
-      (strcmp(targetStr, lastGrindingTargetStr) == 0) && (targetColor == lastGrindingTargetColor);
-  const bool sameTime =
-      (strcmp(timeStr, lastGrindingTimeStr) == 0) && (timeColor == lastGrindingTimeColor);
+  const bool sameCurrent = (strcmp(currentStr, lastGrindingCurrentStr) == 0) &&
+                           (currentColor == lastGrindingCurrentColor);
+  const bool sameTarget = (strcmp(targetStr, lastGrindingTargetStr) == 0) &&
+                          (targetColor == lastGrindingTargetColor);
+  const bool sameTime = (strcmp(timeStr, lastGrindingTimeStr) == 0) &&
+                        (timeColor == lastGrindingTimeColor);
 
   // Skip if nothing visible changed
   if (!colorChangedForFPS && sameCurrent && sameTarget && sameTime) {
@@ -238,7 +245,8 @@ void Display::displayGrindingLayout(float currentGrams, float targetGrams, float
   int16_t currentX = (DISPLAY_WIDTH - totalWidth) / 2;
 
   // Clear area for current weight (height 32 for size 4) only if layout changed
-  if (currentX != lastGrindingLayoutX || totalWidth != lastGrindingLayoutWidth) {
+  if (currentX != lastGrindingLayoutX ||
+      totalWidth != lastGrindingLayoutWidth) {
     m_display.fillRect(0, currentY, DISPLAY_WIDTH, 32, ST7735_BLACK);
   }
   lastGrindingLayoutX = currentX;
@@ -247,7 +255,7 @@ void Display::displayGrindingLayout(float currentGrams, float targetGrams, float
   m_display.setTextColor(currentColor, ST7735_BLACK);
 
   if (isNegative) {
-    m_display.setCursor(currentX, currentY + 8); // Middle align roughly
+    m_display.setCursor(currentX, currentY + 8);  // Middle align roughly
     m_display.setTextSize(minusSize);
     m_display.print("-");
     currentX += minusWidth;
@@ -258,12 +266,12 @@ void Display::displayGrindingLayout(float currentGrams, float targetGrams, float
   m_display.print(intStr);
   currentX += intWidth;
 
-  m_display.setCursor(currentX, currentY + 16); // Bottom align
+  m_display.setCursor(currentX, currentY + 16);  // Bottom align
   m_display.setTextSize(dotSize);
   m_display.print(".");
   currentX += dotWidth;
 
-  m_display.setCursor(currentX, currentY + 16); // Bottom align
+  m_display.setCursor(currentX, currentY + 16);  // Bottom align
   m_display.setTextSize(decSize);
   m_display.print(decStr);
 
@@ -274,7 +282,7 @@ void Display::displayGrindingLayout(float currentGrams, float targetGrams, float
   const uint16_t targetH = h;
 
   const int16_t targetX = (DISPLAY_WIDTH - targetW) / 2;
-  const int16_t targetY = currentY + 32 + 10; // 32 is height of int part
+  const int16_t targetY = currentY + 32 + 10;  // 32 is height of int part
 
   m_display.setCursor(targetX, targetY);
   m_display.setTextSize(targetSize);
@@ -297,7 +305,8 @@ void Display::displayGrindingLayout(float currentGrams, float targetGrams, float
   drawConnectionIndicator(connectionIndicatorColor);
 }
 
-void Display::displayIdleLayout(float currentGrams, uint16_t connectionIndicatorColor) {
+void Display::displayIdleLayout(float currentGrams,
+                                uint16_t connectionIndicatorColor) {
   wakeUp();
 
   static char lastIdleCurrentStr[16] = "";
@@ -317,7 +326,8 @@ void Display::displayIdleLayout(float currentGrams, uint16_t connectionIndicator
 
   // Check for out of range
   if (abs(currentGrams) > 99.95f) {
-    if (strcmp("MAX", lastIdleCurrentStr) == 0 && connectionIndicatorColor == lastIdleConnectionColor) {
+    if (strcmp("MAX", lastIdleCurrentStr) == 0 &&
+        connectionIndicatorColor == lastIdleConnectionColor) {
       return;
     }
 
@@ -329,7 +339,8 @@ void Display::displayIdleLayout(float currentGrams, uint16_t connectionIndicator
     strncpy(lastIdleCurrentStr, "MAX", sizeof(lastIdleCurrentStr));
     lastIdleConnectionColor = connectionIndicatorColor;
 
-    m_display.fillRect(0, (DISPLAY_HEIGHT - 32) / 2, DISPLAY_WIDTH, 32, ST7735_BLACK);
+    m_display.fillRect(0, (DISPLAY_HEIGHT - 32) / 2, DISPLAY_WIDTH, 32,
+                       ST7735_BLACK);
     m_display.setTextColor(ST7735_WHITE, ST7735_BLACK);
 
     const char* text = "MAX";
@@ -353,7 +364,8 @@ void Display::displayIdleLayout(float currentGrams, uint16_t connectionIndicator
   snprintf(currentStr, sizeof(currentStr), "%5.1f", displayGrams);
 
   const bool sameText = (strcmp(currentStr, lastIdleCurrentStr) == 0);
-  const bool sameIndicator = (connectionIndicatorColor == lastIdleConnectionColor);
+  const bool sameIndicator =
+      (connectionIndicatorColor == lastIdleConnectionColor);
 
   // Skip if nothing visible changed
   if (sameText && sameIndicator) {
@@ -387,7 +399,8 @@ void Display::displayIdleLayout(float currentGrams, uint16_t connectionIndicator
   const uint8_t minusSize = 2;
   const uint8_t dotSize = 1;
 
-  const int16_t currentY = (DISPLAY_HEIGHT - 32) / 2; // 32 is height of int part
+  const int16_t currentY =
+      (DISPLAY_HEIGHT - 32) / 2;  // 32 is height of int part
 
   // Layout: Anchor dot at x = 60
   // Integer part ends at 60
@@ -401,11 +414,13 @@ void Display::displayIdleLayout(float currentGrams, uint16_t connectionIndicator
   } else if (lastIntStartX != -1) {
     // Clear shrinking integer part
     if (intStartX > lastIntStartX) {
-      m_display.fillRect(lastIntStartX, currentY, intStartX - lastIntStartX, 32, ST7735_BLACK);
+      m_display.fillRect(lastIntStartX, currentY, intStartX - lastIntStartX, 32,
+                         ST7735_BLACK);
     }
     // Clear removed minus sign
     if (lastIsNegative && !isNegative) {
-      m_display.fillRect(0, currentY + 8, 6 * minusSize, 8 * minusSize, ST7735_BLACK);
+      m_display.fillRect(0, currentY + 8, 6 * minusSize, 8 * minusSize,
+                         ST7735_BLACK);
     }
   }
 
@@ -426,12 +441,12 @@ void Display::displayIdleLayout(float currentGrams, uint16_t connectionIndicator
   m_display.print(intStr);
 
   // Dot
-  m_display.setCursor(60, currentY + 21); // Bottom align
+  m_display.setCursor(60, currentY + 21);  // Bottom align
   m_display.setTextSize(dotSize);
   m_display.print(".");
 
   // Decimal
-  m_display.setCursor(60 + (6 * dotSize), currentY + 14); // Bottom align
+  m_display.setCursor(60 + (6 * dotSize), currentY + 14);  // Bottom align
   m_display.setTextSize(decSize);
   m_display.print(decStr);
 
@@ -459,16 +474,17 @@ void Display::displayConfirmLayout(float targetGrams) {
   lastTargetGrams = targetGrams;
 
   // Clear screen once when value changes (or on first run)
-  // Since this is a full screen layout change usually, we might want to clear everything if we are coming from another state
-  // But here we assume we are in the loop.
-  // To be safe against artifacts from previous screens if not cleared externally:
-  // The caller usually handles state transitions.
-  // We will just clear the area we draw on, or the whole screen if we want to be sure.
-  // Given the user complained about flicker, we should avoid full clear if possible,
-  // but since the value doesn't change often in confirm screen (it's static target),
-  // we can afford a full clear on first draw, and then nothing.
+  // Since this is a full screen layout change usually, we might want to clear
+  // everything if we are coming from another state But here we assume we are in
+  // the loop. To be safe against artifacts from previous screens if not cleared
+  // externally: The caller usually handles state transitions. We will just
+  // clear the area we draw on, or the whole screen if we want to be sure. Given
+  // the user complained about flicker, we should avoid full clear if possible,
+  // but since the value doesn't change often in confirm screen (it's static
+  // target), we can afford a full clear on first draw, and then nothing.
 
-  // However, to support the "large digits" style which has variable width, we need the smart clear logic.
+  // However, to support the "large digits" style which has variable width, we
+  // need the smart clear logic.
 
   // Parse parts
   long totalDecigrams = (long)round(abs(targetGrams) * 10);
@@ -507,7 +523,8 @@ void Display::displayConfirmLayout(float targetGrams) {
   int16_t titleY = weightY + 32 + 20;
 
   // Clear screen (simplest way to ensure clean slate for this static screen)
-  // Since this function returns early if value hasn't changed, this clear only happens once per value change.
+  // Since this function returns early if value hasn't changed, this clear only
+  // happens once per value change.
   m_display.fillScreen(ST7735_BLACK);
 
   // Draw Weight
@@ -517,12 +534,12 @@ void Display::displayConfirmLayout(float targetGrams) {
   m_display.print(intStr);
   weightX += intWidth;
 
-  m_display.setCursor(weightX, weightY + 16); // Bottom align
+  m_display.setCursor(weightX, weightY + 16);  // Bottom align
   m_display.setTextSize(dotSize);
   m_display.print(".");
   weightX += dotWidth;
 
-  m_display.setCursor(weightX, weightY + 16); // Bottom align
+  m_display.setCursor(weightX, weightY + 16);  // Bottom align
   m_display.setTextSize(decSize);
   m_display.print(decStr);
 
@@ -532,117 +549,122 @@ void Display::displayConfirmLayout(float targetGrams) {
   m_display.print(title);
 }
 
-void Display::displayScreensaver(const String &timeStr) {
+void Display::displayScreensaver(unsigned long hours, unsigned long minutes,
+                                 unsigned long seconds,
+                                 unsigned long milliseconds) {
   wakeUp();
 
-  static String lastTimeStr = "";
+  static unsigned long lastHours = 9999;
+  static unsigned long lastMinutes = 99;
+  static unsigned long lastSeconds = 99;
+  static unsigned long lastMillis = 9999;
   static bool firstRun = true;
 
-  if (firstRun) {
-      clear();
-      displayString("SINCE LAST", THREE_ROW_TOP);
-      displayString("COFFEE", THREE_ROW_CENTER);
-      firstRun = false;
-      lastTimeStr = "";
-  }
-
-  // If we left screensaver and came back, we need to reset firstRun.
-  // But Display class doesn't know about state changes.
-  // We can detect if the screen was cleared or if we are called after a long time?
-  // Or we rely on the caller to clear screen which sets m_forceRefresh.
   if (m_forceRefresh) {
-      firstRun = true;
-      // Do not reset m_forceRefresh here, let the logic below handle it or just proceed
-      // Actually, if m_forceRefresh is true, we should redraw everything.
-      // But wait, clear() sets m_forceRefresh = true.
-      // So if we just return, we might miss the clear?
-      // No, clear() clears the screen.
-      // We just need to know we need to redraw static text.
+    firstRun = true;
+    m_forceRefresh = false;
   }
 
-  if (firstRun || m_forceRefresh) {
-      // Ensure screen is black if we are just starting or forced
-      if (firstRun) m_display.fillScreen(ST7735_BLACK); // Safety
-
-      displayString("SINCE LAST", THREE_ROW_TOP);
-      displayString("COFFEE", THREE_ROW_CENTER);
-      firstRun = false;
-      lastTimeStr = "";
-      m_forceRefresh = false; // Consumed
+  if (firstRun) {
+    m_display.fillScreen(ST7735_BLACK);
+    lastHours = 9999;
+    lastMinutes = 99;
+    lastSeconds = 99;
+    lastMillis = 9999;
+    firstRun = false;
   }
 
-  // Optimize drawing: only draw changed characters
-  // Format is HH:MM:SS.xxx
-  // We assume fixed width font or at least monospaced digits for alignment stability
-  // ST7735 default font is not monospaced, but we can try to overwrite with background color.
-
-  // Position for the time string (THREE_ROW_BOTTOM)
-  // Calculate Y
-  int16_t x, y;
-  uint16_t w, h;
-  m_display.setTextSize(2);
-  // Use a dummy string of same length to calculate width
-  // "00:00:00.000" is 12 chars
-  // 12 * 6 * 2 = 144 pixels width. Screen is 80 wide?
-  // Wait, DISPLAY_WIDTH is 80, HEIGHT is 160.
-  // If rotation is 0 (portrait), width is 80.
-  // 144 pixels won't fit in 80.
-  // We need smaller font or rotation?
-  // The user said "HH:MM:SS.xxx".
-  // Maybe they use landscape?
-  // setupDisplay says setRotation(0).
-  // If width is 80, we can fit:
-  // Size 1: 6px char -> 13 chars (78px).
-  // Size 2: 12px char -> 6 chars (72px).
-  // So "00:00:00.000" (12 chars) definitely needs Size 1.
-
-  uint8_t size = 1;
-  m_display.setTextSize(size);
-  m_display.getTextBounds("00:00:00.000", 0, 0, &x, &y, &w, &h);
-
-  int16_t startY = DISPLAY_HEIGHT - h;
-  // If using THREE_ROW_BOTTOM logic: y = DISPLAY_HEIGHT - h;
-
-  int16_t startX = (DISPLAY_WIDTH - w) / 2;
-
-  m_display.setTextSize(size);
   m_display.setTextColor(ST7735_WHITE, ST7735_BLACK);
 
-  // If lengths differ, redraw all (shouldn't happen with fixed format)
-  if (timeStr.length() != lastTimeStr.length()) {
-      // Clear the line first if length changed significantly or just overwrite?
-      // If we go from "SYNCING..." (10 chars) to "00:00:00.000" (12 chars), we need to recenter.
-      // The startX calculation above handles centering for the NEW string.
-      // But we might have old pixels left over if new string is narrower?
-      // Or if we shifted position.
+  // Layout configuration
+  const int16_t startY = 12;
+  const int16_t rowHeight = 40;
+  const int16_t msRowHeight = 20;
 
-      // Safest is to clear the area if length changes.
-      // Height is 'h'. Width is 'w'.
-      // We can clear the whole bottom area.
-      m_display.fillRect(0, startY, DISPLAY_WIDTH, h, ST7735_BLACK);
+  // Draw Hours
+  if (hours != lastHours) {
+    char buf[10];
+    sprintf(buf, "%02lu", hours);
 
-      m_display.setCursor(startX, startY);
-      m_display.print(timeStr);
-      lastTimeStr = timeStr;
-      return;
+    m_display.setTextSize(4);
+    int16_t x, y;
+    uint16_t w, h;
+    m_display.getTextBounds(buf, 0, 0, &x, &y, &w, &h);
+
+    int16_t drawX = DISPLAY_WIDTH - w;
+    int16_t drawY = startY;
+
+    // Clear line
+    m_display.fillRect(0, drawY, DISPLAY_WIDTH, 32, ST7735_BLACK);
+    m_display.setCursor(drawX, drawY);
+    m_display.print(buf);
+
+    lastHours = hours;
   }
 
-  // Compare char by char
-  int16_t currentX = startX;
-  for (unsigned int i = 0; i < timeStr.length(); i++) {
-      char c = timeStr[i];
-      char lastC = lastTimeStr[i];
+  // Draw Minutes
+  if (minutes != lastMinutes) {
+    char buf[10];
+    sprintf(buf, "%02lu", minutes);
 
-      if (c != lastC) {
-          m_display.setCursor(currentX, startY);
-          m_display.print(c);
-      }
+    m_display.setTextSize(4);
+    int16_t x, y;
+    uint16_t w, h;
+    m_display.getTextBounds(buf, 0, 0, &x, &y, &w, &h);
 
-      // Advance X manually for next char
-      // Size 1: 6 pixels width
-      currentX += 6 * size;
+    int16_t drawX = DISPLAY_WIDTH - w;
+    int16_t drawY = startY + rowHeight;
+
+    m_display.fillRect(0, drawY, DISPLAY_WIDTH, 32, ST7735_BLACK);
+    m_display.setCursor(drawX, drawY);
+    m_display.print(buf);
+
+    lastMinutes = minutes;
   }
-  lastTimeStr = timeStr;
+
+  // Draw Seconds
+  if (seconds != lastSeconds) {
+    char buf[10];
+    sprintf(buf, "%02lu", seconds);
+
+    m_display.setTextSize(4);
+    int16_t x, y;
+    uint16_t w, h;
+    m_display.getTextBounds(buf, 0, 0, &x, &y, &w, &h);
+
+    int16_t drawX = DISPLAY_WIDTH - w;
+    int16_t drawY = startY + rowHeight * 2;
+
+    m_display.fillRect(0, drawY, DISPLAY_WIDTH, 32, ST7735_BLACK);
+    m_display.setCursor(drawX, drawY);
+    m_display.print(buf);
+
+    lastSeconds = seconds;
+  }
+
+  // Draw Milliseconds (Centiseconds)
+  // User requested <10ms> resolution, so 2 digits (00-99)
+  unsigned long centiseconds = milliseconds / 10;
+  if (centiseconds != lastMillis) {
+    char buf[10];
+    sprintf(buf, ".%02lu", centiseconds);
+
+    m_display.setTextSize(2);
+    int16_t x, y;
+    uint16_t w, h;
+    m_display.getTextBounds(buf, 0, 0, &x, &y, &w, &h);
+
+    int16_t drawX = DISPLAY_WIDTH - w;
+    int16_t drawY = startY + rowHeight * 3;
+
+    // Only clear if width changed or first run?
+    // Clearing small area is fast.
+    m_display.fillRect(0, drawY, DISPLAY_WIDTH, 16, ST7735_BLACK);
+    m_display.setCursor(drawX, drawY);
+    m_display.print(buf);
+
+    lastMillis = centiseconds;
+  }
 }
 
 void Display::drawConnectionIndicator(uint16_t color) {

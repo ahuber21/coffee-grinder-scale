@@ -225,7 +225,7 @@ public:
                            uint16_t timeColor = ST7735_WHITE,
                            uint16_t connectionIndicatorColor = 0);
   void displayIdleLayout(float currentGrams, uint16_t connectionIndicatorColor = 0);
-  void displayScreensaver(const String &timeStr);
+  void displayScreensaver(unsigned long hours, unsigned long minutes, unsigned long seconds, unsigned long milliseconds);
   void displayConfirmLayout(float targetGrams);
   void drawConnectionIndicator(uint16_t color);
 
