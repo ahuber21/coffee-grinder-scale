@@ -18,6 +18,12 @@ public:
     float top_up_margin_double = 0.0f;
     float min_topup_grams = 0.08f;
     unsigned long topup_timeout_ms = 1000;
+    unsigned long grinding_timeout_ms = 30000;
+    unsigned long finalize_timeout_ms = 8000;
+    unsigned long confirm_timeout_ms = 2000;
+    unsigned long stability_min_wait_ms = 500;
+    unsigned long stability_max_wait_ms = 1500;
+    unsigned long button_debounce_ms = 150;
 
     bool is_changed = false;
   };

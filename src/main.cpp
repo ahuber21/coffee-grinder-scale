@@ -34,19 +34,8 @@ WebSocketGraph graph;
 WebSocketMetrics metrics;
 RawDataWebSocket rawData;
 
-// overall timeout when running the grinder
-static const unsigned long timeout_millis = 30000;
-// how long the final result is displayed
-static const unsigned long finalize_screentime_millis = 8000;
-// how long the confirm screen is shown
-static const unsigned long confirm_timeout_millis = 2000;
-// button debounce, accept one button press each X milliseconds
-static const unsigned long button_debounce_millis = 150;
 // minimum time to hold the button to be counted as true press (filter noise)
 static const unsigned long button_debounce_min_hold = 20;
-// stability detection timeouts
-static const unsigned long stability_min_wait_millis = 500;
-static const unsigned long stability_max_wait_millis = 1500;
 
 bool grinder_is_running = false;
 
@@ -143,7 +132,7 @@ void IRAM_ATTR button_interrupt() {
   auto now = millis();
   button_pressed_filter_millis = now;
 
-  if ((now - button_pressed_millis) < button_debounce_millis) {
+  if ((now - button_pressed_millis) < settings.scale.button_debounce_ms) {
     return;
   }
 
@@ -447,7 +436,7 @@ void loopButtonPressedDebug() {
 void loopConfirm() {
   display.displayConfirmLayout(target_grams);
 
-  if ((millis() - button_pressed_millis) > confirm_timeout_millis) {
+  if ((millis() - button_pressed_millis) > settings.scale.confirm_timeout_ms) {
     // go back to idle
     state_change_to_idle_millis = millis();
     state = IDLE;
@@ -494,7 +483,7 @@ void loopConfigured() {
 void loopRunning() {
   unsigned long int now = millis();
 
-  if (now - session_started_millis > timeout_millis) {
+  if (now - session_started_millis > settings.scale.grinding_timeout_ms) {
     // timeout - no top up
     state = STOPPING;
     return;
@@ -654,7 +643,7 @@ void loopStopping() {
   unsigned long wait_time = now - stability_wait_start_millis;
 
   // Check for stability or enforce maximum wait time
-  if (!isStable && wait_time < stability_max_wait_millis) {
+  if (!isStable && wait_time < settings.scale.stability_max_wait_ms) {
     logger.println("Waiting to stabilize");
     return;
   }
@@ -697,7 +686,7 @@ void loopFinalize() {
     finalize_broadcast_done = true;
   }
 
-  if (millis() - finalize_millis > finalize_screentime_millis) {
+  if (millis() - finalize_millis > settings.scale.finalize_timeout_ms) {
     display.clear();
     state_change_to_idle_millis = millis();
     state = IDLE;

@@ -118,6 +118,12 @@ const char PROGMEM config_html[] = R"rawliteral(
             document.getElementById('top_up_margin_double').value = response['top_up_margin_double'];
             document.getElementById('min_topup_grams').value = response['min_topup_grams'];
             document.getElementById('topup_timeout_ms').value = response['topup_timeout_ms'];
+            document.getElementById('grinding_timeout_ms').value = response['grinding_timeout_ms'];
+            document.getElementById('finalize_timeout_ms').value = response['finalize_timeout_ms'];
+            document.getElementById('confirm_timeout_ms').value = response['confirm_timeout_ms'];
+            document.getElementById('stability_min_wait_ms').value = response['stability_min_wait_ms'];
+            document.getElementById('stability_max_wait_ms').value = response['stability_max_wait_ms'];
+            document.getElementById('button_debounce_ms').value = response['button_debounce_ms'];
         };
         function setActiveButton(className, value) {
             const buttons = document.querySelectorAll(className);
@@ -224,6 +230,48 @@ const char PROGMEM config_html[] = R"rawliteral(
         </div>
     </div>
     <div class="setting-container">
+        <div class="description">Grinding Timeout [ms]</div>
+        <div class="text-input">
+            <input type="text" id="grinding_timeout_ms" placeholder="Enter value">
+            <button class="button submitButton" onclick="submitValue('grinding_timeout_ms')">Submit</button>
+        </div>
+    </div>
+    <div class="setting-container">
+        <div class="description">Finalize Timeout [ms]</div>
+        <div class="text-input">
+            <input type="text" id="finalize_timeout_ms" placeholder="Enter value">
+            <button class="button submitButton" onclick="submitValue('finalize_timeout_ms')">Submit</button>
+        </div>
+    </div>
+    <div class="setting-container">
+        <div class="description">Confirm Timeout [ms]</div>
+        <div class="text-input">
+            <input type="text" id="confirm_timeout_ms" placeholder="Enter value">
+            <button class="button submitButton" onclick="submitValue('confirm_timeout_ms')">Submit</button>
+        </div>
+    </div>
+    <div class="setting-container">
+        <div class="description">Stability Min Wait [ms]</div>
+        <div class="text-input">
+            <input type="text" id="stability_min_wait_ms" placeholder="Enter value">
+            <button class="button submitButton" onclick="submitValue('stability_min_wait_ms')">Submit</button>
+        </div>
+    </div>
+    <div class="setting-container">
+        <div class="description">Stability Max Wait [ms]</div>
+        <div class="text-input">
+            <input type="text" id="stability_max_wait_ms" placeholder="Enter value">
+            <button class="button submitButton" onclick="submitValue('stability_max_wait_ms')">Submit</button>
+        </div>
+    </div>
+    <div class="setting-container">
+        <div class="description">Button Debounce [ms]</div>
+        <div class="text-input">
+            <input type="text" id="button_debounce_ms" placeholder="Enter value">
+            <button class="button submitButton" onclick="submitValue('button_debounce_ms')">Submit</button>
+        </div>
+    </div>
+    <div class="setting-container">
         <div class="description">Reset WiFi</div>
         <div class="button-group">
             <button class="redButton" onclick="resetWiFi()">Reset WiFi</button>
@@ -318,6 +366,18 @@ void WebSocketSettings::handleWebSocketText(const String &cmd,
       scale.min_topup_grams = value.toFloat();
     } else if (varName == "topup_timeout_ms") {
       scale.topup_timeout_ms = value.toInt();
+    } else if (varName == "grinding_timeout_ms") {
+      scale.grinding_timeout_ms = value.toInt();
+    } else if (varName == "finalize_timeout_ms") {
+      scale.finalize_timeout_ms = value.toInt();
+    } else if (varName == "confirm_timeout_ms") {
+      scale.confirm_timeout_ms = value.toInt();
+    } else if (varName == "stability_min_wait_ms") {
+      scale.stability_min_wait_ms = value.toInt();
+    } else if (varName == "stability_max_wait_ms") {
+      scale.stability_max_wait_ms = value.toInt();
+    } else if (varName == "button_debounce_ms") {
+      scale.button_debounce_ms = value.toInt();
     } else if (varName == "resetWiFi") {
       wifi.reset_flag = true;
     }
@@ -342,6 +402,12 @@ void WebSocketSettings::handleWebSocketText(const String &cmd,
   jsonDoc["top_up_margin_double"] = cdd_rounded;
   jsonDoc["min_topup_grams"] = min_topup_rounded;
   jsonDoc["topup_timeout_ms"] = scale.topup_timeout_ms;
+  jsonDoc["grinding_timeout_ms"] = scale.grinding_timeout_ms;
+  jsonDoc["finalize_timeout_ms"] = scale.finalize_timeout_ms;
+  jsonDoc["confirm_timeout_ms"] = scale.confirm_timeout_ms;
+  jsonDoc["stability_min_wait_ms"] = scale.stability_min_wait_ms;
+  jsonDoc["stability_max_wait_ms"] = scale.stability_max_wait_ms;
+  jsonDoc["button_debounce_ms"] = scale.button_debounce_ms;
 
   serializeJson(jsonDoc, response);
 }
