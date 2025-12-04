@@ -10,11 +10,11 @@
 #include <API.h>
 #include <Display.h>
 #include <ESPAsyncWebServer.h>
-#include <WebSocketMetrics.h>
+#include <RawDataWebSocket.h>
 #include <WebSocketGraph.h>
 #include <WebSocketLogger.h>
+#include <WebSocketMetrics.h>
 #include <WebSocketSettings.h>
-#include <RawDataWebSocket.h>
 #include <time.h>
 
 #include "defines.h"
@@ -56,7 +56,7 @@ unsigned long last_grams_millis = 0;
 unsigned long last_heartbeat_millis = 0;
 unsigned long last_top_up_millis = 0;
 unsigned long session_started_millis = 0;  // when the grind session was started
-unsigned long state_change_to_idle_millis = 0;
+volatile unsigned long state_change_to_idle_millis = 0;
 unsigned long stability_wait_start_millis = 0;
 unsigned long top_up_stop_millis = 0;
 
@@ -143,7 +143,12 @@ void IRAM_ATTR button_interrupt() {
   if (state == CONFIRM) {
     // go to configured if same button is pressed again
     // go to idle if the button is different
-    state = (pin == last_button) ? TARE : IDLE;
+    if (pin == last_button) {
+      state = TARE;
+    } else {
+      state = IDLE;
+      state_change_to_idle_millis = millis();
+    }
   } else if (state == IDLE || state == SCREENSAVER) {
     old_state_button_press = IDLE;
     state = BUTTON_FILTER;
@@ -250,7 +255,6 @@ void loop() {
   if (need_to_clear) {
     display.clear();
   }
-
   switch (state) {
     case IDLE:
       loopIdle();
@@ -388,7 +392,8 @@ void loopIdle() {
   display.displayIdleLayout(grams, getConnectionIndicatorColor());
 
   if (settings.scale.screensaver_timeout_s > 0 &&
-      (millis() - state_change_to_idle_millis > (settings.scale.screensaver_timeout_s * 1000))) {
+      (millis() - state_change_to_idle_millis >
+       (settings.scale.screensaver_timeout_s * 1000))) {
     state = SCREENSAVER;
   }
 }
@@ -409,6 +414,7 @@ void loopButtonFilter() {
   if (button_state != LOW) {
     // just noise, ignore
     state = IDLE;
+    state_change_to_idle_millis = millis();
   }
 }
 
@@ -524,7 +530,9 @@ void loopRunning() {
   int32_t rawValue = scale.getRaw(isStable);
   rawData.sendRawData(rawValue, grams, now - session_started_millis, isStable);
 
-  display.displayGrindingLayout(grams, target_grams, time, ST7735_WHITE, ST7735_WHITE, ST7735_WHITE, getConnectionIndicatorColor());
+  display.displayGrindingLayout(grams, target_grams, time, ST7735_WHITE,
+                                ST7735_WHITE, ST7735_WHITE,
+                                getConnectionIndicatorColor());
 
   // wait until something is happening
   if (grams < 1) {
@@ -588,9 +596,9 @@ void loopTopUp() {
   float grams = scale.getUnits();
   float time = (now - session_started_millis) / 1000.;
 
-  display.displayGrindingLayout(grams, target_grams, time,
-                               ST7735_CYAN, ST7735_WHITE, ST7735_WHITE,
-                               getConnectionIndicatorColor());
+  display.displayGrindingLayout(grams, target_grams, time, ST7735_CYAN,
+                                ST7735_WHITE, ST7735_WHITE,
+                                getConnectionIndicatorColor());
 
   graph.updateGraphData(time, grams);
 
@@ -604,7 +612,8 @@ void loopTopUp() {
     float delta_grams = grams - grams_on_grinder_on;
     bool enough_weight = delta_grams >= settings.scale.min_topup_grams;
     bool enough_time = wait_time >= settings.scale.topup_timeout_ms;
-    bool enough_interval = (now - grinder_started_millis) >= settings.scale.min_topup_interval_ms;
+    bool enough_interval =
+        (now - grinder_started_millis) >= settings.scale.min_topup_interval_ms;
 
     if (!enough_time) {
       if (!enough_weight || !isStable || !enough_interval) {
@@ -633,7 +642,8 @@ void loopTopUp() {
     // calculate how long we should run, only allowing a window of values
     float top_up_seconds = (target_grams - grams) / avg_rate;
     float min_seconds = settings.scale.min_topup_runtime_ms / 1000.0f;
-    top_up_seconds = top_up_seconds < min_seconds ? min_seconds : top_up_seconds;
+    top_up_seconds =
+        top_up_seconds < min_seconds ? min_seconds : top_up_seconds;
     top_up_seconds = top_up_seconds > 1.3f ? 1.3f : top_up_seconds;
     top_up_stop_millis = now + 1000. * top_up_seconds;
     logger.println("Top up for " + String(top_up_seconds, TIME_DIGITS) + " s");
@@ -656,9 +666,9 @@ void loopStopping() {
   float grams = scale.getUnits();
   float time = (now - session_started_millis) / 1000.;
 
-  display.displayGrindingLayout(grams, target_grams, time,
-                               ST7735_CYAN, ST7735_WHITE, ST7735_WHITE,
-                               getConnectionIndicatorColor());
+  display.displayGrindingLayout(grams, target_grams, time, ST7735_CYAN,
+                                ST7735_WHITE, ST7735_WHITE,
+                                getConnectionIndicatorColor());
 
   bool isStable;
   int32_t rawValue = scale.getRaw(isStable);
@@ -690,8 +700,8 @@ void loopStopping() {
 
 void loopFinalize() {
   display.displayGrindingLayout(finalize_grams, target_grams, finalize_time,
-                               ST7735_GREEN, ST7735_WHITE, ST7735_WHITE,
-                               getConnectionIndicatorColor());
+                                ST7735_GREEN, ST7735_WHITE, ST7735_WHITE,
+                                getConnectionIndicatorColor());
   if (!finalize_broadcast_done) {
     // send finalize events only once to avoid flooding websockets / heap
 
@@ -712,8 +722,8 @@ void loopFinalize() {
     // Save timestamp
     time_t now = time(nullptr);
     if (now > 1600000000) {
-        settings.scale.last_coffee_timestamp = now;
-        settings.saveScaleToEEPROM();
+      settings.scale.last_coffee_timestamp = now;
+      settings.saveScaleToEEPROM();
     }
   }
 
@@ -733,12 +743,13 @@ void loopDebug() {
 
   if (millis() - debug_last_print_millis > 1000) {
     char logger_buffer[100];
-    sprintf(logger_buffer, "Cal: %f - Raw: %ld %s - Grams: %f", settings.scale.calibration_factor, raw, isStable ? "S" : "P", scale.getUnits());
+    sprintf(logger_buffer, "Cal: %f - Raw: %ld %s - Grams: %f",
+            settings.scale.calibration_factor, raw, isStable ? "S" : "P",
+            scale.getUnits());
     logger.println(logger_buffer);
     char buffer[12];
     sprintf(buffer, "%d %s", raw, isStable ? "S" : "P");
-    display.displayString(buffer,
-                          VerticalAlignment::TWO_ROW_BOTTOM);
+    display.displayString(buffer, VerticalAlignment::TWO_ROW_BOTTOM);
     debug_last_print_millis = millis();
   }
 }
@@ -814,11 +825,11 @@ uint16_t getConnectionIndicatorColor() {
   if (hasMetrics && hasRawData) {
     return ST7735_GREEN;  // Both connected
   } else if (hasMetrics) {
-    return ST7735_YELLOW; // Only metrics (old logger) connected
+    return ST7735_YELLOW;  // Only metrics (old logger) connected
   } else if (hasRawData) {
-    return ST7735_BLUE;   // Only raw data connected
+    return ST7735_BLUE;  // Only raw data connected
   } else {
-    return 0;             // No connections - no indicator
+    return 0;  // No connections - no indicator
   }
 }
 
@@ -828,15 +839,15 @@ void loopScreensaver() {
   // Exit on weight change
   float grams = scale.getUnits();
   if (abs(grams) > 0.5) {
-      state = IDLE;
-      state_change_to_idle_millis = millis();
-      return;
+    state = IDLE;
+    state_change_to_idle_millis = millis();
+    return;
   }
 
   // Also check if API received new value
   if (api.isNewValueReceived()) {
-      state = IDLE;
-      return;
+    state = IDLE;
+    return;
   }
 
   unsigned long hours = 0;
@@ -847,27 +858,27 @@ void loopScreensaver() {
   bool show_uptime = true;
 
   if (settings.scale.last_coffee_timestamp > 0) {
-      struct timeval tv;
-      gettimeofday(&tv, NULL);
-      time_t now = tv.tv_sec;
+    struct timeval tv;
+    gettimeofday(&tv, NULL);
+    time_t now = tv.tv_sec;
 
-      // Check if time is valid (synced)
-      if (now > 1000000000 && now > settings.scale.last_coffee_timestamp) {
-          time_t diff = now - settings.scale.last_coffee_timestamp;
-          hours = diff / 3600;
-          minutes = (diff % 3600) / 60;
-          seconds = diff % 60;
-          millis_part = tv.tv_usec / 1000;
-          show_uptime = false;
-      }
+    // Check if time is valid (synced)
+    if (now > 1000000000 && now > settings.scale.last_coffee_timestamp) {
+      time_t diff = now - settings.scale.last_coffee_timestamp;
+      hours = diff / 3600;
+      minutes = (diff % 3600) / 60;
+      seconds = diff % 60;
+      millis_part = tv.tv_usec / 1000;
+      show_uptime = false;
+    }
   }
 
   if (show_uptime) {
-      unsigned long now = millis();
-      hours = now / 3600000;
-      minutes = (now % 3600000) / 60000;
-      seconds = (now % 60000) / 1000;
-      millis_part = now % 1000;
+    unsigned long now = millis();
+    hours = now / 3600000;
+    minutes = (now % 3600000) / 60000;
+    seconds = (now % 60000) / 1000;
+    millis_part = now % 1000;
   }
 
   display.displayScreensaver(hours, minutes, seconds, millis_part);

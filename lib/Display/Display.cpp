@@ -158,6 +158,8 @@ void Display::displayGrindingLayout(float currentGrams, float targetGrams,
     lastGrindingLayoutX = -1;
     lastGrindingLayoutWidth = -1;
     m_forceRefresh = false;
+    // Bypass FPS check on force refresh
+    m_lastDisplayRefreshMillis[GRINDING_LAYOUT] = 0;
   }
 
   const uint32_t now = millis();
@@ -320,6 +322,8 @@ void Display::displayIdleLayout(float currentGrams,
     lastIntStartX = -1;
     lastIsNegative = false;
     m_forceRefresh = false;
+    // Bypass FPS check on force refresh
+    m_lastDisplayRefreshMillis[CENTER] = 0;
   }
 
   const uint32_t now = millis();
