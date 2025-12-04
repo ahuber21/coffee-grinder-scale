@@ -532,6 +532,119 @@ void Display::displayConfirmLayout(float targetGrams) {
   m_display.print(title);
 }
 
+void Display::displayScreensaver(const String &timeStr) {
+  wakeUp();
+
+  static String lastTimeStr = "";
+  static bool firstRun = true;
+
+  if (firstRun) {
+      clear();
+      displayString("SINCE LAST", THREE_ROW_TOP);
+      displayString("COFFEE", THREE_ROW_CENTER);
+      firstRun = false;
+      lastTimeStr = "";
+  }
+
+  // If we left screensaver and came back, we need to reset firstRun.
+  // But Display class doesn't know about state changes.
+  // We can detect if the screen was cleared or if we are called after a long time?
+  // Or we rely on the caller to clear screen which sets m_forceRefresh.
+  if (m_forceRefresh) {
+      firstRun = true;
+      // Do not reset m_forceRefresh here, let the logic below handle it or just proceed
+      // Actually, if m_forceRefresh is true, we should redraw everything.
+      // But wait, clear() sets m_forceRefresh = true.
+      // So if we just return, we might miss the clear?
+      // No, clear() clears the screen.
+      // We just need to know we need to redraw static text.
+  }
+
+  if (firstRun || m_forceRefresh) {
+      // Ensure screen is black if we are just starting or forced
+      if (firstRun) m_display.fillScreen(ST7735_BLACK); // Safety
+
+      displayString("SINCE LAST", THREE_ROW_TOP);
+      displayString("COFFEE", THREE_ROW_CENTER);
+      firstRun = false;
+      lastTimeStr = "";
+      m_forceRefresh = false; // Consumed
+  }
+
+  // Optimize drawing: only draw changed characters
+  // Format is HH:MM:SS.xxx
+  // We assume fixed width font or at least monospaced digits for alignment stability
+  // ST7735 default font is not monospaced, but we can try to overwrite with background color.
+
+  // Position for the time string (THREE_ROW_BOTTOM)
+  // Calculate Y
+  int16_t x, y;
+  uint16_t w, h;
+  m_display.setTextSize(2);
+  // Use a dummy string of same length to calculate width
+  // "00:00:00.000" is 12 chars
+  // 12 * 6 * 2 = 144 pixels width. Screen is 80 wide?
+  // Wait, DISPLAY_WIDTH is 80, HEIGHT is 160.
+  // If rotation is 0 (portrait), width is 80.
+  // 144 pixels won't fit in 80.
+  // We need smaller font or rotation?
+  // The user said "HH:MM:SS.xxx".
+  // Maybe they use landscape?
+  // setupDisplay says setRotation(0).
+  // If width is 80, we can fit:
+  // Size 1: 6px char -> 13 chars (78px).
+  // Size 2: 12px char -> 6 chars (72px).
+  // So "00:00:00.000" (12 chars) definitely needs Size 1.
+
+  uint8_t size = 1;
+  m_display.setTextSize(size);
+  m_display.getTextBounds("00:00:00.000", 0, 0, &x, &y, &w, &h);
+
+  int16_t startY = DISPLAY_HEIGHT - h;
+  // If using THREE_ROW_BOTTOM logic: y = DISPLAY_HEIGHT - h;
+
+  int16_t startX = (DISPLAY_WIDTH - w) / 2;
+
+  m_display.setTextSize(size);
+  m_display.setTextColor(ST7735_WHITE, ST7735_BLACK);
+
+  // If lengths differ, redraw all (shouldn't happen with fixed format)
+  if (timeStr.length() != lastTimeStr.length()) {
+      // Clear the line first if length changed significantly or just overwrite?
+      // If we go from "SYNCING..." (10 chars) to "00:00:00.000" (12 chars), we need to recenter.
+      // The startX calculation above handles centering for the NEW string.
+      // But we might have old pixels left over if new string is narrower?
+      // Or if we shifted position.
+
+      // Safest is to clear the area if length changes.
+      // Height is 'h'. Width is 'w'.
+      // We can clear the whole bottom area.
+      m_display.fillRect(0, startY, DISPLAY_WIDTH, h, ST7735_BLACK);
+
+      m_display.setCursor(startX, startY);
+      m_display.print(timeStr);
+      lastTimeStr = timeStr;
+      return;
+  }
+
+  // Compare char by char
+  int16_t currentX = startX;
+  for (unsigned int i = 0; i < timeStr.length(); i++) {
+      char c = timeStr[i];
+      char lastC = lastTimeStr[i];
+
+      if (c != lastC) {
+          m_display.setCursor(currentX, startY);
+          m_display.print(c);
+      }
+
+      // Advance X manually for next char
+      // Size 1: 6 pixels width
+      currentX += 6 * size;
+  }
+  lastTimeStr = timeStr;
+}
+
 void Display::drawConnectionIndicator(uint16_t color) {
   if (color != 0) {  // 0 means no indicator
     const int16_t x = 1;

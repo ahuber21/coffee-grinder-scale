@@ -3,6 +3,7 @@
 #include <ArduinoOTA.h>
 #include <WiFi.h>
 #include <WiFiManager.h>
+#include <sys/time.h>
 
 // needs to be included after WiFiManager.h
 // which does not properly protect some defines
@@ -14,6 +15,7 @@
 #include <WebSocketLogger.h>
 #include <WebSocketSettings.h>
 #include <RawDataWebSocket.h>
+#include <time.h>
 
 #include "defines.h"
 
@@ -84,6 +86,7 @@ volatile enum State {
   TOPUP,
   STOPPING,
   FINALIZE,
+  SCREENSAVER,
   DEBUG,
 } state;
 // previous state when in loop
@@ -116,6 +119,7 @@ void loopRunning();
 void loopTopUp();
 void loopStopping();
 void loopFinalize();
+void loopScreensaver();
 void loopDebug();
 
 void resetWifi();
@@ -140,7 +144,7 @@ void IRAM_ATTR button_interrupt() {
     // go to configured if same button is pressed again
     // go to idle if the button is different
     state = (pin == last_button) ? TARE : IDLE;
-  } else if (state == IDLE) {
+  } else if (state == IDLE || state == SCREENSAVER) {
     old_state_button_press = IDLE;
     state = BUTTON_FILTER;
     button = pin;
@@ -285,6 +289,9 @@ void loop() {
     case FINALIZE:
       loopFinalize();
       break;
+    case SCREENSAVER:
+      loopScreensaver();
+      break;
     case DEBUG:
       loopDebug();
       break;
@@ -326,6 +333,9 @@ void heartbeat() {
         break;
       case FINALIZE:
         message += "FINALIZE";
+        break;
+      case SCREENSAVER:
+        message += "SCREENSAVER";
         break;
       case DEBUG:
         message += "DEBUG";
@@ -376,6 +386,11 @@ void loopIdle() {
     grams = 0.0f;
   }
   display.displayIdleLayout(grams, getConnectionIndicatorColor());
+
+  if (settings.scale.screensaver_timeout_s > 0 &&
+      (millis() - state_change_to_idle_millis > (settings.scale.screensaver_timeout_s * 1000))) {
+    state = SCREENSAVER;
+  }
 }
 
 void loopButtonFilter() {
@@ -589,9 +604,10 @@ void loopTopUp() {
     float delta_grams = grams - grams_on_grinder_on;
     bool enough_weight = delta_grams >= settings.scale.min_topup_grams;
     bool enough_time = wait_time >= settings.scale.topup_timeout_ms;
+    bool enough_interval = (now - grinder_started_millis) >= settings.scale.min_topup_interval_ms;
 
     if (!enough_time) {
-      if (!enough_weight || !isStable) {
+      if (!enough_weight || !isStable || !enough_interval) {
         return;
       }
     }
@@ -692,6 +708,13 @@ void loopFinalize() {
     graph.finalizeGraph();
     metrics.sendFinalize(finalize_time, finalize_grams);
     finalize_broadcast_done = true;
+
+    // Save timestamp
+    time_t now = time(nullptr);
+    if (now > 1600000000) {
+        settings.scale.last_coffee_timestamp = now;
+        settings.saveScaleToEEPROM();
+    }
   }
 
   if (millis() - finalize_millis > settings.scale.finalize_timeout_ms) {
@@ -762,6 +785,9 @@ void setupWifi() {
 
   wifiManager.autoConnect("Eureka setup");
 
+  // Configure time (UTC)
+  configTime(0, 0, "pool.ntp.org");
+
   if (wifiWebServerStarted) {
     ESP.restart();
   }
@@ -794,4 +820,46 @@ uint16_t getConnectionIndicatorColor() {
   } else {
     return 0;             // No connections - no indicator
   }
+}
+
+void loopScreensaver() {
+  ArduinoOTA.handle();
+
+  // Exit on weight change
+  float grams = scale.getUnits();
+  if (abs(grams) > 0.5) {
+      state = IDLE;
+      state_change_to_idle_millis = millis();
+      return;
+  }
+
+  // Also check if API received new value
+  if (api.isNewValueReceived()) {
+      state = IDLE;
+      return;
+  }
+
+  String timeStr = "--:--:--";
+  if (settings.scale.last_coffee_timestamp > 0) {
+      struct timeval tv;
+      gettimeofday(&tv, NULL);
+      time_t now = tv.tv_sec;
+
+      // Check if time is valid (synced)
+      if (now < 1000000000) {
+          timeStr = "SYNCING...";
+      } else if (now > settings.scale.last_coffee_timestamp) {
+          time_t diff = now - settings.scale.last_coffee_timestamp;
+          unsigned long hours = diff / 3600;
+          unsigned long minutes = (diff % 3600) / 60;
+          unsigned long seconds = diff % 60;
+          unsigned long millis_part = tv.tv_usec / 1000;
+
+          char buffer[20];
+          sprintf(buffer, "%02lu:%02lu:%02lu.%03lu", hours, minutes, seconds, millis_part);
+          timeStr = String(buffer);
+      }
+  }
+
+  display.displayScreensaver(timeStr);
 }

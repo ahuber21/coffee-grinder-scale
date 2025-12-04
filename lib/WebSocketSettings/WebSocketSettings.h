@@ -25,6 +25,10 @@ public:
     unsigned long stability_max_wait_ms = 1500;
     unsigned long button_debounce_ms = 150;
     unsigned long min_topup_runtime_ms = 500;
+    unsigned long min_topup_interval_ms = 1000;
+    unsigned long screensaver_timeout_s = 60;
+
+    time_t last_coffee_timestamp = 0;
 
     bool is_changed = false;
   };
@@ -43,9 +47,10 @@ public:
   Scale scale;
   WiFi wifi;
 
+  void saveScaleToEEPROM();
+
 private:
   void loadScaleFromEEPROM();
-  void saveScaleToEEPROM();
 
   void handleWebSocketText(const String &cmd, String &response);
 
