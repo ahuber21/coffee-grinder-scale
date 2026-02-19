@@ -6,7 +6,7 @@
 class WebSocketLogger;
 
 class WebSocketSettings {
-public:
+ public:
   struct Scale {
     byte read_samples = 8;
     byte speed = 10;
@@ -17,6 +17,10 @@ public:
     float top_up_margin_single = 0.0f;
     float top_up_margin_double = 0.0f;
     float min_topup_grams = 0.08f;
+    float rate_calculation_percentage = 0.75f;
+    float rate_min_valid = 0.5f;
+    float rate_max_valid = 2.0f;
+    float rate_default = 1.0f;
     unsigned long topup_timeout_ms = 1000;
     unsigned long grinding_timeout_ms = 30000;
     unsigned long finalize_timeout_ms = 8000;
@@ -29,6 +33,8 @@ public:
     unsigned long screensaver_timeout_s = 60;
 
     time_t last_coffee_timestamp = 0;
+
+    uint32_t magic = 0xCAFEBABE;
 
     bool is_changed = false;
   };
@@ -49,7 +55,7 @@ public:
 
   void saveScaleToEEPROM();
 
-private:
+ private:
   void loadScaleFromEEPROM();
 
   void handleWebSocketText(const String &cmd, String &response);

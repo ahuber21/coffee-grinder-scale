@@ -55,6 +55,9 @@ unsigned long grinder_stopped_millis = 0;  // when the grinder was stopped
 unsigned long last_grams_millis = 0;
 unsigned long last_heartbeat_millis = 0;
 unsigned long last_top_up_millis = 0;
+unsigned long last_zero_weight_millis = 0;
+unsigned long calculated_stop_millis = 0;
+bool stop_time_calculated = false;
 unsigned long session_started_millis = 0;  // when the grind session was started
 volatile unsigned long state_change_to_idle_millis = 0;
 unsigned long stability_wait_start_millis = 0;
@@ -502,6 +505,9 @@ void loopConfigured() {
   // initial values
   last_grams = scale.getUnits();
   last_grams_millis = millis();
+  last_zero_weight_millis = millis();
+  stop_time_calculated = false;
+  calculated_stop_millis = 0;
   grams_per_seconds_total = 0;
   grams_per_seconds_count = 0;
 
@@ -542,7 +548,7 @@ void loopRunning() {
   // calculate weight increase
   float delta_grams = grams - last_grams;
   float delta_millis = now - last_grams_millis;
-  if (delta_grams < 0.2) {
+  if (delta_grams < 0.2 && delta_millis < 500) {
     return;
   }
 
@@ -552,8 +558,55 @@ void loopRunning() {
     return;
   }
 
-  // continue to next state if we're consistently above target
-  if (grams > last_grams && (last_grams > target_grams_corrected)) {
+  // Track last time weight was < 0.1g
+  if (grams < 0.1) {
+    last_zero_weight_millis = now;
+  }
+
+  // Calculate stop time if not already done
+  if (!stop_time_calculated) {
+    float threshold_weight =
+        target_grams * settings.scale.rate_calculation_percentage;
+    if (grams >= threshold_weight) {
+      // We subtract 100ms to account for the ADC lag / sampling interval bias
+      // last_zero_weight_millis is the timestamp of the last sample < 0.1g,
+      // so the actual flow started somewhere between that and the next sample.
+      float duration_since_start_of_flow =
+          (now - last_zero_weight_millis - 100) / 1000.0;
+      // Avoid division by zero or very small numbers
+      if (duration_since_start_of_flow < 0.1)
+        duration_since_start_of_flow = 0.1;
+
+      float calculated_rate = grams / duration_since_start_of_flow;
+
+      if (calculated_rate < settings.scale.rate_min_valid ||
+          calculated_rate > settings.scale.rate_max_valid) {
+        calculated_rate = settings.scale.rate_default;
+      }
+
+      // target_grams_corrected is (target_grams - topup_margin)
+      float run_duration = target_grams_corrected / calculated_rate;
+
+      // Safety check for run_duration to prevent overflow or excessively long
+      // runs
+      if (run_duration > 60.0f) run_duration = 60.0f;
+
+      calculated_stop_millis =
+          grinder_started_millis + (unsigned long)(run_duration * 1000);
+      stop_time_calculated = true;
+
+      char buffer[100];
+      sprintf(buffer, "Rate calc: %.2f g/s, Stop at: %lu", calculated_rate,
+              calculated_stop_millis);
+      logger.println(buffer);
+    }
+  }
+
+  // Check if we should stop based on calculated time and weight
+  if ((grams > target_grams_corrected) ||
+      (stop_time_calculated && now >= calculated_stop_millis)) {
+    grinderOff();
+    logger.println("Calculated stop time reached");
     state = TOPUP;
     return;
   }

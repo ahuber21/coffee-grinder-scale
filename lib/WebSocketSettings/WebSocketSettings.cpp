@@ -1,9 +1,10 @@
 
 #include "WebSocketSettings.h"
 
+#include <ESPAsyncWebServer.h>
+
 #include "ArduinoJson.h"
 #include "WebSocketLogger.h"
-#include <ESPAsyncWebServer.h>
 
 namespace websettings {
 const char PROGMEM config_html[] = R"rawliteral(
@@ -197,6 +198,10 @@ const char PROGMEM config_html[] = R"rawliteral(
             setInputValue('top_up_margin_single', settings['top_up_margin_single']);
             setInputValue('top_up_margin_double', settings['top_up_margin_double']);
             setInputValue('min_topup_grams', settings['min_topup_grams']);
+            setInputValue('rate_calculation_percentage', settings['rate_calculation_percentage']);
+            setInputValue('rate_min_valid', settings['rate_min_valid']);
+            setInputValue('rate_max_valid', settings['rate_max_valid']);
+            setInputValue('rate_default', settings['rate_default']);
             setInputValue('topup_timeout_ms', settings['topup_timeout_ms']);
             setInputValue('grinding_timeout_ms', settings['grinding_timeout_ms']);
             setInputValue('finalize_timeout_ms', settings['finalize_timeout_ms']);
@@ -344,6 +349,30 @@ const char PROGMEM config_html[] = R"rawliteral(
         </div>
     </div>
     <div class="setting-container">
+        <div class="description">Rate Calc % (0.0-1.0)</div>
+        <div class="text-input">
+            <input type="text" id="rate_calculation_percentage" placeholder="Enter value" oninput="updateValue('rate_calculation_percentage', this.value)">
+        </div>
+    </div>
+    <div class="setting-container">
+        <div class="description">Rate Min Valid [g/s]</div>
+        <div class="text-input">
+            <input type="text" id="rate_min_valid" placeholder="Enter value" oninput="updateValue('rate_min_valid', this.value)">
+        </div>
+    </div>
+    <div class="setting-container">
+        <div class="description">Rate Max Valid [g/s]</div>
+        <div class="text-input">
+            <input type="text" id="rate_max_valid" placeholder="Enter value" oninput="updateValue('rate_max_valid', this.value)">
+        </div>
+    </div>
+    <div class="setting-container">
+        <div class="description">Rate Default [g/s]</div>
+        <div class="text-input">
+            <input type="text" id="rate_default" placeholder="Enter value" oninput="updateValue('rate_default', this.value)">
+        </div>
+    </div>
+    <div class="setting-container">
         <div class="description">Top Up Timeout [ms]</div>
         <div class="text-input">
             <input type="text" id="topup_timeout_ms" placeholder="Enter value" oninput="updateValue('topup_timeout_ms', this.value)">
@@ -426,7 +455,7 @@ const char PROGMEM config_html[] = R"rawliteral(
 void onConnect(AsyncWebServerRequest *request) {
   request->send_P(200, "text/html", websettings::config_html);
 }
-} // namespace websettings
+}  // namespace websettings
 
 const int WebSocketSettings::EEPROM_SCALE_ADDRESS = 0;
 
@@ -452,28 +481,29 @@ void WebSocketSettings::onWebSocketEvent(AsyncWebSocket *server,
                                          AwsEventType type, void *arg,
                                          uint8_t *data, size_t len) {
   switch (type) {
-  case WS_EVT_CONNECT:
-    // Limit to single connection for security - settings should have exclusive access
-    if (server->count() > 1) {
-      client->close(1008, "Only one settings connection allowed");
-    }
-    _logger->println("WebSocket client connected");
-    break;
-  case WS_EVT_DISCONNECT:
-    _logger->println("WebSocket client disconnected");
-    break;
-  case WS_EVT_DATA:
-    if (arg) {
-      AwsFrameInfo *info = (AwsFrameInfo *)arg;
-      if (info->opcode == WS_TEXT) {
-        String cmd = String((char *)data);
-        String response;
-        handleWebSocketText(cmd, response);
-        _logger->println("Send response: " + response);
-        client->text(response.c_str());
+    case WS_EVT_CONNECT:
+      // Limit to single connection for security - settings should have
+      // exclusive access
+      if (server->count() > 1) {
+        client->close(1008, "Only one settings connection allowed");
       }
-    }
-    break;
+      _logger->println("WebSocket client connected");
+      break;
+    case WS_EVT_DISCONNECT:
+      _logger->println("WebSocket client disconnected");
+      break;
+    case WS_EVT_DATA:
+      if (arg) {
+        AwsFrameInfo *info = (AwsFrameInfo *)arg;
+        if (info->opcode == WS_TEXT) {
+          String cmd = String((char *)data);
+          String response;
+          handleWebSocketText(cmd, response);
+          _logger->println("Send response: " + response);
+          client->text(response.c_str());
+        }
+      }
+      break;
   }
 }
 
@@ -490,28 +520,107 @@ void WebSocketSettings::handleWebSocketText(const String &cmd,
       JsonObject obj = doc.as<JsonObject>();
       bool changed = false;
 
-      if (obj.containsKey("read_samples")) { scale.read_samples = obj["read_samples"]; changed = true; }
-      if (obj.containsKey("speed")) { scale.speed = obj["speed"]; changed = true; }
-      if (obj.containsKey("gain")) { scale.gain = obj["gain"]; changed = true; }
-      if (obj.containsKey("calibration_factor")) { scale.calibration_factor = obj["calibration_factor"]; changed = true; }
-      if (obj.containsKey("target_dose_single")) { scale.target_dose_single = obj["target_dose_single"]; changed = true; }
-      if (obj.containsKey("target_dose_double")) { scale.target_dose_double = obj["target_dose_double"]; changed = true; }
-      if (obj.containsKey("top_up_margin_single")) { scale.top_up_margin_single = obj["top_up_margin_single"]; changed = true; }
-      if (obj.containsKey("top_up_margin_double")) { scale.top_up_margin_double = obj["top_up_margin_double"]; changed = true; }
-      if (obj.containsKey("min_topup_grams")) { scale.min_topup_grams = obj["min_topup_grams"]; changed = true; }
-      if (obj.containsKey("topup_timeout_ms")) { scale.topup_timeout_ms = obj["topup_timeout_ms"]; changed = true; }
-      if (obj.containsKey("grinding_timeout_ms")) { scale.grinding_timeout_ms = obj["grinding_timeout_ms"]; changed = true; }
-      if (obj.containsKey("finalize_timeout_ms")) { scale.finalize_timeout_ms = obj["finalize_timeout_ms"]; changed = true; }
-      if (obj.containsKey("confirm_timeout_ms")) { scale.confirm_timeout_ms = obj["confirm_timeout_ms"]; changed = true; }
-      if (obj.containsKey("stability_min_wait_ms")) { scale.stability_min_wait_ms = obj["stability_min_wait_ms"]; changed = true; }
-      if (obj.containsKey("stability_max_wait_ms")) { scale.stability_max_wait_ms = obj["stability_max_wait_ms"]; changed = true; }
-      if (obj.containsKey("button_debounce_ms")) { scale.button_debounce_ms = obj["button_debounce_ms"]; changed = true; }
-      if (obj.containsKey("min_topup_runtime_ms")) { scale.min_topup_runtime_ms = obj["min_topup_runtime_ms"]; changed = true; }
-      if (obj.containsKey("min_topup_interval_ms")) { scale.min_topup_interval_ms = obj["min_topup_interval_ms"]; changed = true; }
-      if (obj.containsKey("screensaver_timeout_s")) { scale.screensaver_timeout_s = obj["screensaver_timeout_s"]; changed = true; }
+      if (obj.containsKey("read_samples")) {
+        scale.read_samples = obj["read_samples"];
+        changed = true;
+      }
+      if (obj.containsKey("speed")) {
+        scale.speed = obj["speed"];
+        changed = true;
+      }
+      if (obj.containsKey("gain")) {
+        scale.gain = obj["gain"];
+        changed = true;
+      }
+      if (obj.containsKey("calibration_factor")) {
+        scale.calibration_factor = obj["calibration_factor"];
+        changed = true;
+      }
+      if (obj.containsKey("target_dose_single")) {
+        scale.target_dose_single = obj["target_dose_single"];
+        changed = true;
+      }
+      if (obj.containsKey("target_dose_double")) {
+        scale.target_dose_double = obj["target_dose_double"];
+        changed = true;
+      }
+      if (obj.containsKey("top_up_margin_single")) {
+        scale.top_up_margin_single = obj["top_up_margin_single"];
+        changed = true;
+      }
+      if (obj.containsKey("top_up_margin_double")) {
+        scale.top_up_margin_double = obj["top_up_margin_double"];
+        changed = true;
+      }
+      if (obj.containsKey("min_topup_grams")) {
+        scale.min_topup_grams = obj["min_topup_grams"];
+        changed = true;
+      }
+      if (obj.containsKey("rate_calculation_percentage")) {
+        scale.rate_calculation_percentage = obj["rate_calculation_percentage"];
+        changed = true;
+      }
+      if (obj.containsKey("rate_min_valid")) {
+        scale.rate_min_valid = obj["rate_min_valid"];
+        changed = true;
+      }
+      if (obj.containsKey("rate_max_valid")) {
+        scale.rate_max_valid = obj["rate_max_valid"];
+        changed = true;
+      }
+      if (obj.containsKey("rate_default")) {
+        scale.rate_default = obj["rate_default"];
+        changed = true;
+      }
+      if (obj.containsKey("topup_timeout_ms")) {
+        scale.topup_timeout_ms = obj["topup_timeout_ms"];
+        changed = true;
+      }
+      if (obj.containsKey("grinding_timeout_ms")) {
+        scale.grinding_timeout_ms = obj["grinding_timeout_ms"];
+        changed = true;
+      }
+      if (obj.containsKey("finalize_timeout_ms")) {
+        scale.finalize_timeout_ms = obj["finalize_timeout_ms"];
+        changed = true;
+      }
+      if (obj.containsKey("confirm_timeout_ms")) {
+        scale.confirm_timeout_ms = obj["confirm_timeout_ms"];
+        changed = true;
+      }
+      if (obj.containsKey("stability_min_wait_ms")) {
+        scale.stability_min_wait_ms = obj["stability_min_wait_ms"];
+        changed = true;
+      }
+      if (obj.containsKey("stability_max_wait_ms")) {
+        scale.stability_max_wait_ms = obj["stability_max_wait_ms"];
+        changed = true;
+      }
+      if (obj.containsKey("button_debounce_ms")) {
+        scale.button_debounce_ms = obj["button_debounce_ms"];
+        changed = true;
+      }
+      if (obj.containsKey("min_topup_runtime_ms")) {
+        scale.min_topup_runtime_ms = obj["min_topup_runtime_ms"];
+        changed = true;
+      }
+      if (obj.containsKey("min_topup_interval_ms")) {
+        scale.min_topup_interval_ms = obj["min_topup_interval_ms"];
+        changed = true;
+      }
+      if (obj.containsKey("screensaver_timeout_s")) {
+        scale.screensaver_timeout_s = obj["screensaver_timeout_s"];
+        changed = true;
+      }
 
-      if (obj.containsKey("resetWiFi") && obj["resetWiFi"]) { wifi.reset_flag = true; changed = true; }
-      if (obj.containsKey("reboot") && obj["reboot"]) { wifi.reboot_flag = true; changed = true; }
+      if (obj.containsKey("resetWiFi") && obj["resetWiFi"]) {
+        wifi.reset_flag = true;
+        changed = true;
+      }
+      if (obj.containsKey("reboot") && obj["reboot"]) {
+        wifi.reboot_flag = true;
+        changed = true;
+      }
 
       if (changed) {
         saveScaleToEEPROM();
@@ -544,6 +653,14 @@ void WebSocketSettings::handleWebSocketText(const String &cmd,
         scale.top_up_margin_double = value.toFloat();
       } else if (varName == "min_topup_grams") {
         scale.min_topup_grams = value.toFloat();
+      } else if (varName == "rate_calculation_percentage") {
+        scale.rate_calculation_percentage = value.toFloat();
+      } else if (varName == "rate_min_valid") {
+        scale.rate_min_valid = value.toFloat();
+      } else if (varName == "rate_max_valid") {
+        scale.rate_max_valid = value.toFloat();
+      } else if (varName == "rate_default") {
+        scale.rate_default = value.toFloat();
       } else if (varName == "topup_timeout_ms") {
         scale.topup_timeout_ms = value.toInt();
       } else if (varName == "grinding_timeout_ms") {
@@ -588,6 +705,10 @@ void WebSocketSettings::handleWebSocketText(const String &cmd,
   jsonDoc["top_up_margin_single"] = cds_rounded;
   jsonDoc["top_up_margin_double"] = cdd_rounded;
   jsonDoc["min_topup_grams"] = min_topup_rounded;
+  jsonDoc["rate_calculation_percentage"] = scale.rate_calculation_percentage;
+  jsonDoc["rate_min_valid"] = scale.rate_min_valid;
+  jsonDoc["rate_max_valid"] = scale.rate_max_valid;
+  jsonDoc["rate_default"] = scale.rate_default;
   jsonDoc["topup_timeout_ms"] = scale.topup_timeout_ms;
   jsonDoc["grinding_timeout_ms"] = scale.grinding_timeout_ms;
   jsonDoc["finalize_timeout_ms"] = scale.finalize_timeout_ms;
@@ -604,8 +725,30 @@ void WebSocketSettings::handleWebSocketText(const String &cmd,
 
 void WebSocketSettings::loadScaleFromEEPROM() {
   EEPROM.begin(sizeof(scale));
-  EEPROM.get(EEPROM_SCALE_ADDRESS, scale);
+  Scale tempScale;
+  EEPROM.get(EEPROM_SCALE_ADDRESS, tempScale);
   EEPROM.end();
+
+  if (tempScale.magic == scale.magic) {
+    scale = tempScale;
+  } else {
+    _logger->println("Invalid EEPROM magic, resetting advanced settings");
+    // Preserve basic settings from EEPROM (assuming they are at the start of
+    // the struct) This works because we moved magic to the end, so the memory
+    // layout of the start matches
+    scale.read_samples = tempScale.read_samples;
+    scale.speed = tempScale.speed;
+    scale.gain = tempScale.gain;
+    scale.calibration_factor = tempScale.calibration_factor;
+    scale.target_dose_single = tempScale.target_dose_single;
+    scale.target_dose_double = tempScale.target_dose_double;
+    scale.top_up_margin_single = tempScale.top_up_margin_single;
+    scale.top_up_margin_double = tempScale.top_up_margin_double;
+
+    // Save the new structure with defaults for advanced settings and correct
+    // magic
+    saveScaleToEEPROM();
+  }
 }
 
 void WebSocketSettings::saveScaleToEEPROM() {
