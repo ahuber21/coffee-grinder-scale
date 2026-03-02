@@ -603,7 +603,9 @@ void loopRunning() {
   }
 
   // Check if we should stop based on calculated time and weight
-  if ((grams > target_grams_corrected) ||
+  // Weight only serves as a fallback, which is why we use target_grams, not
+  // target_grams_corrected
+  if ((grams > target_grams) ||
       (stop_time_calculated && now >= calculated_stop_millis)) {
     grinderOff();
     logger.println("Calculated stop time reached");
