@@ -16,6 +16,8 @@ class WebSocketSettings {
     float target_dose_double = 0.0f;
     float top_up_margin_single = 0.0f;
     float top_up_margin_double = 0.0f;
+    float topup_lookup_table[6] = {0.0f, 0.0f, 0.0f,
+                     0.0f, 0.0f, 0.0f};
     float min_topup_grams = 0.08f;
     float rate_calculation_percentage = 0.75f;
     float rate_min_valid = 0.5f;

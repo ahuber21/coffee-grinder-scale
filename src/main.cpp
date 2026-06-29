@@ -698,23 +698,36 @@ void loopTopUp() {
       return;
     }
 
-    // calculate next top off time based on avg_rate
-    float avg_rate = (grams_per_seconds_count > 0)
-                         ? grams_per_seconds_total / grams_per_seconds_count
-                         : 0.1;
-    if (!(avg_rate > 0)) {
-      logger.println("Zero avg_rate?");
+    // Calculate weight gap
+    float gap = target_grams - grams;
+
+    // Look up on-time from table based on gap
+    int index;
+    if (gap <= 0.1f)
+      index = 0;
+    else if (gap <= 0.2f)
+      index = 1;
+    else if (gap <= 0.3f)
+      index = 2;
+    else if (gap <= 0.4f)
+      index = 3;
+    else if (gap <= 0.5f)
+      index = 4;
+    else
+      index = 5;
+
+    float top_up_seconds = settings.scale.topup_lookup_table[index];
+
+    // Safety check
+    if (top_up_seconds <= 0 || top_up_seconds > 5.0f) {
+      logger.println("Invalid lookup table value");
       state = STOPPING;
       return;
     }
-    // calculate how long we should run, only allowing a window of values
-    float top_up_seconds = (target_grams - grams) / avg_rate;
-    float min_seconds = settings.scale.min_topup_runtime_ms / 1000.0f;
-    top_up_seconds =
-        top_up_seconds < min_seconds ? min_seconds : top_up_seconds;
-    top_up_seconds = top_up_seconds > 1.3f ? 1.3f : top_up_seconds;
-    top_up_stop_millis = now + 1000. * top_up_seconds;
-    logger.println("Top up for " + String(top_up_seconds, TIME_DIGITS) + " s");
+
+    top_up_stop_millis = now + 1000.0f * top_up_seconds;
+    logger.println("Top up for " + String(top_up_seconds, 2) +
+                   " s (gap: " + String(gap, 2) + " g)");
     grinderOn();
   } else if (grinder_is_running && (now > top_up_stop_millis)) {
     grinderOff();

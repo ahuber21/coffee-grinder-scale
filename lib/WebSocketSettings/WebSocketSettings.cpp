@@ -212,6 +212,9 @@ const char PROGMEM config_html[] = R"rawliteral(
             setInputValue('min_topup_runtime_ms', settings['min_topup_runtime_ms']);
             setInputValue('min_topup_interval_ms', settings['min_topup_interval_ms']);
             setInputValue('screensaver_timeout_s', settings['screensaver_timeout_s']);
+            for (let i = 0; i < 6; i++) {
+                document.getElementById('topup_lookup_' + i).value = settings['topup_lookup_table'][i];
+            }
         }
 
         function setInputValue(id, value) {
@@ -235,6 +238,11 @@ const char PROGMEM config_html[] = R"rawliteral(
             if (key === 'speed') setActiveButton('.speedButton', value);
             if (key === 'read_samples') setActiveButton('.readSamplesButton', value);
             if (key === 'gain') setActiveButton('.gainButton', value);
+        }
+
+        function submitValue(variable) {
+            const inputValue = document.getElementById(variable).value;
+            socket.send('set:' + variable + ':' + inputValue);
         }
 
         function saveSettings() {
@@ -432,6 +440,49 @@ const char PROGMEM config_html[] = R"rawliteral(
             <input type="text" id="screensaver_timeout_s" placeholder="Enter value" oninput="updateValue('screensaver_timeout_s', this.value)">
         </div>
     </div>
+    <h2 style="color: #ffcc00; margin-top: 30px;">Topup Lookup Table</h2>
+    <div class="setting-container">
+        <div class="description">Topup 0.0-0.1g [s]</div>
+        <div class="text-input">
+            <input type="text" id="topup_lookup_0" placeholder="Enter value">
+            <button class="button submitButton" onclick="submitValue('topup_lookup_0')">Submit</button>
+        </div>
+    </div>
+    <div class="setting-container">
+        <div class="description">Topup 0.1-0.2g [s]</div>
+        <div class="text-input">
+            <input type="text" id="topup_lookup_1" placeholder="Enter value">
+            <button class="button submitButton" onclick="submitValue('topup_lookup_1')">Submit</button>
+        </div>
+    </div>
+    <div class="setting-container">
+        <div class="description">Topup 0.2-0.3g [s]</div>
+        <div class="text-input">
+            <input type="text" id="topup_lookup_2" placeholder="Enter value">
+            <button class="button submitButton" onclick="submitValue('topup_lookup_2')">Submit</button>
+        </div>
+    </div>
+    <div class="setting-container">
+        <div class="description">Topup 0.3-0.4g [s]</div>
+        <div class="text-input">
+            <input type="text" id="topup_lookup_3" placeholder="Enter value">
+            <button class="button submitButton" onclick="submitValue('topup_lookup_3')">Submit</button>
+        </div>
+    </div>
+    <div class="setting-container">
+        <div class="description">Topup 0.4-0.5g [s]</div>
+        <div class="text-input">
+            <input type="text" id="topup_lookup_4" placeholder="Enter value">
+            <button class="button submitButton" onclick="submitValue('topup_lookup_4')">Submit</button>
+        </div>
+    </div>
+    <div class="setting-container">
+        <div class="description">Topup &gt;0.5g [s]</div>
+        <div class="text-input">
+            <input type="text" id="topup_lookup_5" placeholder="Enter value">
+            <button class="button submitButton" onclick="submitValue('topup_lookup_5')">Submit</button>
+        </div>
+    </div>
     <div class="setting-container">
         <div class="description">Reset WiFi</div>
         <div class="button-group">
@@ -612,6 +663,14 @@ void WebSocketSettings::handleWebSocketText(const String &cmd,
         scale.screensaver_timeout_s = obj["screensaver_timeout_s"];
         changed = true;
       }
+      for (int i = 0; i < 6; i++) {
+        char key[20];
+        snprintf(key, sizeof(key), "topup_lookup_%d", i);
+        if (obj.containsKey(key)) {
+          scale.topup_lookup_table[i] = obj[key];
+          changed = true;
+        }
+      }
 
       if (obj.containsKey("resetWiFi") && obj["resetWiFi"]) {
         wifi.reset_flag = true;
@@ -681,6 +740,11 @@ void WebSocketSettings::handleWebSocketText(const String &cmd,
         scale.min_topup_interval_ms = value.toInt();
       } else if (varName == "screensaver_timeout_s") {
         scale.screensaver_timeout_s = value.toInt();
+      } else if (varName.startsWith("topup_lookup_")) {
+        int index = varName.substring(13).toInt();
+        if (index >= 0 && index < 6) {
+          scale.topup_lookup_table[index] = value.toFloat();
+        }
       } else if (varName == "resetWiFi") {
         wifi.reset_flag = true;
       }
@@ -719,6 +783,10 @@ void WebSocketSettings::handleWebSocketText(const String &cmd,
   jsonDoc["min_topup_runtime_ms"] = scale.min_topup_runtime_ms;
   jsonDoc["min_topup_interval_ms"] = scale.min_topup_interval_ms;
   jsonDoc["screensaver_timeout_s"] = scale.screensaver_timeout_s;
+  JsonArray lookupArray = jsonDoc.createNestedArray("topup_lookup_table");
+  for (int i = 0; i < 6; i++) {
+    lookupArray.add(scale.topup_lookup_table[i]);
+  }
 
   serializeJson(jsonDoc, response);
 }

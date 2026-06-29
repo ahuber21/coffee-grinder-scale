@@ -98,6 +98,9 @@
             document.getElementById('target_dose_double').value = response['target_dose_double'];
             document.getElementById('top_up_margin_single').value = response['top_up_margin_single'];
             document.getElementById('top_up_margin_double').value = response['top_up_margin_double'];
+            for (let i = 0; i < 6; i++) {
+                document.getElementById('topup_lookup_' + i).value = response['topup_lookup_table'][i];
+            }
         };
         function setActiveButton(className, value) {
             const buttons = document.querySelectorAll(className);
@@ -184,6 +187,49 @@
         <div class="text-input">
             <input type="text" id="top_up_margin_double" placeholder="Enter value">
             <button class="button submitButton" onclick="submitValue('top_up_margin_double')">Submit</button>
+        </div>
+    </div>
+    <h2 style="color: #ffcc00; margin-top: 30px;">Topup Lookup Table</h2>
+    <div class="setting-container">
+        <div class="description">Topup 0.0-0.1g [s]</div>
+        <div class="text-input">
+            <input type="text" id="topup_lookup_0" placeholder="Enter value">
+            <button class="button submitButton" onclick="submitValue('topup_lookup_0')">Submit</button>
+        </div>
+    </div>
+    <div class="setting-container">
+        <div class="description">Topup 0.1-0.2g [s]</div>
+        <div class="text-input">
+            <input type="text" id="topup_lookup_1" placeholder="Enter value">
+            <button class="button submitButton" onclick="submitValue('topup_lookup_1')">Submit</button>
+        </div>
+    </div>
+    <div class="setting-container">
+        <div class="description">Topup 0.2-0.3g [s]</div>
+        <div class="text-input">
+            <input type="text" id="topup_lookup_2" placeholder="Enter value">
+            <button class="button submitButton" onclick="submitValue('topup_lookup_2')">Submit</button>
+        </div>
+    </div>
+    <div class="setting-container">
+        <div class="description">Topup 0.3-0.4g [s]</div>
+        <div class="text-input">
+            <input type="text" id="topup_lookup_3" placeholder="Enter value">
+            <button class="button submitButton" onclick="submitValue('topup_lookup_3')">Submit</button>
+        </div>
+    </div>
+    <div class="setting-container">
+        <div class="description">Topup 0.4-0.5g [s]</div>
+        <div class="text-input">
+            <input type="text" id="topup_lookup_4" placeholder="Enter value">
+            <button class="button submitButton" onclick="submitValue('topup_lookup_4')">Submit</button>
+        </div>
+    </div>
+    <div class="setting-container">
+        <div class="description">Topup &gt;0.5g [s]</div>
+        <div class="text-input">
+            <input type="text" id="topup_lookup_5" placeholder="Enter value">
+            <button class="button submitButton" onclick="submitValue('topup_lookup_5')">Submit</button>
         </div>
     </div>
     <div class="setting-container">
