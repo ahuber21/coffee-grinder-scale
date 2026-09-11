@@ -1,12 +1,12 @@
 # Status
 
-*Last updated: 2026-09-11 — design phase complete, implementation started.*
+*Last updated: 2026-09-11 — FreeRTOS task skeleton implemented and building.*
 
 ## Where things stand
 
-Planning and design are done; implementation has begun. Branch
+Planning and design are done; implementation is underway. Branch
 `rewrite/rtos-fork`. Standing rules in `AGENTS.md`, full decision log in
-`DECISIONS.md` (D1-D14), all findings in `ARS.md` (AR-001-025, all
+`DECISIONS.md` (D1-D17), all findings in `ARS.md` (AR-001-027, all
 resolved or non-blocking), design docs in `.agent/design/`.
 
 **Design work completed:**
@@ -51,10 +51,52 @@ resolved or non-blocking), design docs in `.agent/design/`.
   counts unchanged). Nothing posts to it yet — that's the firmware's job,
   not built yet.
 
-**Not yet started:** web SPA, FreeRTOS task implementation
-(scale/display/network/settings), wiring the dosing model + PostgREST
-posting into an actual control loop, decommissioning `coffee_grinder_api`
-(waits until the new pipeline is verified in real use).
+- **FreeRTOS task skeleton** (`design/rtos-architecture.md` implemented):
+  all 7 tasks (`lib/ScaleTask`, `lib/DosingTask`, `lib/InputTask`,
+  `lib/DisplayTask`, `lib/SettingsTask`, `lib/NetworkTask`,
+  `lib/TelemetryTask`) created via `xTaskCreatePinnedToCore` with the
+  design doc's priorities/cores/stack sizes (`lib/Messaging/TaskConfig.h`).
+  `src/main.cpp` is now just `initQueuesAndEvents()` + 7 task-creation
+  calls — no FSM/rendering/networking logic of its own (D15). Every §3
+  queue/mailbox is real and wired: button ISRs push `ButtonEdge` with no
+  shared-state writes (AR-001/AR-007's fix), Input task's one debounce path
+  applies uniformly to every button/state (AR-008's fix), Scale task drains
+  to a real queue Dosing task processes every tick, Settings task
+  distributes a `SettingsSnapshot` via one overwrite mailbox per subscriber
+  (AR-009's fix) with validated field writes (AR-016's fix) and NVS I/O
+  stubbed to compiled-in defaults (real NVS read/write is follow-up work,
+  per the task brief), the §8 startup event group gates Dosing/Network/
+  Telemetry behind `SETTINGS_LOADED|SCALE_READY|DISPLAY_READY`, and D12's
+  OTA-refuse-during-grind gate (`otaSafeToStart()`) is real against the
+  shared status bits. `lib/DosingModel/` is genuinely wired into Dosing
+  task's per-sample path (not a stub): `MainGrindModel::addSample`/
+  `predictStopTimeMsWithCoast` drive the main-grind stop decision every
+  `ScaleSample`, `TopupModel::computeTopupDecision`/`recordPulse` drive the
+  TOPUP pulse loop, `CoastModel::recordCoast` closes the loop at STOPPING,
+  and all three get folded into one `PersistRequest` at FINALIZE (§5 — a
+  session-boundary event, never per-sample). AR-011's and AR-004's fixes
+  are concrete in this code (`target_grams_corrected` as the one canonical
+  stop-comparison value; `computeCorrectedTarget()` as the one function
+  both the button and API/`DoseRequest` paths call).
+  Display/Network/Telemetry task *bodies* are stubbed to logging (real
+  ST7735 rendering, WiFiManager/AsyncWebServer/ArduinoOTA, and the
+  PostgREST POST are all follow-up work) — see D15-D17 and AR-026/AR-027
+  for the implementation-pass decisions/findings this produced. The
+  ADS1232 driver is vendored in directly (D6, executed via D16 — the
+  submodule was never checked out in this repo, so its two source files
+  were copied from the sister checkout instead of running
+  `git submodule update --init`). Verified: `pio run -e esp_wroom_02`
+  succeeds (RAM 4.4%, flash 21.7%); `pio test -e native` still 22/22
+  (`lib/DosingModel` itself untouched). Old `lib/API`/`Display`/
+  `WebSocketSettings`/etc. modules are left in place for reference
+  (AR-026) but no longer compiled into `esp_wroom_02` (nothing includes
+  their headers).
+
+**Not yet started:** web SPA, real ST7735 rendering in `DisplayTask`, real
+WiFiManager/AsyncWebServer/ArduinoOTA in `NetworkTask`, real NVS read/write
+in `SettingsTask`, wiring the PostgREST POST into `TelemetryTask`,
+decommissioning `coffee_grinder_api` (waits until the new pipeline is
+verified in real use).
 
 ## Infrastructure on hand
 

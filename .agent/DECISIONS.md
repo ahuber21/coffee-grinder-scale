@@ -146,3 +146,53 @@ Purely additive to `topup-model.md` §4's design, not a redesign — see
 80%/Δ0.05g target specifically, since — unlike topup-pulse precision — it
 isn't capped by the clumping mechanism D13 identified as a hard physical
 ceiling.
+
+**D15 — Task-per-lib layout for the FreeRTOS implementation, plus a shared
+`lib/Messaging/` for message structs/queues/task-config, rather than one
+large `src/` file or folding messaging into each task's own lib.**
+Implementing `design/rtos-architecture.md`: house style already puts each
+logical unit in its own `lib/<Name>/<Name>.h/.cpp` (`Display`, `API`,
+`WebSocketSettings`, ...), so each of the 7 tasks got the same treatment
+(`lib/ScaleTask`, `lib/DosingTask`, `lib/InputTask`, `lib/DisplayTask`,
+`lib/SettingsTask`, `lib/NetworkTask`, `lib/TelemetryTask`), each exposing
+one `createXTask()` entry point that `src/main.cpp` calls after
+`initQueuesAndEvents()`. The §3 message structs, the actual
+queue/mailbox `QueueHandle_t`s, the §8 event-group bits, and the §1/§6.7
+priority/core/stack-size table live in one `lib/Messaging/` (`Messages.h`,
+`Queues.h/.cpp`, `TaskConfig.h`) rather than duplicated per-task or bolted
+onto whichever task happened to be implemented first — every task lib
+includes it, none of them owns it. `src/main.cpp` itself shrinks to just
+`initQueuesAndEvents()` + 7 `createXTask()` calls, matching the design
+doc's spirit that no task's *implementation* belongs in `main.cpp`.
+
+**D16 — Vendor the ADS1232 driver instead of running
+`git submodule update --init` (executing D6, not superseding it).** The
+submodule was never checked out in this repo (empty `lib/ADS1232/`,
+gitlink present). Since D6 had already decided to vendor and drop the
+submodule, the straightforward move was to do that now rather than
+initialize a submodule this repo was about to delete anyway: the driver's
+two source files were copied in directly from
+`../2023-12-10-espresso-scale-eureka` (a second checkout of the *same* repo
+history, per `AGENTS.md` — not a separate/divergent source), `.gitmodules`
+and the `lib/ADS1232` gitlink were removed, and the two files were added as
+ordinary tracked files. No driver code was changed.
+
+**D17 — Dosing task's session FSM reuses the `DisplayMode` enum instead of
+a second parallel state enum.** `rtos-architecture.md` §2 lists `state`
+(session FSM) and treats `DisplayCommand.mode` (§3.2) as a separate field
+Dosing task fills in from that state — but the two are a 1:1 mapping in
+this codebase (every FSM state has exactly one corresponding display
+layout; confirmed against the old `main.cpp`'s `State` enum, whose
+`BUTTON_FILTER`/`BUTTON_PRESSED`/`CONFIGURED` values are absorbed into
+Input task's debounce state machine and Dosing task's transient
+TARE→GRINDING step respectively under the new design, leaving exactly the
+same set as `DisplayMode`). Maintaining two enums that must be kept in
+permanent lockstep for zero behavioral benefit seemed like exactly the kind
+of "organic duplication that silently desyncs" pattern flagged elsewhere in
+this project (see AR-019's lookup-table/label duplication finding for the
+general shape of that risk) — so Dosing task's FSM state *is*
+`DisplayMode` (`DosingState` is a type alias for it in `DosingTask.cpp`),
+with `OTA_UPDATE` simply a value Dosing task never assigns (Network task's
+narrow second-writer case per §7 is unaffected). If a future FSM state ever
+needs to exist without a corresponding display layout (or vice versa), this
+should be revisited — nothing here prevents splitting them later.

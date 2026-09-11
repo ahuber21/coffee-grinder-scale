@@ -630,3 +630,55 @@ Format per entry:
   Implemented in `lib/DosingModel/` (`CoastModel` class,
   `MainGrindModel::predictStopTimeMsWithCoast`), commit `f9fad2f`, 6 new
   unit tests passing (22/22 total in the module).
+
+### AR-026 — Old `lib/` web/display modules are now dead weight, unbuilt but unremoved
+- **Area**: firmware/architecture, cleanup
+- **Status**: open — not blocking, flagged for a later pass
+- **Found**: 2026-09-11, implementing `design/rtos-architecture.md`'s task
+  skeleton (`src/main.cpp` rewrite).
+- **What**: `lib/API`, `lib/Display`, `lib/RawDataWebSocket`,
+  `lib/WebSocketGraph`, `lib/WebSocketLogger`, `lib/WebSocketMetrics`,
+  `lib/WebSocketSettings` are no longer referenced by anything (the new
+  `src/main.cpp` doesn't include their headers) and PlatformIO's chain LDF
+  correctly excludes them from the `esp_wroom_02` build as a result — so
+  they cost nothing at build time, but they're now stale reference material
+  sitting in `lib/` with no indication they're superseded. `Display` in
+  particular still has real, salvageable ST7735 rendering logic (the
+  targeted-`fillRect` partial-redraw discipline AR-018 discusses) that
+  `DisplayTask` will eventually want to port in.
+- **Why it matters**: a future contributor (or agent) browsing `lib/` has no
+  signal that these are pre-rewrite artifacts rather than active code —
+  same class of confusion AR-003 already flagged for `dev/graph`/
+  `dev/settings`. Left in place deliberately for this pass (real ST7735/
+  WiFiManager/AsyncWebServer porting is explicitly out of scope per the
+  task brief that produced this skeleton), but worth either deleting the
+  ones with nothing left to salvage (`API`, `RawDataWebSocket`,
+  `WebSocketGraph`, `WebSocketLogger`, `WebSocketMetrics`) or clearly
+  marking all of them superseded once the tasks that would replace them
+  (`DisplayTask`, `NetworkTask`) have real bodies.
+- **Resolution**: —
+
+### AR-027 — Dosing task's TOPUP loop has no cap on iteration count, only a wall-clock safety cutoff
+- **Area**: firmware/dosing
+- **Status**: open — theoretical, not exercised (no real hardware/relay
+  timing yet to validate against)
+- **Found**: 2026-09-11, `lib/DosingTask/DosingTask.cpp`
+  (`handleTopupSample`'s `TopupPhase::DECIDING` branch and the
+  `topup_timeout_ms * 10` safety cutoff below the switch).
+- **What**: each `TopupModel::computeTopupDecision()` call can in principle
+  keep firing sub-controllable-gap pulses indefinitely if the model's
+  predicted weight consistently undershoots the real gap by a small margin
+  (each pulse closes some of the gap but never enough to drop below
+  `min_topup_grams`, and never enough to trip the `topup_timeout_ms * 10`
+  wall-clock cutoff within a small number of iterations). The `TopupModel`
+  itself (`lib/DosingModel`) has no protection against this either — it's a
+  per-Dosing-task-loop concern, not a model concern.
+- **Why it matters**: low real-world likelihood (§4.5's aim-at-90%-of-gap
+  logic converges fast in practice per `topup-model.md`'s historical data),
+  and the wall-clock cutoff is a real backstop, just a coarse one (10x
+  `topup_timeout_ms` could be several seconds of extra relay activity in a
+  pathological case). Worth adding an explicit max-pulse-count guard
+  alongside the wall-clock one once this runs against real hardware and the
+  actual convergence behavior can be observed, rather than guessing at a
+  number now.
+- **Resolution**: —
