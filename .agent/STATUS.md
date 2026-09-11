@@ -109,15 +109,15 @@ Infrastructure groundwork done during planning:
 
 ## Open questions for the owner
 
-- **AR-022** (blocking model lock-in): is the 80%-of-sessions-within-Δ0.05g
-  accuracy target still the goal as stated, knowing the grinder's own
-  minimum controllable dose increment (~0.15-0.2g) is physically coarser
-  than that tolerance? The 95%/Δ0.2g and overshoot-≤0.3g targets both look
-  solidly achievable either way. See `.agent/design/topup-model.md` §5.
-- **AR-024** (not blocking, low urgency): should an OTA update mid-grind
-  abort the grind, or should OTA be refused while a grind is in progress?
-  Recommended default (abort-and-stop) is fine to proceed with unless the
-  owner prefers otherwise.
+- **AR-022** (blocking model lock-in, the only open question left): is the
+  80%-of-sessions-within-Δ0.05g accuracy target still the goal as stated,
+  knowing the grinder's own minimum controllable dose increment
+  (~0.15-0.2g) is physically coarser than that tolerance? The 95%/Δ0.2g
+  and overshoot-≤0.3g targets both look solidly achievable either way. See
+  `.agent/design/topup-model.md` §5.
+
+~~AR-024~~ resolved — OTA is refused outright while a grind is in
+progress, not aborted mid-grind. See `DECISIONS.md` D12.
 
 ## Decisions made
 

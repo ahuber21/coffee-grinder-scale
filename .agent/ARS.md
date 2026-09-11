@@ -587,4 +587,7 @@ Format per entry:
   triggering one by accident mid-grind), so this doesn't block further
   work; the recommended default ((a), abort-and-stop) can be implemented
   and revisited if the owner prefers (b).
-- **Resolution**: —
+- **Resolution**: Fixed — owner chose (b). Network task refuses to start
+  an OTA flash (rejects `ArduinoOTA`'s begin) while Dosing task is outside
+  `IDLE`/`SCREENSAVER`, rather than aborting a grind already in progress.
+  See `DECISIONS.md` D12.

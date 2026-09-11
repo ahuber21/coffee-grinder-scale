@@ -627,14 +627,26 @@ honor:
   (decoupled from Dosing's FSM, unlike today's `loopIdle()`-only pumping),
   and drives `DisplayCommand{mode=OTA_UPDATE, ota_percent=...}` directly
   into the display mailbox during a flash (the one deliberate second writer
-  to that mailbox — see below). **Safety recommendation**: Network task
-  sets a bit on the shared readiness/status event group (§8) when an OTA
-  flash begins; Dosing task checks that bit every tick and, if a grind is
-  in progress, immediately forces `STOPPING` (relay off) rather than
-  letting an OTA apply interrupt a live grind uncontrolled. This doesn't
-  change who's *allowed* to trigger OTA (that's the human hard-constraint
-  in AGENTS.md, orthogonal) — it's about what the firmware does if one
-  happens to land mid-grind.
+  to that mailbox — see below).
+
+  **Owner decision (D12, resolves AR-024): refuse, don't abort.** Rather
+  than the abort-and-stop default originally recommended below, Network
+  task checks Dosing task's current state (via the same readiness/status
+  event group, §8 — a `DOSING_ACTIVE` bit Dosing sets/clears on entering/
+  leaving anything other than `IDLE`/`SCREENSAVER`) *before* accepting an
+  OTA start, and rejects it outright (`ArduinoOTA.onStart` callback returns
+  without proceeding, or the update handshake is refused earlier if the
+  library allows it) if a grind is in progress. No grind is ever
+  interrupted by an OTA flash; the flash simply doesn't begin until the
+  device is idle. This doesn't change who's *allowed* to trigger OTA
+  (that's the human hard-constraint in AGENTS.md, orthogonal) — it's about
+  what the firmware does if one is attempted mid-grind.
+
+  Original analysis (superseded by the above, kept for context): Network
+  task sets a bit on the shared readiness/status event group (§8) when an
+  OTA flash begins; Dosing task checks that bit every tick and, if a grind
+  is in progress, immediately forces `STOPPING` (relay off) rather than
+  letting an OTA apply interrupt a live grind uncontrolled.
 
   On the "two writers to the display mailbox" point: this isn't a
   single-writer violation in the sense that matters, because the two

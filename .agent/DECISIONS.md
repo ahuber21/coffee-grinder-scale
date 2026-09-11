@@ -102,3 +102,13 @@ owner sign-off.** Added after the rest of the plan was confirmed. Building
 and verifying compilation is always fine and expected; flashing the real
 grinder (or its filesystem image) is the owner's call exclusively, every
 time, until he says otherwise.
+
+**D12 — OTA is refused outright while a grind is in progress, rather than
+aborting an active grind.** Raised by the FreeRTOS task design (AR-024):
+decoupling Network (OTA handling) from Dosing (grind state) reopened
+whether an OTA flash beginning mid-grind should force an immediate stop,
+or simply not be allowed to start. Owner chose the latter — Network task
+rejects the OTA begin while Dosing task is outside `IDLE`/`SCREENSAVER`,
+rather than the design doc's originally-recommended abort-and-stop
+default. See `.agent/design/rtos-architecture.md` §7 for the mechanism
+this replaces.
