@@ -202,7 +202,7 @@ void handleGrindingSample(const ScaleSample &s) {
   // compare against the same canonical value, target_grams_corrected --
   // there is no second variable either could diverge from.
   bool time_estimate_fired = runtime_ms >= predicted_stop_ms;
-  bool raw_weight_fallback_fired = s.grams >= g_target_grams_corrected;
+  bool raw_weight_fallback_fired = delta_weight >= g_target_grams_corrected;
   bool safety_timeout_fired = runtime_ms >= g_settings.grinding_timeout_ms;
 
   if (time_estimate_fired || raw_weight_fallback_fired || safety_timeout_fired) {
@@ -217,7 +217,7 @@ void handleGrindingSample(const ScaleSample &s) {
 
 /** Per-sample TOPUP update: drives the DECIDING/PULSING/SETTLING pulse cycle. */
 void handleTopupSample(const ScaleSample &s) {
-  float gap = g_target_grams - s.grams;
+  float gap = g_target_grams - (s.grams - g_grams_on_grind_start);
 
   switch (g_topup_phase) {
     case TopupPhase::DECIDING: {
@@ -346,9 +346,8 @@ void dosingTaskFn(void *) {
           if (press.button == ButtonId::LEFT || press.button == ButtonId::RIGHT) {
             g_is_double = press.button == ButtonId::RIGHT;
             g_pending_confirm_button = press.button;
-            // Preview the real target immediately, not whatever
-            // g_target_grams happened to hold before this press --
-            // otherwise the CONFIRM screen shows a stale or default value.
+            // Preview the real target now, not whatever g_target_grams
+            // held before this press, so CONFIRM never shows a stale value.
             float base = g_is_double ? g_settings.target_dose_double
                                       : g_settings.target_dose_single;
             computeCorrectedTarget(base, g_is_double, g_target_grams,
@@ -384,10 +383,8 @@ void dosingTaskFn(void *) {
     // Non-sample-driven state transitions.
     switch (g_state) {
       case DosingState::CONFIRM: {
-        // Lapses back to IDLE if nobody confirms or cancels in time --
-        // otherwise a missed button press (or nobody ever pressing one)
-        // leaves this state waiting forever, which also permanently
-        // blocks OTA since CONFIRM counts as an active session.
+        // Lapses back to IDLE if nobody confirms or cancels in time,
+        // rather than waiting forever.
         if (millis() - g_state_entered_ms >= g_settings.confirm_timeout_ms) {
           transitionTo(DosingState::IDLE);
         }
@@ -466,7 +463,10 @@ void dosingTaskFn(void *) {
       transitionTo(DosingState::IDLE);
     }
 
-    if (got_sample || g_state != DosingState::GRINDING) {
+    // Network task owns the display mailbox during an OTA flash --
+    // writing here too would race it and flip the screen mode.
+    bool ota_in_progress = (xEventGroupGetBits(g_sys_events) & kOtaInProgressBit) != 0;
+    if (!ota_in_progress && (got_sample || g_state != DosingState::GRINDING)) {
       sendDisplayCommand();
     }
 

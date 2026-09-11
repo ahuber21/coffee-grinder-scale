@@ -119,6 +119,10 @@ void MainGrindModel::startSession() {
 }
 
 void MainGrindModel::addSample(double runtime_ms, double weight_g) {
+  if (m_have_last_sample && weight_g < m_last_weight_g - m_cfg.max_plausible_drop_g) {
+    return;
+  }
+
   m_have_last_sample = true;
   m_last_runtime_ms = runtime_ms;
   m_last_weight_g = weight_g;
@@ -155,7 +159,11 @@ double MainGrindModel::currentRateEstimate() const {
 double MainGrindModel::predictStopTimeMs(double target_weight_g) const {
   if (!m_have_last_sample) return 0.0;
   double rate = currentRateEstimate();
-  if (rate <= 0.0) return m_last_runtime_ms;
+  // A non-positive rate means the estimate itself is untrustworthy, not
+  // that the target has already been reached -- returning "no prediction"
+  // here defers the stop decision to the raw-weight and safety-timeout
+  // checks instead of firing early on bad data.
+  if (rate <= 0.0) return std::numeric_limits<double>::infinity();
   double remaining_g = target_weight_g - m_last_weight_g;
   if (remaining_g <= 0.0) return m_last_runtime_ms;
   return m_last_runtime_ms + 1000.0 * remaining_g / rate;
@@ -371,8 +379,7 @@ TopupModel::Decision TopupModel::computeTopupDecision(double gap_g,
 
   double duration_ms = deadtimeMs() + 1000.0 * target_weight / s;
 
-  // Hygiene clamp, mirrors the old firmware's
-  // `top_up_seconds <= 0 || top_up_seconds > 5.0f` check.
+  // Hygiene clamp: reject a computed duration that isn't a plausible pulse.
   if (duration_ms <= m_cfg.hygiene_min_duration_ms ||
       duration_ms > m_cfg.hygiene_max_duration_ms) {
     return d;

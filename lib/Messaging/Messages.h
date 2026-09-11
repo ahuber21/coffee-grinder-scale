@@ -126,11 +126,10 @@ struct DoseRequest {
 
 /**
  * The single source of truth for tunable settings, distributed to
- * every task via one overwrite mailbox per subscriber. Mirrors the
- * pre-rewrite firmware's persisted scale-settings field set, minus its
- * `is_changed` flag (unnecessary once writes go through the
- * request/ack path below) and its static topup lookup table (replaced
- * entirely by lib/DosingModel's fitted models).
+ * every task via one overwrite mailbox per subscriber. Persisted via
+ * the write-through path below rather than a dirty flag, and carries
+ * no static topup lookup table -- lib/DosingModel's fitted models
+ * cover that entirely.
  */
 struct SettingsSnapshot {
   uint32_t version = 0;  ///< Bumped by Settings task on every accepted write.
@@ -190,6 +189,21 @@ enum class SettingsFieldId : uint16_t {
   BUTTON_DEBOUNCE_MS,
   WIFI_RESET_FLAG,
   WIFI_REBOOT_FLAG,
+  READ_SAMPLES,
+  SPEED,
+  GAIN,
+  MIN_TOPUP_GRAMS,
+  RATE_CALCULATION_PERCENTAGE,
+  TOPUP_TIMEOUT_MS,
+  GRINDING_TIMEOUT_MS,
+  FINALIZE_TIMEOUT_MS,
+  CONFIRM_TIMEOUT_MS,
+  STABILITY_MIN_WAIT_MS,
+  STABILITY_MAX_WAIT_MS,
+  MIN_TOPUP_RUNTIME_MS,
+  MIN_TOPUP_INTERVAL_MS,
+  SCREENSAVER_TIMEOUT_S,
+  BUTTON_MIN_HOLD_MS,
 };
 
 /** A single validated field write, sent from Network task to Settings task. */

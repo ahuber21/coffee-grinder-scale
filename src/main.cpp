@@ -1,8 +1,7 @@
 /**
- * FreeRTOS task/queue skeleton for the coffee-grinder-scale rewrite.
- * Replaces the old single-loop()/switch(state) firmware with 7
- * independent tasks. This file is deliberately thin: its only job is
- * to create the shared queues/mailboxes/event group and start every
+ * FreeRTOS task/queue skeleton: 7 independent tasks communicating over
+ * queues and mailboxes. This file is deliberately thin: its only job
+ * is to create the shared queues/mailboxes/event group and start every
  * task. All real behavior lives in each task's own lib/<Name>Task
  * module.
  */

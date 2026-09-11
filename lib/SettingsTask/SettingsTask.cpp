@@ -366,6 +366,66 @@ bool applyWrite(const SettingsWriteRequest &req) {
     case SettingsFieldId::WIFI_REBOOT_FLAG:
       g_settings.wifi_reboot_flag = req.value.b;
       return true;
+    case SettingsFieldId::READ_SAMPLES:
+      if (!validReadSamples(static_cast<uint8_t>(req.value.u))) return false;
+      g_settings.read_samples = static_cast<uint8_t>(req.value.u);
+      return true;
+    case SettingsFieldId::SPEED:
+      if (!validSpeedSps(static_cast<uint8_t>(req.value.u))) return false;
+      g_settings.speed = static_cast<uint8_t>(req.value.u);
+      return true;
+    case SettingsFieldId::GAIN:
+      if (!validGain(static_cast<uint8_t>(req.value.u))) return false;
+      g_settings.gain = static_cast<uint8_t>(req.value.u);
+      return true;
+    case SettingsFieldId::MIN_TOPUP_GRAMS:
+      if (!validMinTopupGrams(req.value.f)) return false;
+      g_settings.min_topup_grams = req.value.f;
+      return true;
+    case SettingsFieldId::RATE_CALCULATION_PERCENTAGE:
+      if (!validRateCalcPct(req.value.f)) return false;
+      g_settings.rate_calculation_percentage = req.value.f;
+      return true;
+    case SettingsFieldId::TOPUP_TIMEOUT_MS:
+      if (!validTimeoutMs(req.value.u)) return false;
+      g_settings.topup_timeout_ms = req.value.u;
+      return true;
+    case SettingsFieldId::GRINDING_TIMEOUT_MS:
+      if (!validTimeoutMs(req.value.u)) return false;
+      g_settings.grinding_timeout_ms = req.value.u;
+      return true;
+    case SettingsFieldId::FINALIZE_TIMEOUT_MS:
+      if (!validTimeoutMs(req.value.u)) return false;
+      g_settings.finalize_timeout_ms = req.value.u;
+      return true;
+    case SettingsFieldId::CONFIRM_TIMEOUT_MS:
+      if (!validTimeoutMs(req.value.u)) return false;
+      g_settings.confirm_timeout_ms = req.value.u;
+      return true;
+    case SettingsFieldId::STABILITY_MIN_WAIT_MS:
+      if (!validTimeoutMs(req.value.u)) return false;
+      g_settings.stability_min_wait_ms = req.value.u;
+      return true;
+    case SettingsFieldId::STABILITY_MAX_WAIT_MS:
+      if (!validTimeoutMs(req.value.u)) return false;
+      g_settings.stability_max_wait_ms = req.value.u;
+      return true;
+    case SettingsFieldId::MIN_TOPUP_RUNTIME_MS:
+      if (!validTimeoutMs(req.value.u)) return false;
+      g_settings.min_topup_runtime_ms = req.value.u;
+      return true;
+    case SettingsFieldId::MIN_TOPUP_INTERVAL_MS:
+      if (!validTimeoutMs(req.value.u)) return false;
+      g_settings.min_topup_interval_ms = req.value.u;
+      return true;
+    case SettingsFieldId::SCREENSAVER_TIMEOUT_S:
+      if (!validScreensaverTimeoutS(req.value.u)) return false;
+      g_settings.screensaver_timeout_s = req.value.u;
+      return true;
+    case SettingsFieldId::BUTTON_MIN_HOLD_MS:
+      if (!validTimeoutMs(req.value.u)) return false;
+      g_settings.button_min_hold_ms = req.value.u;
+      return true;
   }
   return false;
 }

@@ -162,11 +162,15 @@ class MainGrindModel {
     double half_life_days = 45.0;
     /** Minimum in-session points before the session fit is trusted at all. */
     int min_session_points = 3;
-    // Fallback bounds (matches the pre-rewrite firmware's
-    // rate_min_valid/rate_max_valid): a folded-in rate outside this
-    // range is discarded.
+    // A folded-in rate outside this physically plausible range is
+    // discarded rather than trusted.
     double min_plausible_rate = 0.3;
     double max_plausible_rate = 2.5;
+    // Real grind weight only increases (mod sensor noise); a sample
+    // implying a bigger drop than this since the last accepted one is a
+    // glitch (e.g. the cup lifted off the scale mid-grind), not data --
+    // held at the last known-good sample instead of folded in.
+    double max_plausible_drop_g = 1.0;
   };
 
   // Two overloads, rather than a `Config cfg = Config()` default
@@ -283,7 +287,7 @@ class TopupModel {
     double aim_fraction = 0.9;
     double overshoot_k_sigma = 2.0;
     double hygiene_min_duration_ms = 0.0;
-    double hygiene_max_duration_ms = 5000.0;  ///< Mirrors the old `top_up_seconds > 5.0f`.
+    double hygiene_max_duration_ms = 5000.0;  ///< Beyond this, a duration isn't a real dose.
   };
 
   /** Outcome of recordPulse(). */

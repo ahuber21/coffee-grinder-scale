@@ -15,6 +15,11 @@ namespace {
 ADS1232 g_ads(ADC_PDWN_PIN, ADC_SCLK_PIN, ADC_DOUT_PIN, ADC_SPEED_PIN,
               ADC_GAIN1_PIN, ADC_GAIN0_PIN);
 
+// Re-tares automatically whenever idle and stable, rate-limited only to
+// avoid calling tare() on every single sample.
+constexpr uint32_t kAutoTareMinIntervalMs = 1000;
+uint32_t g_last_auto_tare_ms = 0;
+
 /** Version of SettingsSnapshot last applied to the ADS1232 driver. */
 uint32_t g_applied_settings_version = 0;
 
@@ -42,10 +47,17 @@ void scaleTaskFn(void *) {
   // calibration is never applied from a default-constructed placeholder.
   xEventGroupWaitBits(g_sys_events, kSettingsLoadedBit, pdFALSE, pdTRUE,
                        portMAX_DELAY);
-  applySettingsIfChanged();
 
+  // Powers the load cell's bridge excitation -- without it the ADC
+  // reads a fixed value regardless of physical force.
+  pinMode(ADC_LDO_EN_PIN, OUTPUT);
+  digitalWrite(ADC_LDO_EN_PIN, HIGH);
+
+  // begin() (which also powers on and calibrates) resets gain/speed to
+  // hardware defaults, so real settings must be applied after it, not
+  // before -- and before initRingBuffer(), which reads ringBufferSize.
   g_ads.begin();
-  g_ads.powerOn();
+  applySettingsIfChanged();
   g_ads.initRingBuffer();
   g_ads.tare();
 
@@ -70,6 +82,13 @@ void scaleTaskFn(void *) {
         .sample_seq = seq++,
         .millis = millis(),
     };
+
+    bool dosing_active = (xEventGroupGetBits(g_sys_events) & kDosingActiveBit) != 0;
+    if (!dosing_active && stable &&
+        sample.millis - g_last_auto_tare_ms >= kAutoTareMinIntervalMs) {
+      g_ads.tare();
+      g_last_auto_tare_ms = sample.millis;
+    }
 
     // Zero-timeout send; on a full queue (Dosing task stalled), drop the
     // oldest sample rather than block the sampler.

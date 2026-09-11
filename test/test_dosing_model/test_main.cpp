@@ -200,6 +200,60 @@ void test_main_grind_model_predicts_earlier_stop_time_with_coast(void) {
                              no_coast_stop_ms - with_coast_stop_ms);
 }
 
+void test_main_grind_model_ignores_sudden_weight_drop(void) {
+  // A cup lifted off the scale mid-grind looks like a sudden large weight
+  // decrease -- addSample() must hold the last known-good sample rather
+  // than fold it in, so neither the fit nor the stop-time prediction
+  // corrupts into an immediate (wrong) "already there" signal.
+  TopupModelV1 persisted = makeDefaultTopupModel();
+  MainGrindModel model(persisted);
+  model.startSession();
+
+  const double rate = 1.0;
+  const double deadtime_s = 0.9;
+  double t_ms = 0.0;
+  for (; t_ms <= 5000.0; t_ms += 250.0) {
+    double t_s = t_ms / 1000.0;
+    double w = t_s < deadtime_s ? 0.0 : rate * (t_s - deadtime_s);
+    model.addSample(t_ms, w);
+  }
+  // last good sample: t=5000ms, weight ~= 1.0*(5-0.9) = 4.1g
+
+  double predicted_before = model.predictStopTimeMs(18.0);
+
+  // Simulate the cup being lifted: weight appears to plunge.
+  model.addSample(t_ms + 250.0, -120.0);
+
+  double predicted_after = model.predictStopTimeMs(18.0);
+  TEST_ASSERT_DOUBLE_WITHIN(1.0, predicted_before, predicted_after);
+
+  // Real samples resume at the pre-glitch trajectory -- the rate estimate
+  // should still reflect them, not the rejected outlier.
+  for (t_ms += 500.0; t_ms <= 10000.0; t_ms += 250.0) {
+    double t_s = t_ms / 1000.0;
+    double w = t_s < deadtime_s ? 0.0 : rate * (t_s - deadtime_s);
+    model.addSample(t_ms, w);
+  }
+  TEST_ASSERT_DOUBLE_WITHIN(0.05, rate, model.currentRateEstimate());
+}
+
+void test_main_grind_model_nonpositive_rate_never_predicts_immediate_stop(void) {
+  // A model with no session data and a pathological (non-positive)
+  // persisted prior must never report "stop right now" -- that must defer
+  // to the raw-weight/safety-timeout checks, not fire on bad data.
+  TopupModelV1 persisted = makeDefaultTopupModel();
+  persisted.rate_hat = -1.0f;  // pathological prior, should never occur in
+                                // practice (finalizeSession() validates this
+                                // before persisting) but must fail safe.
+  MainGrindModel model(persisted);
+  model.startSession();
+  model.addSample(1000.0, 1.0);
+
+  double predicted = model.predictStopTimeMs(18.0);
+  TEST_ASSERT_TRUE(predicted > 1000.0);
+  TEST_ASSERT_FALSE(1000.0 >= predicted);  // never "already there"
+}
+
 // ---------------------------------------------------------------------------
 // Cold-start blending: gradual, not a hard cutover
 // ---------------------------------------------------------------------------
@@ -471,6 +525,8 @@ int main(int argc, char **argv) {
   RUN_TEST(test_main_grind_model_converges_to_known_rate);
   RUN_TEST(test_main_grind_model_predicts_sane_stop_time);
   RUN_TEST(test_main_grind_model_predicts_earlier_stop_time_with_coast);
+  RUN_TEST(test_main_grind_model_ignores_sudden_weight_drop);
+  RUN_TEST(test_main_grind_model_nonpositive_rate_never_predicts_immediate_stop);
 
   RUN_TEST(test_topup_model_blend_is_gradual_not_hard_cutover);
 

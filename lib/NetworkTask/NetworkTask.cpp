@@ -120,6 +120,19 @@ String buildSettingsJson(const SettingsSnapshot &s) {
   doc["min_topup_grams"] = s.min_topup_grams;
   doc["button_debounce_ms"] = s.button_debounce_ms;
   doc["screensaver_timeout_s"] = s.screensaver_timeout_s;
+  doc["read_samples"] = s.read_samples;
+  doc["speed"] = s.speed;
+  doc["gain"] = s.gain;
+  doc["rate_calculation_percentage"] = s.rate_calculation_percentage;
+  doc["topup_timeout_ms"] = s.topup_timeout_ms;
+  doc["grinding_timeout_ms"] = s.grinding_timeout_ms;
+  doc["finalize_timeout_ms"] = s.finalize_timeout_ms;
+  doc["confirm_timeout_ms"] = s.confirm_timeout_ms;
+  doc["stability_min_wait_ms"] = s.stability_min_wait_ms;
+  doc["stability_max_wait_ms"] = s.stability_max_wait_ms;
+  doc["min_topup_runtime_ms"] = s.min_topup_runtime_ms;
+  doc["min_topup_interval_ms"] = s.min_topup_interval_ms;
+  doc["button_min_hold_ms"] = s.button_min_hold_ms;
   String out;
   serializeJson(doc, out);
   return out;
@@ -170,6 +183,66 @@ bool settingsFieldFromName(const char *name, SettingsFieldId &out) {
     out = SettingsFieldId::WIFI_REBOOT_FLAG;
     return true;
   }
+  if (strcmp(name, "read_samples") == 0) {
+    out = SettingsFieldId::READ_SAMPLES;
+    return true;
+  }
+  if (strcmp(name, "speed") == 0) {
+    out = SettingsFieldId::SPEED;
+    return true;
+  }
+  if (strcmp(name, "gain") == 0) {
+    out = SettingsFieldId::GAIN;
+    return true;
+  }
+  if (strcmp(name, "min_topup_grams") == 0) {
+    out = SettingsFieldId::MIN_TOPUP_GRAMS;
+    return true;
+  }
+  if (strcmp(name, "rate_calculation_percentage") == 0) {
+    out = SettingsFieldId::RATE_CALCULATION_PERCENTAGE;
+    return true;
+  }
+  if (strcmp(name, "topup_timeout_ms") == 0) {
+    out = SettingsFieldId::TOPUP_TIMEOUT_MS;
+    return true;
+  }
+  if (strcmp(name, "grinding_timeout_ms") == 0) {
+    out = SettingsFieldId::GRINDING_TIMEOUT_MS;
+    return true;
+  }
+  if (strcmp(name, "finalize_timeout_ms") == 0) {
+    out = SettingsFieldId::FINALIZE_TIMEOUT_MS;
+    return true;
+  }
+  if (strcmp(name, "confirm_timeout_ms") == 0) {
+    out = SettingsFieldId::CONFIRM_TIMEOUT_MS;
+    return true;
+  }
+  if (strcmp(name, "stability_min_wait_ms") == 0) {
+    out = SettingsFieldId::STABILITY_MIN_WAIT_MS;
+    return true;
+  }
+  if (strcmp(name, "stability_max_wait_ms") == 0) {
+    out = SettingsFieldId::STABILITY_MAX_WAIT_MS;
+    return true;
+  }
+  if (strcmp(name, "min_topup_runtime_ms") == 0) {
+    out = SettingsFieldId::MIN_TOPUP_RUNTIME_MS;
+    return true;
+  }
+  if (strcmp(name, "min_topup_interval_ms") == 0) {
+    out = SettingsFieldId::MIN_TOPUP_INTERVAL_MS;
+    return true;
+  }
+  if (strcmp(name, "screensaver_timeout_s") == 0) {
+    out = SettingsFieldId::SCREENSAVER_TIMEOUT_S;
+    return true;
+  }
+  if (strcmp(name, "button_min_hold_ms") == 0) {
+    out = SettingsFieldId::BUTTON_MIN_HOLD_MS;
+    return true;
+  }
   return false;
 }
 
@@ -200,13 +273,20 @@ void handleWsMessage(AsyncWebSocketClient *client, const uint8_t *data, size_t l
     SettingsWriteRequest req{};
     req.field_id = fieldId;
     req.request_id = request_id;
-    if (fieldId == SettingsFieldId::BUTTON_DEBOUNCE_MS) {
-      req.value.u = doc["value"] | static_cast<uint32_t>(0);
-    } else if (fieldId == SettingsFieldId::WIFI_RESET_FLAG ||
-               fieldId == SettingsFieldId::WIFI_REBOOT_FLAG) {
+    if (fieldId == SettingsFieldId::WIFI_RESET_FLAG ||
+        fieldId == SettingsFieldId::WIFI_REBOOT_FLAG) {
       req.value.b = doc["value"] | false;
-    } else {
+    } else if (fieldId == SettingsFieldId::CALIBRATION_FACTOR ||
+               fieldId == SettingsFieldId::TARGET_DOSE_SINGLE ||
+               fieldId == SettingsFieldId::TARGET_DOSE_DOUBLE ||
+               fieldId == SettingsFieldId::TOP_UP_MARGIN_SINGLE ||
+               fieldId == SettingsFieldId::TOP_UP_MARGIN_DOUBLE ||
+               fieldId == SettingsFieldId::MIN_TOPUP_GRAMS ||
+               fieldId == SettingsFieldId::RATE_CALCULATION_PERCENTAGE) {
       req.value.f = doc["value"] | NAN;
+    } else {
+      // Every remaining field (button/ADC/timeout settings) is uint32_t.
+      req.value.u = doc["value"] | static_cast<uint32_t>(0);
     }
     // This is only a syntactic "does this look like a request" check --
     // Settings task is the sole authority on whether the value is legal.
