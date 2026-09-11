@@ -145,7 +145,8 @@ nav.tabs a.active {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 1rem;
+  flex-wrap: wrap;
+  gap: 0.4rem 1rem;
   padding: 0.6em 0;
   border-bottom: 1px solid var(--border);
 }
@@ -172,6 +173,10 @@ nav.tabs a.active {
 
 .muted {
   color: var(--text-dim);
+}
+
+.table-scroll {
+  overflow-x: auto;
 }
 
 table {

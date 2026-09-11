@@ -91,34 +91,36 @@ function SessionDetail({ session }: { session: Session }) {
           about current backend capability rather than a bug here. */}
       <canvas ref={canvasRef} height={180} />
       {events && events.length > 0 && (
-        <table style={{ marginTop: "1rem" }}>
-          <thead>
-            <tr>
-              <th>#</th>
-              <th>type</th>
-              <th>on (ms)</th>
-              <th>off (ms)</th>
-              <th>runtime (ms)</th>
-              <th>before (g)</th>
-              <th>after (g)</th>
-              <th>Δ (g)</th>
-            </tr>
-          </thead>
-          <tbody>
-            {events.map((e) => (
-              <tr key={e.event_id}>
-                <td>{e.pulse_index}</td>
-                <td>{e.event_type}</td>
-                <td>{e.relay_on_at_ms}</td>
-                <td>{e.relay_off_at_ms}</td>
-                <td>{e.runtime_ms}</td>
-                <td>{e.weight_before_g.toFixed(2)}</td>
-                <td>{e.weight_after_g?.toFixed(2) ?? "--"}</td>
-                <td>{e.weight_increment_g?.toFixed(2) ?? "--"}</td>
+        <div className="table-scroll" style={{ marginTop: "1rem" }}>
+          <table>
+            <thead>
+              <tr>
+                <th>#</th>
+                <th>type</th>
+                <th>on (ms)</th>
+                <th>off (ms)</th>
+                <th>runtime (ms)</th>
+                <th>before (g)</th>
+                <th>after (g)</th>
+                <th>Δ (g)</th>
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {events.map((e) => (
+                <tr key={e.event_id}>
+                  <td>{e.pulse_index}</td>
+                  <td>{e.event_type}</td>
+                  <td>{e.relay_on_at_ms}</td>
+                  <td>{e.relay_off_at_ms}</td>
+                  <td>{e.runtime_ms}</td>
+                  <td>{e.weight_before_g.toFixed(2)}</td>
+                  <td>{e.weight_after_g?.toFixed(2) ?? "--"}</td>
+                  <td>{e.weight_increment_g?.toFixed(2) ?? "--"}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       )}
     </div>
   );
@@ -171,30 +173,32 @@ export default function HistoryPage() {
         {!sessions && !error && <p className="muted">Loading from PostgREST...</p>}
         {sessions && sessions.length === 0 && <p className="muted">No sessions recorded yet.</p>}
         {sessions && sessions.length > 0 && (
-          <table>
-            <thead>
-              <tr>
-                <th>Started</th>
-                <th>Mode</th>
-                <th>Target</th>
-                <th>Final</th>
-                <th>Outcome</th>
-              </tr>
-            </thead>
-            <tbody>
-              {sessions.map((s) => (
-                <tr key={s.session_id} className="session-row" onClick={() => setSelected(s)}>
-                  <td>{formatTimestamp(s.started_at)}</td>
-                  <td>{s.mode}</td>
-                  <td>{s.target_weight_g.toFixed(2)}g</td>
-                  <td>{s.final_weight_g !== null ? `${s.final_weight_g.toFixed(2)}g` : "--"}</td>
-                  <td>
-                    <span className={`outcome ${s.outcome}`}>{s.outcome}</span>
-                  </td>
+          <div className="table-scroll">
+            <table>
+              <thead>
+                <tr>
+                  <th>Started</th>
+                  <th>Mode</th>
+                  <th>Target</th>
+                  <th>Final</th>
+                  <th>Outcome</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {sessions.map((s) => (
+                  <tr key={s.session_id} className="session-row" onClick={() => setSelected(s)}>
+                    <td>{formatTimestamp(s.started_at)}</td>
+                    <td>{s.mode}</td>
+                    <td>{s.target_weight_g.toFixed(2)}g</td>
+                    <td>{s.final_weight_g !== null ? `${s.final_weight_g.toFixed(2)}g` : "--"}</td>
+                    <td>
+                      <span className={`outcome ${s.outcome}`}>{s.outcome}</span>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         )}
       </div>
 

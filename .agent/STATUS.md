@@ -163,12 +163,17 @@ resolved or non-blocking), design docs in `.agent/design/`.
   labeled partition. `pio run -t buildfs -e esp_wroom_02` packages it into
   a real LittleFS image (**never** `uploadfs` — that's the owner's call).
   `pio run -e esp_wroom_02` and `pio test -e native` (22/22) both still
-  pass with LittleFS enabled. **Not verified**: actual rendering/
-  interaction in a real browser — the Claude-in-Chrome extension wasn't
-  connected in this session, so only build-time type-checking and a raw
-  HTTP smoke-test of the dev server were possible. Worth a real look in a
-  browser (and ideally against a live device) before considering this
-  done-done.
+  pass with LittleFS enabled. **Also visually verified** in a real Chrome
+  tab against `npm run dev` (desktop + 400px-phone widths): all three
+  tabs render correctly, no console errors, hash routing works without a
+  full reload, WS-disconnected states render correctly, and the History
+  tab's direct browser→PostgREST fetch (D9) genuinely round-tripped
+  against the live `192.168.0.111:3000` deployment with no CORS issues.
+  Found and fixed two real phone-width layout bugs in the process (AR-035)
+  — `.setting-row` not wrapping, and both History tables missing a
+  horizontal-scroll container. **Still not verified**: the actual `/ws`
+  contract against a live ESP32 running this firmware — no hardware has
+  run this build yet (AR-035, still open on that half).
 
 **Not yet started:** decommissioning `coffee_grinder_api` (waits until the
 new pipeline is verified in real use). Everything else the original

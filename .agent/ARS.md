@@ -830,24 +830,37 @@ Format per entry:
   lever exists, not necessarily worth pulling yet.
 - **Resolution**: —
 
-### AR-035 — SPA (`webapp/`) built and type-checked, but never visually verified in a real browser or against a real device
+### AR-035 — SPA (`webapp/`) visually verified in a browser (dev server); still never checked against a live ESP32
 - **Area**: web, firmware/network
-- **Status**: open — needs-owner-verification, not a known bug
-- **Found**: 2026-09-11, building the SPA (D4/D19). `npm run build`
-  (`tsc --noEmit && vite build`) passes clean, and a raw HTTP smoke-test
-  of `npm run dev`'s output confirmed the page's HTML/JS/CSS serve without
-  server errors — but the Claude-in-Chrome browser extension wasn't
-  connected in this session, so no actual rendering, layout, or
-  interactive behavior (WS reconnect handling, chart rendering, settings
-  form round-trip, PostgREST fetch/CORS in a real browser context) was
-  ever exercised. There's also no live ESP32 running this NetworkTask
-  build yet to test the WS contract end-to-end from the browser side —
-  only the firmware's own compile-time check and TelemetryTask's earlier
-  curl-based PostgREST verification exist so far.
-- **Why it matters**: a clean type-check doesn't catch layout bugs, a
-  WebSocket message the frontend mis-parses at runtime despite matching
-  types on paper, or a CORS/mixed-content issue that only shows up in an
-  actual browser. Low risk given how directly the TS types mirror
-  NetworkTask.cpp's actual JSON output (checked by hand, not generated),
-  but this is real unverified surface, not just a formality.
-- **Resolution**: —
+- **Status**: partially resolved. Update 2026-09-11 (same day, later):
+  visually inspected all three tabs (Live/Settings/History) against
+  `npm run dev` in a real Chrome tab (Claude-in-Chrome extension
+  reconnected after a Chrome restart) at both desktop and 400px-phone
+  widths. Confirmed: no console errors on load or navigation, hash-based
+  tab switching works without a full reload, the WS status dot correctly
+  shows disconnected/red with no device present, the "Grind" button is
+  correctly disabled while disconnected, the armed-confirm WiFi
+  reset/reboot pattern works (arms independently per-button, cancels
+  correctly), and — genuinely useful — the History tab's direct
+  browser-to-PostgREST fetch (D9) actually round-tripped live against
+  `192.168.0.111:3000` from the browser with zero CORS errors, correctly
+  rendering "No sessions recorded yet." for the still-empty `v2` tables.
+  Found and fixed two real phone-width layout bugs in the process:
+  `.setting-row` didn't wrap (label/value/input/button all fought for one
+  line at 400px) and both `<table>`s in History.tsx had no horizontal
+  scroll container despite `white-space: nowrap` cells (would have
+  overflowed the page once real session rows exist, since none did at
+  verification time to visually trigger it) — both fixed in
+  `webapp/src/index.css`/`History.tsx`. Still open: no live ESP32 running
+  this NetworkTask build exists yet to test the actual `/ws` contract
+  end-to-end from a browser (message shapes only checked by hand against
+  NetworkTask.cpp's source, never exercised against the real running
+  server) — only the firmware's own compile-time check and TelemetryTask's
+  earlier curl-based PostgREST verification exist for that side.
+- **Why it matters**: a clean type-check doesn't catch a WebSocket message
+  the frontend mis-parses at runtime despite matching types on paper. The
+  layout/CORS/console-error class of risk this AR originally flagged is
+  now covered; the live-device WS integration risk is not, and won't be
+  until real hardware runs this firmware.
+- **Resolution**: partially — see Status. Fully closes once this firmware
+  runs on the real device and the SPA is exercised against it.
