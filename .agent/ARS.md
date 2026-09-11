@@ -976,7 +976,7 @@ Format per entry:
 
 ### AR-040 — Button/state diagnostic logging added over the existing WS "log" channel
 - **Area**: firmware/dosing, firmware/input
-- **Status**: open — deployed for live diagnosis, not yet a completed investigation
+- **Status**: fixed — logging kept as permanent instrumentation
 - **Found**: 2026-09-11, needed to diagnose AR-039's underlying "why
   did button presses stop registering" question without a serial
   cable. `TelemetryType::LOG_LINE` -> the WS `"log"` envelope -> the
@@ -991,5 +991,208 @@ Format per entry:
   press, whether Dosing task receives it, and what it decides to do
   with it, all become visible live over `/ws` without touching the
   device physically.
-- **Resolution**: pending a live session watching the log stream while
-  the owner presses buttons.
+- **Resolution**: the logging directly surfaced AR-041's root cause
+  (asymmetric button wiring). Since it only fires on actual button/state
+  activity, not on a timer, it stays in as permanent low-volume
+  instrumentation rather than being pulled back out.
+
+### AR-041 — Button polarity assumed uniform across all three buttons
+- **Area**: firmware/input
+- **Status**: fixed
+- **Found**: 2026-09-11, live: pressing LEFT/RIGHT/BACK produced no
+  state change. AR-040's debounce logging showed presses never
+  reaching the "accepted" branch. Reading `git show main:src/main.cpp`
+  showed the real hardware wiring: LEFT/RIGHT are `INPUT_PULLUP` +
+  `FALLING` (active-low), BACK is `INPUT_PULLDOWN` + `RISING`
+  (active-high) -- asymmetric by hardware design, not a uniform
+  active-HIGH scheme.
+- **Why it matters**: the rewrite's `InputTask` used one `INPUT` +
+  confirm-on-HIGH path for all three buttons, so LEFT/RIGHT (which
+  idle HIGH and pull LOW when pressed) never registered a press at
+  all.
+- **Resolution**: `pinMode` set per-button to match the real wiring
+  (`INPUT_PULLUP` for LEFT/RIGHT, `INPUT_PULLDOWN` for BACK), and a
+  `kActiveLevel[3]` lookup table replaces the single hardcoded
+  "confirm HIGH" check in both the ISR and the debounce verification.
+
+### AR-042 — Load-cell bridge excitation (ADC_LDO_EN_PIN) never powered
+- **Area**: firmware/scale
+- **Status**: fixed
+- **Found**: 2026-09-11, live: the scale reading never changed under
+  physical force, even after AR-041's button fix let a grind start.
+  `ADC_LDO_EN_PIN` was defined in `defines.h` but never referenced
+  anywhere in the rewrite's `ScaleTask`.
+- **Why it matters**: without powering the load cell's bridge
+  excitation, the ADS1232 reads a fixed value regardless of applied
+  force -- the scale is completely unresponsive, not just noisy or
+  miscalibrated.
+- **Resolution**: `pinMode(ADC_LDO_EN_PIN, OUTPUT); digitalWrite(ADC_LDO_EN_PIN, HIGH);`
+  added before `g_ads.begin()` in `ScaleTask::scaleTaskFn`.
+
+### AR-043 — Gain/speed/read_samples settings clobbered by ADS1232::begin()
+- **Area**: firmware/scale
+- **Status**: fixed
+- **Found**: 2026-09-11, live: even after AR-042, the scale's gain
+  was suspected still at its power-on default of 1 rather than the
+  configured 128.
+- **Why it matters**: `ADS1232::begin()` hardcodes the gain pins to
+  their power-on default (gain=1) as part of powering on and
+  calibrating the chip. `ScaleTask` was calling
+  `applySettingsIfChanged()` (which applies gain/speed/read_samples)
+  *before* `begin()`, so every real setting was immediately
+  overwritten back to the hardware default the moment `begin()` ran.
+- **Resolution**: reordered `ScaleTask::scaleTaskFn`'s init sequence to
+  `begin() -> applySettingsIfChanged() -> initRingBuffer() -> tare()`
+  -- settings are applied strictly after `begin()`'s reset, and before
+  `initRingBuffer()`, which reads the now-correct `read_samples` value.
+
+### AR-044 — DosingTask and NetworkTask raced on the display mailbox during OTA
+- **Area**: firmware/dosing, firmware/network, firmware/display
+- **Status**: fixed
+- **Found**: 2026-09-11, live: the display flickered rapidly through
+  multiple screens during an OTA flash.
+- **Why it matters**: `DosingTask` asserts its own display mode on
+  essentially every loop iteration (every ~5ms), while `NetworkTask`
+  asserts `OTA_UPDATE` sporadically as flash progress updates arrive.
+  Both write the same overwrite-mailbox, so whichever task wrote most
+  recently wins -- the two modes flip back and forth, each transition
+  forcing a full-screen clear in `DisplayTask`.
+- **Resolution**: `DosingTask` now skips its own `sendDisplayCommand()`
+  call while `kOtaInProgressBit` is set, ceding the display mailbox to
+  `NetworkTask` for the duration of the flash.
+
+### AR-045 — Weight overflow past the one-decimal layout showed a "MAX" placeholder
+- **Area**: firmware/display
+- **Status**: fixed
+- **Found**: 2026-09-11, owner feedback: didn't want the actual value
+  hidden behind a placeholder when the reading gets too wide to fit
+  the normal one-decimal layout.
+- **Resolution**: past the same width threshold that used to trigger
+  "MAX", `DisplayTask` now renders the full integer value
+  (`snprintf("%.0f", ...)`) instead.
+
+### AR-046 — Scale never auto-tared while idle
+- **Area**: firmware/scale
+- **Status**: fixed
+- **Found**: 2026-09-11, owner feedback: a scale left sitting idle
+  should self-correct small drift/residue instead of requiring a
+  manual tare every time, and with no magnitude threshold gating it --
+  any idle+stable reading should be re-tared.
+- **Resolution**: `ScaleTask` now calls `g_ads.tare()` whenever
+  `kDosingActiveBit` is clear and the current sample is `stable`,
+  rate-limited to once per second purely to avoid calling `tare()` on
+  every single sample.
+
+### AR-047 — GRINDING/TOPUP stop conditions compared absolute weight against target, not weight-since-tare
+- **Area**: firmware/dosing
+- **Status**: fixed
+- **Found**: 2026-09-11, live: starting a dose from a scale reading
+  far from zero (e.g. right after removing something from the scale,
+  before AR-046's auto-tare had a chance to catch up) caused the
+  session to jump straight to FINALIZE with no grinding or topup
+  activity.
+- **Why it matters**: `handleGrindingSample`'s raw-weight fallback and
+  `handleTopupSample`'s gap calculation both compared the scale's
+  current *absolute* reading against `target_grams`/
+  `target_grams_corrected`, which are only meaningful relative to the
+  weight recorded at grind start (`g_grams_on_grind_start`). Whenever
+  that baseline isn't near zero, the computed gap is wildly wrong (in
+  this case implausibly large), the topup model correctly refuses to
+  fire on it, and the existing "accept the undershoot" fallback path
+  sends the session straight to FINALIZE.
+- **Resolution**: both comparisons now use the weight delta since
+  `g_grams_on_grind_start`, matching the delta-based math
+  `handleGrindingSample`'s time-estimate check already used.
+
+### AR-048 — Settings write path and broadcast covered only 6 of ~23 SettingsSnapshot fields
+- **Area**: firmware/settings, firmware/network, web
+- **Status**: fixed
+- **Found**: 2026-09-11, owner feedback: gain/speed/read_samples and
+  most timeout/topup-model settings, all previously adjustable, were
+  missing from the SPA's Settings page entirely.
+- **Why it matters**: `SettingsTask.cpp` already had a validator for
+  every `SettingsSnapshot` field, but `SettingsFieldId`,
+  `settingsFieldFromName`, and `applyWrite` only covered
+  calibration/dose/margin/debounce/wifi -- the rest were unreachable
+  from any client no matter what the SPA sent, and `buildSettingsJson`
+  didn't broadcast them either, so they weren't even visible.
+- **Resolution**: extended `SettingsFieldId`, `settingsFieldFromName`,
+  `applyWrite`, and `buildSettingsJson` to cover every field except the
+  two write-only WiFi action flags. The SPA's Settings page now has a
+  Basic section plus a "Show advanced settings" section (gain/speed as
+  hardware-constrained dropdowns, the ring-buffer window, and every
+  timeout/topup-model tunable).
+
+### AR-049 — A mid-grind sensor glitch could corrupt the online rate model and trigger an immediate false "done"
+- **Area**: firmware/dosing, lib/DosingModel
+- **Status**: fixed
+- **Found**: 2026-09-11, live: lifting the cup off the scale mid-grind
+  (weight briefly reads far below the grind-start baseline) caused the
+  session to jump straight to FINALIZE with no further grinding --
+  distinct from AR-047, which was about the *pre-dose* baseline, not a
+  glitch arriving after GRINDING had already started correctly.
+- **Why it matters**: `MainGrindModel::addSample` folded every raw
+  sample into its online regression with no plausibility check at all
+  (unlike `TopupModel::recordPulse`, which already has hard-bound and
+  statistical-consistency rejection for exactly this class of glitch).
+  A single wild outlier could corrupt the fitted slope, and
+  `predictStopTimeMs` compounded it: a non-positive rate estimate was
+  treated as "stop right now" instead of "this estimate is
+  untrustworthy" -- the least safe possible interpretation of bad data.
+- **Resolution**: `addSample` now rejects (holds the last known-good
+  sample instead of folding in) any sample implying more than a 1g drop
+  since the last accepted one -- real grind weight only increases, mod
+  noise. `predictStopTimeMs` now returns "no prediction" (never fires)
+  rather than "stop now" when the rate is non-positive. Two native
+  tests added (`test_main_grind_model_ignores_sudden_weight_drop`,
+  `test_main_grind_model_nonpositive_rate_never_predicts_immediate_stop`).
+
+### AR-050 — Dynamic ADC speed switching (attempted, reverted)
+- **Area**: firmware/scale
+- **Status**: wontfix -- reverted per owner direction after repeated live failures
+- **Found**: 2026-09-11, owner request: escalate the ADC to 80 SPS while
+  the reading is actively changing (manual weight changes or an active
+  grind), fall back to 10 SPS once settled, for a snappier display
+  without sacrificing at-rest precision.
+- **What happened**: three attempts, each defeated by the same
+  underlying issue -- `ADS1232::getRaw()`'s own "changing" flag (a fixed
+  0.02%-of-mean per-sample deviation threshold) is not a reliable
+  movement signal once something is actually *acting* on it in real
+  time. (1) Using the driver's flag directly to decide when to fall
+  back to 10 SPS failed because 80 SPS's higher per-sample noise trips
+  it almost continuously. (2) Trusting the driver's flag to *escalate*
+  at 10 SPS still oscillated, because ordinary noise apparently trips
+  it at 10 SPS too, just less often -- harmless when the only consumer
+  was auto-tare (a skipped cycle is invisible), not when it drives a
+  full speed switch. (3) A fully external, driver-independent detector
+  (EWMA-smoothed grams, rolling-range tolerance, dwell-time hysteresis)
+  finally stopped the oscillation, but the owner judged the live result
+  still not acceptable ("the transitions should not happen") and asked
+  to drop the feature rather than continue iterating.
+- **Why it matters**: this is a standing finding about the ADS1232
+  driver's stability heuristic itself, not just about this feature --
+  it should not be assumed reliable as an automatic decision trigger at
+  any single sample rate without an external corroborating signal and
+  real hysteresis. A future attempt at this feature (or anything else
+  reacting to `stable`/`isChanging` in real time) should start from
+  that premise rather than re-discovering it.
+- **Resolution**: `ScaleTask` reverted to static, settings-controlled
+  ADC speed (`applySettingsIfChanged()` calls `setSpeed()` directly
+  again, as before this investigation). No dynamic switching in the
+  current firmware.
+
+### AR-051 — DisplayTask's boot splash bypassed the main render loop's mode tracking
+- **Area**: firmware/display
+- **Status**: fixed
+- **Found**: 2026-09-11, owner feedback: the boot screen interfered
+  with display updates.
+- **Why it matters**: `displayTaskFn()` drew the "Eureka" splash via a
+  direct call to `drawCentered()` *before* entering the main loop and
+  before `last`/`haveLast` existed -- a side channel the loop's
+  mode-change detection (`cmd.mode != last.mode`) had no knowledge of,
+  duplicating logic `renderMode()`'s own `BOOT` case already covers.
+- **Resolution**: the boot splash is now seeded as the loop's initial
+  `last` state (`last.mode = DisplayMode::BOOT`) and rendered once
+  through the exact same `renderMode()` dispatch every other screen
+  uses, removing the special-cased direct draw and the `haveLast` flag
+  it existed for.

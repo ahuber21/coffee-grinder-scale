@@ -267,3 +267,30 @@ one-letter-plus-number code that only resolves inside this project's own
 internal tracking docs is not. Recorded in `AGENTS.md`'s process
 expectations so it's followed automatically going forward, not just
 applied retroactively once and forgotten.
+
+**D22 — Visual design direction: iOS/macOS system colors and the
+`-apple-system` font stack, everywhere, on both the TFT and the SPA.**
+Owner feedback: the inherited look (flat yellow/cyan/green on the TFT,
+a monospace-terminal dark theme on the SPA) reads dated ("straight out
+of 1970") for a project meant to be a showcase. Rather than a bespoke
+palette, both surfaces now use the same real iOS/macOS dark-mode system
+colors (`systemBlue #0A84FF`, `systemGreen #30D158`, label/secondary-
+label opacities, `systemGray` elevation levels) and, on the SPA, the
+`-apple-system, BlinkMacSystemFont, ...` font stack -- which renders as
+actual San Francisco on Apple hardware with zero font download, and a
+sensible native-UI fallback everywhere else, rather than a webfont
+fetched over the network (the device's SPA should keep working with no
+internet access, LAN-only). The TFT's font itself is unchanged (a
+custom Adafruit GFX bitmap font was considered and rejected: flash
+headroom is down to ~85KB after AR-034's/AR-048's Settings-exposure
+growth, and even a narrow-character-set custom font risks that budget
+for a typography win the existing dirty-rect layouts can't safely
+absorb without live-device visual verification of every redrawn
+region). The TFT's actual improvements are the color/hierarchy change
+plus new, geometrically-isolated elements added at zero flash cost: a
+thin top-of-screen progress bar (grinding/topup/finalize and OTA), and
+small accent underlines on BOOT/CONFIRM -- deliberately kept clear of
+the tightly-fitted, already-live-verified number layouts (IDLE's fixed
+decimal-point anchoring, the grinding block's dynamically centered
+digit layout) rather than risk a pixel-overflow regression that
+couldn't be caught without the physical device in hand.

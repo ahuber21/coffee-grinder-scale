@@ -1,15 +1,90 @@
 # Status
 
-*Last updated: 2026-09-11 — all 7 FreeRTOS tasks have real bodies, the
-firmware has run on the physical device for the first time (OTA), and
-the scale reads real calibrated weight on it.*
+*Last updated: 2026-09-11 — after the live-debugging session below, the
+owner handed off with open-ended direction: drop the dynamic-ADC-speed
+feature (repeatedly oscillated live, three attempts), fix a display
+boot-screen bug, and give both the TFT and the SPA a real visual
+redesign ("should look like an Apple product"). All of that is done and
+deployed; see the second half of this section for specifics. See also
+`two_paragraph_breakdown.md` for a short, always-current summary.*
 
 ## Where things stand
 
 Planning and design are done; implementation is underway. Branch
 `rewrite/rtos-fork`. Standing rules in `AGENTS.md`, full decision log in
-`DECISIONS.md` (D1-D21), all findings in `ARS.md` (AR-001-038, all
+`DECISIONS.md` (D1-D22), all findings in `ARS.md` (AR-001-051, all
 resolved or non-blocking), design docs in `.agent/design/`.
+
+**Live debugging session (2026-09-11, after the first OTA deploy):**
+diagnosed and fixed, in order, using WS `"log"`-channel diagnostics
+(no serial cable access) rather than guessing: buttons not registering
+at all (AR-041, asymmetric active-high/active-low wiring the rewrite
+had assumed was uniform), the scale reading a fixed value regardless of
+force (AR-042, load-cell bridge excitation never powered), gain/speed
+silently reverting to hardware power-on defaults (AR-043, settings
+applied before `ADS1232::begin()` instead of after), and a display
+flicker during OTA (AR-044, `DosingTask`/`NetworkTask` racing on the
+same display mailbox). Then a batch of 5 owner-requested UX fixes: the
+OTA flicker (same as AR-044), a full-integer display instead of a
+"MAX" placeholder past the one-decimal layout's width (AR-045),
+unconditional auto-tare while idle (AR-046), a display frame-rate floor
+raised from 30fps to 60fps after confirming via live measurement that
+30fps was hitting its floor with zero rendering overrun (so the cap
+itself, not render time, was the limiting factor), and confirming
+FINALIZE already showed live weight (no fix needed). Two more real bugs
+surfaced from continued live use: GRINDING/TOPUP's stop-condition math
+compared absolute scale weight against the target instead of the
+weight change since the grind's software-tare baseline, causing a
+session to jump straight to FINALIZE with no grinding when the
+baseline wasn't near zero (AR-047); and the settings write
+path/broadcast only ever covered 6 of ~23 `SettingsSnapshot` fields,
+so gain/speed/read_samples and most timeout/topup-model tunables were
+silently unreachable from the SPA despite already having validators in
+`SettingsTask.cpp` (AR-048) — the Settings page now has a Basic section
+plus a "Show advanced settings" section covering every field.
+
+**Continued live use (2026-09-11, same session) surfaced two more real
+bugs, both fixed:** a sensor glitch mid-grind (e.g. lifting the cup)
+could corrupt the online rate model and force an immediate false
+FINALIZE, since the per-sample regression had no plausibility guard and
+a non-positive rate estimate was (wrongly) read as "stop now" rather
+than "untrustworthy" (AR-049, two new native tests). Separately, the
+owner asked for the ADC to dynamically run at 80 SPS while the reading
+is actively changing and fall back to 10 SPS once settled, for snappier
+response without sacrificing at-rest precision — three implementation
+attempts all ended up oscillating live for the same underlying reason
+(the ADS1232 driver's own "changing" flag isn't a reliable trigger for
+a real-time decision at any single sample rate), and the owner asked to
+drop the feature rather than keep iterating (AR-050, logged as a
+standing finding for any future attempt). `ScaleTask` is back to
+static, settings-controlled ADC speed.
+
+**Handoff session (2026-09-11, owner stepped away with open-ended
+direction):** "the transitions should not happen [dynamic speed] ...
+work on reviewing the codebase and making everything better ... improve
+the UI design ... it should look like an Apple product ... you have
+full freedom." Completed: (1) the dynamic-speed revert above; (2) fixed
+a structural `DisplayTask` bug where the boot splash was drawn via a
+direct call before the main render loop's mode-change tracking existed,
+bypassing it entirely rather than flowing through the same path as
+every other screen (AR-051); (3) a real visual redesign of both the TFT
+and the SPA around iOS/macOS system colors and (on the SPA) the
+`-apple-system` font stack (D22) — the TFT gained a top-of-screen
+progress bar and small accent underlines without any custom font (flash
+headroom is too tight, ~85KB, to safely add one), and the SPA was fully
+reskinned (segmented-control nav, grouped-list settings rows, translucent
+status pills, tabular-number readouts) while keeping every existing CSS
+class name so no component logic changed. Verified: firmware builds
+clean and 24/24 native tests pass after every change in this session;
+the SPA build was visually checked in a real Chrome tab (Live/Settings/
+History, including the "Show advanced settings" section) against the
+dev server — desktop width only; the sandboxed browser tooling couldn't
+actually shrink its viewport to confirm phone width this session, so
+that's leaning on the CSS having kept the same flex/wrap structure
+already phone-verified pre-redesign (AR-035), not a fresh visual check.
+Both firmware and the SPA are deployed to the device and confirmed
+serving (HTTP 200, clean boot, settings snapshot round-trips
+correctly).
 
 **Design work completed:**
 - **Audit** of the existing firmware (20 findings, `ARS.md`). Nothing
@@ -250,7 +325,14 @@ deployed and verified on the physical device.
 
 ## Open questions for the owner
 
-None right now.
+- **TFT burn-in / lifetime**: the display already shows some burn-in
+  from running 24/7. Owner raised two possible mitigations: (1) the
+  screensaver's idle timer currently only changes what's shown, not the
+  panel's power state -- extend it to actually blank/sleep the panel
+  after some idle time; (2) tie the panel's power to the actual
+  grinder/coffee-machine's on/off state, either pulled from the owner's
+  Home Assistant instance or by having the ESP32 poll the machine's
+  state directly. Needs a design decision before implementation.
 
 ## Parked ideas (out of scope for this rewrite)
 

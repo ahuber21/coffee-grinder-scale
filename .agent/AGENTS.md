@@ -146,3 +146,15 @@ source of truth.
   to open `DECISIONS.md`/the design doc/`ARS.md` to understand it. Citing
   a real file path (`.agent/design/topup-model.md`) is fine since that's
   directly openable, not an opaque code.
+- **No comments that only make sense in light of history.** A comment
+  must explain the code that is there, for a reader who has never seen
+  any other version of it — never "the old code did X", "previously Y",
+  "no longer Z", "mirrors the legacy firmware's W", or a reference to a
+  label/function/file that this same change just removed. That framing
+  rots the moment the comparison point is gone (the old code, once
+  deleted, leaves the comment meaningless) and adds nothing a reader
+  standing in front of only the current code needs. If a numeric
+  constant or a design choice has real, non-obvious justification,
+  state the justification itself (the physical/behavioral reason),
+  not where the number was previously copied from. That kind of
+  before/after narrative belongs in the commit message, not the file.
