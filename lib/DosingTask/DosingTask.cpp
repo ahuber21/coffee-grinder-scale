@@ -127,6 +127,10 @@ void sendTelemetry(TelemetryType type, float grams = 0, float target = 0,
   ev.delta_grams = delta;
   ev.raw_adc = g_have_sample ? g_last_sample.raw_adc : 0;
   ev.stable = g_have_sample ? g_last_sample.stable : false;
+  // TARGET-only fields (see Messages.h) -- harmless to set unconditionally
+  // since only Telemetry task's TARGET handler reads them.
+  ev.is_double = g_is_double;
+  ev.target_grams_corrected = g_target_grams_corrected;
   // Zero-timeout send, drop-and-count on full -- Dosing never blocks on
   // Telemetry (§3.4, principle #4).
   xQueueSend(g_telemetry_q, &ev, 0);

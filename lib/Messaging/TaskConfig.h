@@ -51,9 +51,12 @@ constexpr UBaseType_t kNetworkPriority = 3;
 constexpr uint32_t kNetworkStackBytes = 8192;
 constexpr int kNetworkCore = kCorePro;
 
-// #7 Telemetry -- §6.6
+// #7 Telemetry -- §6.6. Stack bumped from the design doc's original 6144 to
+// 8192 (matching Network's) once the real body used HTTPClient/WiFiClient --
+// their internal header/response buffers push noticeably past what the
+// queue-drain-and-forward stub needed.
 constexpr UBaseType_t kTelemetryPriority = 2;
-constexpr uint32_t kTelemetryStackBytes = 6144;
+constexpr uint32_t kTelemetryStackBytes = 8192;
 constexpr int kTelemetryCore = kCorePro;
 
 }  // namespace TaskConfig
