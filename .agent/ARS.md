@@ -109,3 +109,373 @@ Format per entry:
   than assumed once the display driver is re-examined, since getting this
   wrong would produce very confusing intermittent bugs.
 - **Resolution**: —
+
+### AR-007 — Back-button ISR has zero debounce and bypasses all state gating, causing spurious display clears mid-grind
+- **Area**: firmware/architecture (extends AR-001)
+- **Status**: open
+- **Found**: 2026-09-11, `src/main.cpp:219-226` (`back_button_isr` lambda,
+  attached with `attachInterrupt(..., RISING)`), compared against
+  `button_interrupt<pin>` (lines 138-163) and the `BUTTON_PRESSED` dispatch
+  in `loop()` (lines 268-277).
+- **What**: `button_interrupt<pin>` (left/right) only reacts when
+  `state == CONFIRM` or `state == IDLE || SCREENSAVER`, and is gated by a
+  time-based debounce (`now - button_pressed_millis <
+  settings.scale.button_debounce_ms`, line 142) before it does anything.
+  `back_button_isr` has neither guard: it unconditionally sets
+  `old_state_button_press = state; state = BUTTON_PRESSED; button = back;`
+  regardless of current state, and with no debounce check at all. If `back`
+  is pressed (or bounces) while the machine is e.g. `RUNNING`, the very next
+  `loop()` iteration sees `state != old_state_loop` → `display.clear()`
+  fires, then the `BUTTON_PRESSED` case restores `state =
+  old_state_button_press` (since `old_state_button_press` is neither `DEBUG`
+  nor `IDLE`) — which triggers a *second* `need_to_clear` → a second
+  `display.clear()` on the following iteration, plus one skipped
+  `loopRunning()` iteration (missed scale/graph/rawData sample).
+- **Why it matters**: this is a second, structurally different race/flicker
+  hazard beyond the one AR-001 already flags (which is about `state`/
+  `button` being written from ISR context at all). Even once that's fixed
+  with a proper queue, the *asymmetry* between the two ISRs (no debounce,
+  no state check on `back`) is a design inconsistency that should be
+  resolved deliberately in the rewrite, not just ported — it's a plausible
+  contributor to the "sporadic glitches" the README mentions, specifically
+  visible as a flicker during active grinding when `back` is bumped.
+- **Resolution**: —
+
+### AR-008 — CONFIRM's second button press skips the noise-debounce state that the first press gets
+- **Area**: firmware/architecture
+- **Status**: open
+- **Found**: 2026-09-11, `src/main.cpp:146-154` (`button_interrupt<pin>`,
+  `state == CONFIRM` branch) vs. `loopButtonFilter()` (lines 404-422).
+- **What**: the *first* button press (IDLE/SCREENSAVER → BUTTON_FILTER)
+  goes through `loopButtonFilter()`, which re-samples `digitalRead(button)`
+  after `button_debounce_min_hold` (20ms) and reverts to IDLE if the pin
+  isn't still held low — an explicit contact-bounce/noise filter. The
+  *second* press, while in `CONFIRM` (confirming the dose and arming
+  `grinderOn()` via `TARE`→`CONFIGURED`), transitions straight from ISR
+  context to `TARE` with only the time-based debounce
+  (`button_pressed_millis`) applied — it never passes through
+  `BUTTON_FILTER`.
+- **Why it matters**: a single noise glitch on the button GPIO while sitting
+  in `CONFIRM` (e.g. the machine is bumped, EMI from the grinder motor
+  relay) can look like a valid confirm press and immediately start the
+  grinder with no hold-time verification, whereas the identical glitch
+  arriving in `IDLE` would be caught and discarded. This asymmetry should
+  be a deliberate, stated choice in the rewrite, not an accident of how the
+  state machine grew.
+- **Resolution**: —
+
+### AR-009 — `settings.scale.*` is read from ISR/loop context while written from the AsyncTCP web-server task with no synchronization
+- **Area**: firmware/architecture (a second race distinct from AR-001)
+- **Status**: open
+- **Found**: 2026-09-11, `lib/WebSocketSettings/WebSocketSettings.cpp`
+  `handleWebSocketText()` (lines 561-756) writes `scale.*` fields directly
+  from the ESPAsyncWebServer/AsyncTCP callback context (a different
+  FreeRTOS task, commonly pinned to the other core from `loop()`).
+  Meanwhile `src/main.cpp` reads `settings.scale.*` pervasively from
+  `loop()` and — notably — from **inside the button ISR itself**:
+  `button_interrupt<pin>` at line 142 reads
+  `settings.scale.button_debounce_ms` directly.
+- **What**: none of `Scale`'s fields (`unsigned long` timers, `float`
+  calibration/rate values, the `topup_lookup_table[6]` array) are atomic,
+  `volatile`, or protected by a mutex/critical section. A settings-page
+  "Save" can race with an in-progress read of the same multi-byte field
+  from the main loop or an ISR, risking a torn read (e.g. a `float` or
+  `unsigned long` observed as a mix of old/new bytes) on a dual-core part.
+- **Why it matters**: this is a second, independent instance of the
+  ISR/cross-task shared-state hazard AR-001 already flags for `state`/
+  `button` — but for the settings struct, which is larger, written far more
+  rarely (good) yet touched from *many* more read sites including directly
+  inside an `IRAM_ATTR` handler (bad: reading a non-trivial struct field
+  from ISR context while another task can be mid-write is a genuine bug
+  class, not just poor style). The rewrite's FreeRTOS task design should
+  route settings updates through the same queue/notification discipline as
+  input events, or at minimum guard the struct with a spinlock/mutex and
+  keep ISR reads to `volatile` scalars only.
+- **Resolution**: —
+
+### AR-010 — EEPROM struct-evolution "migration" blindly byte-copies a prefix with no validation
+- **Area**: firmware/settings (extends AR-005)
+- **Status**: open
+- **Found**: 2026-09-11, `lib/WebSocketSettings/WebSocketSettings.cpp:794-820`
+  (`loadScaleFromEEPROM`), introduced in commit `dcbebfd` ("run time
+  modifications").
+- **What**: AR-005 already flags that there's no real migration path; this
+  is the concrete mechanism that exists instead. On magic mismatch, the
+  code assumes the *previous* struct layout's first 8 fields
+  (`read_samples` … `top_up_margin_double`) are byte-identical in position
+  and type to the *current* struct's first 8 fields ("This works because we
+  moved magic to the end, so the memory layout of the start matches" —
+  comment at line 805), and copies them out of the raw EEPROM bytes with
+  **no range/sanity validation** before calling `saveScaleToEEPROM()`. On a
+  genuinely blank/erased EEPROM (all `0xFF`), `calibration_factor` would be
+  read as the float bit-pattern `0xFFFFFFFF` (NaN) and fed straight into
+  `scale.setCalFactor()` in `setupScale()` with no check.
+- **Why it matters**: this "migration" is correct only by a fragile,
+  undocumented invariant — the *next* time a field is inserted, reordered,
+  or resized anywhere in that 8-field prefix (not just anywhere in the
+  struct), this silently reads garbage into calibration/target-dose values
+  instead of falling back to defaults, and there's nothing that would catch
+  it (no bounds check, no NaN check). Worth deciding deliberately in the
+  rewrite: real versioned migration (a version field + explicit per-version
+  upgrade functions) vs. accepting "wrong version = reset to defaults" as
+  the simpler, safer contract.
+- **Resolution**: —
+
+### AR-011 — Weight-based fallback stop threshold uses the *uncorrected* target, undermining the topup-margin strategy if the rate/time estimate never fires
+- **Area**: firmware/dosing
+- **Status**: open
+- **Found**: 2026-09-11, `src/main.cpp:605-614` (`loopRunning`), specifically
+  line 608: `if ((grams > target_grams) || (stop_time_calculated && now >=
+  calculated_stop_millis))`. Confirmed intentional via commit `ad0c227`
+  ("use weight comparison only as fallback, prioritize calculated
+  runtime"), which changed this from `target_grams_corrected` to
+  `target_grams`.
+- **What**: the *primary* stop mechanism is a rate/time estimate
+  (`calculated_stop_millis`), computed once `grams` crosses
+  `rate_calculation_percentage` of `target_grams` (line 568-570). The
+  *fallback* — meant only to catch cases where the estimate never engages
+  (e.g. `stop_time_calculated` never becomes true because the flow-rate
+  threshold is never reached, a slow start, or a jam) — compares raw
+  `grams` against the **full** `target_grams`, not
+  `target_grams_corrected` (`target_grams` minus the configured topup
+  margin). If the primary mechanism never fires, the grinder runs
+  continuously all the way to the full target weight in one pour, entirely
+  skipping the topup-margin design (stop short, then fine-adjust in small
+  pulses during `TOPUP`) that the rest of the system is built around.
+- **Why it matters**: `DECISIONS.md` D7 sets a hard cap on overshoot
+  (≤0.3g, "weighted as more critical to avoid than undershoot") precisely
+  because a single continuous pour to full target has much worse worst-case
+  accuracy than a margin-then-topup approach. This fallback path is the one
+  case in the current code where that safety margin is silently dropped.
+  Worth explicitly deciding in the new topup model whether the fallback
+  should ever target anything other than `target_grams_corrected`.
+- **Resolution**: —
+
+### AR-012 — Connection-status indicator dot is never erased, and isn't part of either layout's change-detection
+- **Area**: firmware/display
+- **Status**: open
+- **Found**: 2026-09-11, `lib/Display/Display.cpp` — `drawConnectionIndicator`
+  (lines 674-681) only draws when `color != 0`, with no corresponding
+  "erase" branch for `color == 0`. In `displayGrindingLayout` (lines
+  138-308), the "skip if nothing visible changed" check (lines 190-199,
+  `colorChangedForFPS`/`sameCurrent`/`sameTarget`/`sameTime`) never
+  compares `connectionIndicatorColor` at all — only the big-digit text
+  color is tracked for change detection. `displayIdleLayout` *does* track
+  `lastIdleConnectionColor` (line 371-372), but still has no erase path
+  when the new color is `0`.
+- **What**: (1) once a client connects and the small status circle
+  (`drawConnectionIndicator`, bottom-left, 3px radius) is drawn in a color,
+  it is never cleared when all clients disconnect (`color` reverts to `0`)
+  — it stays on screen as a stale artifact until the next full
+  `display.clear()` (i.e. next state transition). (2) In the grinding
+  layout specifically, an indicator-color-only change (e.g. a metrics
+  client connects mid-grind while the weight/time text happens to be
+  unchanged that tick) is dropped entirely and never drawn, because it's
+  outside the change-detection comparison.
+- **Why it matters**: directly relevant to the "display rendering, FPS/
+  flicker" area the audit asked about — this is a real, reproducible visual
+  bug (stale/incorrect connection indicator), not just a flicker
+  inefficiency. The rewrite's redraw-diffing should explicitly include
+  every visible element (including status indicators) in its dirty-check,
+  and erase-on-change needs to be symmetric with draw-on-change.
+- **Resolution**: —
+
+### AR-013 — No WebSocket endpoint ever calls `cleanupClients()`
+- **Area**: firmware/web (resource leak)
+- **Status**: open
+- **Found**: 2026-09-11, grep across `lib/` for `cleanupClients` returns no
+  matches. All five endpoints (`WebSocketLogger`, `WebSocketSettings`,
+  `WebSocketGraph`, `WebSocketMetrics`, `RawDataWebSocket`) construct an
+  `AsyncWebSocket` and register `onEvent`, but none periodically call
+  `AsyncWebSocket::cleanupClients()`.
+- **What**: ESPAsyncWebServer's own guidance is that `cleanupClients()`
+  should be called periodically (typically once per `loop()`) to reap
+  client objects/buffers for connections that have already closed;
+  otherwise they can linger in the socket's internal client list. This
+  codebase never does so, on any of the five sockets.
+- **Why it matters**: over a long uptime with repeated browser
+  connect/disconnect cycles (settings page reloads, graph tab left open
+  across WiFi hiccups, phone browser backgrounding/foregrounding), this is
+  a slow heap leak — plausibly part of why long-uptime devices in this
+  class eventually need a reboot. Cheap and mechanical to fix; worth
+  carrying the fix (a single `cleanupClients()` call per loop, or per
+  socket) into the rewrite's consolidated single-channel design (D4) from
+  day one.
+- **Resolution**: —
+
+### AR-014 — Per-socket connection caps are inconsistent, and two sockets have none at all
+- **Area**: firmware/web
+- **Status**: open
+- **Found**: 2026-09-11: `WebSocketSettings::onWebSocketEvent` caps at 1
+  client (`WebSocketSettings.cpp:538`), `RawDataWebSocket`'s handler caps at
+  1 (`RawDataWebSocket.cpp:22`), `WebSocketLogger::onWebSocketEvent` caps at
+  3 (`WebSocketLogger.cpp:161`) — but `WebSocketGraph::handleWebSocketEvent`
+  is a literal empty stub ("Handle WebSocket events if needed",
+  `WebSocketGraph.cpp:198-203`) with no cap at all, and
+  `WebSocketMetrics::handleEvent` (`WebSocketMetrics.cpp:22-32`) also never
+  checks `server->count()`.
+- **What**: three different connection-limit policies (1, 3, unlimited)
+  across five conceptually-similar endpoints, with no stated rationale for
+  the difference — reads as organic growth (each socket bolted on
+  separately) rather than a deliberate policy.
+- **Why it matters**: `WebSocketGraph` and `WebSocketMetrics` broadcast via
+  `_ws.textAll()` on every update (graph: on every `updateGraphData` call;
+  metrics: throttled to ~6-7Hz but still continuous during a grind) — an
+  unbounded number of forgotten-open browser tabs each cost a `textAll()`
+  send and, per AR-013, are never cleaned up either. Combined, these two
+  findings compound: the sockets most likely to accumulate stale clients
+  are exactly the ones with no cap. The rewrite's single consolidated
+  channel (D4) sidesteps this by construction, but it's worth confirming
+  the new design picks one deliberate connection-limit policy rather than
+  inheriting the inconsistency.
+- **Resolution**: —
+
+### AR-015 — `/api/getDosage` has no input validation and builds its JSON response by unescaped string concatenation
+- **Area**: firmware/dosing, web
+- **Status**: open
+- **Found**: 2026-09-11, `lib/API/API.cpp:15-33`
+  (`handleGetDosageRequest`).
+- **What**: the `grams` query parameter is parsed with
+  `gramsParam.toFloat()`, which silently returns `0.0` for any non-numeric
+  input — there is no distinction between "caller asked for 0g" and
+  "caller sent garbage". There is also no range check (negative values,
+  absurdly large values) before `newDosageValue`/`newValueReceived` are
+  latched and later consumed by `loopIdle()` (which applies the AR-004
+  hardcoded correction and moves the state machine to `CONFIRM`). The
+  success response is built as `"{\"dosage\": \"" + gramsParam + "
+  grams\"}"` — the raw, unescaped request parameter is spliced directly
+  into a JSON string literal, so a value containing `"` or control
+  characters produces a malformed JSON response.
+- **Why it matters**: this endpoint is unauthenticated and reachable to
+  anything on the LAN (consistent with the project's accepted-risk posture
+  per D5, so not a "fix the security model" ask) — but as a matter of basic
+  robustness, a malformed/negative/garbage `grams` value should be rejected
+  with a 400 rather than silently coerced to 0 and threaded through the
+  dosing state machine. The physical confirm-button gate (CONFIRM state)
+  limits the blast radius, but the API's own response is still incorrect
+  for adversarial input independent of what the firmware does with the
+  value.
+- **Resolution**: —
+
+### AR-016 — Unvalidated `rate_default` setting can drive a divide-by-zero and undefined-behavior float→integer cast
+- **Area**: firmware/dosing, firmware/settings
+- **Status**: open
+- **Found**: 2026-09-11, `src/main.cpp:580-595` (`loopRunning`) combined
+  with `lib/WebSocketSettings/WebSocketSettings.cpp:622-625` /
+  `716-722` (settings ingestion for `rate_default`, `rate_min_valid`,
+  `rate_max_valid` — accepted with no bounds checking, see also AR-009).
+- **What**: when the measured `calculated_rate` falls outside
+  `[rate_min_valid, rate_max_valid]`, it's replaced with
+  `settings.scale.rate_default` (line 584) with no validation that
+  `rate_default` itself is positive/non-zero. `run_duration =
+  target_grams_corrected / calculated_rate` (line 588) then divides by
+  whatever was set. If a settings-page edit (or a bad `batch:` payload)
+  sets `rate_default` to `0` — nothing in `handleWebSocketText` rejects
+  that — this produces `run_duration = inf` (or NaN if
+  `target_grams_corrected` is also 0), which is then cast to
+  `unsigned long` at line 595 (`(unsigned long)(run_duration * 1000)`):
+  converting a non-finite float to an integer type is undefined behavior
+  in C++, not just "a very large number."
+- **Why it matters**: a single bad value in the settings UI (typo,
+  copy-paste error, or a future automated tuning pipeline writing a
+  degenerate value) can produce UB in the stop-time calculation for every
+  subsequent grind until corrected. The rewrite's settings validation
+  should reject/clamp non-positive values for anything used as a divisor,
+  not just trust values coming off the wire.
+- **Resolution**: —
+
+### AR-017 — `loopButtonPressedDebug()`'s `left`/`right` cases are unreachable dead code
+- **Area**: firmware/architecture
+- **Status**: open
+- **Found**: 2026-09-11, `src/main.cpp:450-465`.
+- **What**: `loopButtonPressedDebug()` is only invoked when `state ==
+  BUTTON_PRESSED` and `old_state_button_press == DEBUG` (see the dispatch
+  at lines 268-277). The *only* code path that can produce
+  `old_state_button_press == DEBUG` is `back_button_isr` (lines 220-225),
+  which unconditionally sets `button = back` in the same breath. The
+  left/right `button_interrupt<pin>` ISR never fires a `state` transition
+  while `state == DEBUG` (its guard only allows `state == CONFIRM` or
+  `state == IDLE || SCREENSAVER`, `main.cpp:146-159`), so `button` can
+  never be `left` or `right` at the point `loopButtonPressedDebug()` runs.
+  Its `case left: state = DEBUG; break;` and `case right: state = DEBUG;
+  break;` (lines 452-457) are therefore provably unreachable.
+- **Why it matters**: small, but a concrete example of dead code from
+  organic growth — the debug-mode exit path presumably intended left/right
+  to also do *something* in debug mode (stay in debug? cycle a
+  sub-view?), but wiring never allows it. Worth deciding in the rewrite
+  whether debug mode should actually respond to left/right, rather than
+  silently porting unreachable branches forward.
+- **Resolution**: —
+
+### AR-018 — `displayConfirmLayout` full-screen-clears on every redraw, with a comment admitting the author wasn't sure this was right
+- **Area**: firmware/display
+- **Status**: open
+- **Found**: 2026-09-11, `lib/Display/Display.cpp:460-554`
+  (`displayConfirmLayout`), particularly the comment block at lines 480-491:
+  *"...since the user complained about flicker, we should avoid full clear
+  if possible, but since the value doesn't change often in confirm screen
+  ... we can afford a full clear on first draw, and then nothing. However,
+  to support the 'large digits' style ... we need the smart clear logic."*
+- **What**: every other layout function in this file
+  (`displayGrindingLayout`, `displayIdleLayout`, `displayScreensaver`) was
+  specifically rewritten (per commit `40c3dc3`, "fix display clears") to do
+  targeted `fillRect` clears of only the region that changed, precisely to
+  avoid the flicker the comment references. `displayConfirmLayout` is the
+  one holdout still doing `m_display.fillScreen(ST7735_BLACK)`
+  unconditionally on every value change (line 532), and the comment
+  explicitly flags this as a known gap rather than a deliberate choice
+  ("we might want to..." / "we will just clear... or the whole screen if we
+  want to be sure").
+- **Why it matters**: matches the audit's "comment reveals the author knew
+  it was incomplete" pattern directly. In practice low-impact today (this
+  screen only redraws once per value, gated by `lastTargetGrams ==
+  targetGrams`), but it's an inconsistency a future maintainer would
+  reasonably assume was intentional if not flagged, and the rewrite should
+  apply the same partial-redraw discipline uniformly rather than leaving
+  one screen as the unexplained exception.
+- **Resolution**: —
+
+### AR-019 — Topup lookup-table bucket boundaries are duplicated (and must stay in sync) between firmware and the settings UI
+- **Area**: firmware/dosing, web
+- **Status**: open
+- **Found**: 2026-09-11, `src/main.cpp:704-719` (`loopTopUp`, the
+  `gap <= 0.1f / 0.2f / 0.3f / 0.4f / 0.5f` → `index` ladder feeding
+  `settings.scale.topup_lookup_table[index]`) vs. the six hardcoded bucket
+  labels in `lib/WebSocketSettings/WebSocketSettings.cpp:445-484`
+  ("Topup 0.0-0.1g [s]" … "Topup >0.5g [s]").
+- **What**: the mapping from weight-gap to lookup-table index is a
+  hand-written if/else ladder in firmware; the *meaning* of each of the 6
+  table slots (the gap ranges) is separately hardcoded as prose labels in
+  the settings page HTML. Nothing ties these together structurally — the
+  array size (6) and the bucket edges (0.1/0.2/0.3/0.4/0.5) are asserted in
+  two independent places.
+- **Why it matters**: low risk today since both were added together in the
+  same commit (`3be7842`, "use LUT for topup times"), but it's exactly the
+  kind of pairing that silently desyncs the next time either side is
+  tuned — someone changes the bucket count or edges in firmware without
+  remembering the UI labels are now lying about what each field controls
+  (or vice versa: relabels the UI without realizing firmware logic must
+  match). Worth generating the table/label pairing from one source of
+  truth in the rewrite (matches D7's move away from this lookup table
+  entirely, but the general "don't hand-duplicate a mapping across two
+  files" lesson applies wherever settings UI and firmware logic must agree
+  on structure).
+- **Resolution**: —
+
+### AR-020 — OTA `upload_port` in `platformio.ini` hardcodes an IP the project's own docs say is stale
+- **Area**: firmware/build
+- **Status**: open — trivial to fix, noted for completeness
+- **Found**: 2026-09-11, `platformio.ini:38`
+  (`[env:esp_wroom_02_ota]`, `upload_port = 192.168.0.118`).
+- **What**: `.agent/AGENTS.md` records that the device "was
+  `192.168.0.118` / mDNS `esp32-98cdac595620` before rename" and is now
+  reachable at `eureka.local`. The OTA build environment still hardcodes
+  the old numeric IP.
+- **Why it matters**: harmless as long as nobody runs `pio run -e
+  esp_wroom_02_ota -t upload` against a stale address (and per the hard
+  constraint in `AGENTS.md`, nobody but the owner should be running OTA
+  uploads at all right now) — but it's a small piece of config rot that
+  would silently fail or target the wrong host if DHCP ever reassigns that
+  IP. Worth pointing `upload_port` at `eureka.local` in the rewrite's
+  `platformio.ini` instead of a numeric address, consistent with D5.
+- **Resolution**: —

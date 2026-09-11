@@ -1,14 +1,39 @@
 # Status
 
-*Last updated: 2026-09-11 — after planning, before implementation begins.*
+*Last updated: 2026-09-11 — audit pass complete, topup data analysis in
+progress, implementation not yet started.*
 
 ## Where things stand
 
-Planning is complete. The full scope, architecture, and constraints for the
-rewrite are settled and written down (`AGENTS.md` for the standing rules,
-`DECISIONS.md` for the reasoning behind each one). Nothing has been
-implemented yet. The new branch `rewrite/rtos-fork` exists and is currently
-just the old codebase plus this `.agent/` directory.
+Planning is complete (`AGENTS.md` for standing rules, `DECISIONS.md` D1-D11
+for the reasoning). Nothing has been implemented yet — this is still design/
+audit phase. The new branch `rewrite/rtos-fork` exists with the old codebase
+plus this `.agent/` directory.
+
+**Audit pass done.** A full read-only review of the existing firmware
+(`src/`, `lib/`, `include/`, `platformio.ini`) is complete, cross-checked
+against commit history. 20 findings logged in `ARS.md` (AR-001 through
+AR-020 — 6 from initial planning-time reading, 14 from the dedicated audit
+pass). Most consequential:
+- **AR-009**: the settings struct (calibration, timing constants, the
+  topup lookup table) is read from ISR context and written from the
+  web-server task with zero synchronization — a second shared-state race
+  beyond the one already known (AR-001).
+- **AR-011**: the weight-based fallback stop check compares against the
+  *full* target rather than the margin-reduced one, meaning if the primary
+  time-estimate never engages, the grinder can pour straight to full
+  target in one continuous run — bypassing the topup-margin strategy the
+  whole overshoot-avoidance goal (D7) depends on. Needs to be addressed
+  deliberately in the new dosing design, not just ported forward.
+- **AR-013/014**: none of the five WebSocket endpoints ever call
+  `cleanupClients()`, and their connection caps are inconsistent (1/3/
+  unlimited) — a real slow heap leak over long uptime. The new consolidated
+  single-channel design (D4) should get this right from the start.
+
+None of these are surprising given the project's organic-growth history,
+and none contradict "mostly bug-free in day-to-day use" — they're latent/
+edge-case issues, not things misbehaving right now. Full detail in
+`ARS.md`.
 
 Infrastructure groundwork done during planning:
 - Read-only Postgres role (`claude_agent`) created on `192.168.0.111` for
@@ -23,22 +48,22 @@ Infrastructure groundwork done during planning:
 
 ## What's next (in rough order)
 
-1. **Audit pass** over the existing firmware — read everything, log real
-   findings to `ARS.md` (six seeded already from planning-time reading;
-   expect more). This informs the architecture work rather than blocking
-   it.
-2. **Topup/dosing model design** — analyze the historical `topup`/
-   `progress` data properly (distribution of current errors, what a
-   recency-weighted fit buys vs. the current static lookup table) and
+1. ~~Audit pass over the existing firmware~~ — done, see above.
+2. **Topup/dosing model design** — in progress. Analyzing the historical
+   `topup`/`progress` data (distribution of current errors, what a
+   recency-weighted fit buys vs. the current static lookup table) to
    propose a concrete model before writing firmware code against it.
 3. **FreeRTOS task architecture** — design the task/queue boundaries
    (scale sampling, dosing control, display, network, logging) before
-   implementing any of them.
+   implementing any of them. Should account for AR-001/AR-007/AR-008/AR-009
+   (the input and settings race conditions) by construction.
 4. **PostgREST deployment plan** — schema for the new `sessions` table,
    INSERT-only role, systemd unit — as a concrete plan before touching the
    live Proxmox host.
 5. **Web SPA** — framework choice, LittleFS build pipeline, page/tab
-   layout replacing the three old served pages.
+   layout replacing the three old served pages. Should account for
+   AR-012/013/014 (display indicator bug, WebSocket cleanup/connection-cap
+   inconsistency) by construction rather than porting them forward.
 6. Implementation, in whatever order the above design work suggests makes
    sense — almost certainly scale + dosing core first (the part with real
    behavioral stakes), display and web app after.
