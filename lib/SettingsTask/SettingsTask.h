@@ -5,8 +5,12 @@
 // other task gets a private, read-only SettingsSnapshot mailbox -- never the
 // shared struct itself (the concrete AR-009 fix).
 //
-// Per the task brief, NVS read/write is stubbed to compiled-in defaults for
-// now (logged, not actually persisted) -- the task/mailbox structure and the
-// validated single-writer write path are real.
+// SettingsSnapshot is persisted for real via the Arduino Preferences
+// library (NVS namespace "settings", one key per field -- see
+// SettingsTask.cpp). Load falls back per-field to compiled-in defaults on
+// first boot / a missing or out-of-range key, validated through the same
+// predicates the live write path uses. TopupModelV1 (§5) NVS round-tripping
+// is still stubbed -- a separate follow-up, out of scope for the
+// SettingsSnapshot persistence pass.
 
 void createSettingsTask();

@@ -1,6 +1,7 @@
 #include "SettingsTask.h"
 
 #include <Arduino.h>
+#include <Preferences.h>
 #include <cmath>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
@@ -15,23 +16,308 @@ namespace {
 SettingsSnapshot g_settings;  // canonical copy -- only this task ever writes it
 TopupModelV1 g_topup_model;   // canonical cold copy -- ditto
 
-// --- NVS stand-ins (§4/§5) ---------------------------------------------
+// --- NVS (§4) -------------------------------------------------------------
 //
-// Per the task brief: real NVS read/write is a follow-up. These stubs give
-// the rest of the task the exact same call shape a real Preferences-backed
-// implementation would have, so swapping them out later doesn't touch
-// anything else in this file.
+// Namespace + per-field keys for SettingsSnapshot. ESP32 NVS caps both
+// namespace and key names at 15 characters -- every key below is checked
+// against that limit. One `Preferences` handle, opened read-only or
+// read-write per call and closed immediately after (this task's polling
+// loop only touches NVS on an actual accepted settings change, so holding
+// the handle open permanently buys nothing).
+Preferences g_prefs;
+
+constexpr const char *kNvsNamespace = "settings";
+
+// Bumped only if SettingsSnapshot's on-NVS shape changes in a way old data
+// can't be safely reinterpreted as (field added/removed/retyped). No
+// per-version upgrade function exists yet because this is the first real
+// persistence pass -- see rtos-architecture.md §4's versioned-migration
+// discipline for the intended shape if/when one is needed.
+constexpr uint32_t kSettingsSchemaVersion = 1;
+
+constexpr const char *kKeySchemaVer = "schema_ver";
+constexpr const char *kKeyReadSamples = "read_samples";
+constexpr const char *kKeySpeed = "speed";
+constexpr const char *kKeyGain = "gain";
+constexpr const char *kKeyCalFactor = "cal_factor";
+constexpr const char *kKeyDoseSingle = "dose_single";
+constexpr const char *kKeyDoseDouble = "dose_double";
+constexpr const char *kKeyMarginSingle = "margin_sing";
+constexpr const char *kKeyMarginDouble = "margin_dbl";
+constexpr const char *kKeyMinTopupG = "min_topup_g";
+constexpr const char *kKeyRateCalcPct = "rate_calc_pct";
+constexpr const char *kKeyTopupToMs = "topup_to_ms";
+constexpr const char *kKeyGrindToMs = "grind_to_ms";
+constexpr const char *kKeyFinalToMs = "final_to_ms";
+constexpr const char *kKeyConfirmToMs = "confirm_to_ms";
+constexpr const char *kKeyStabMinMs = "stab_min_ms";
+constexpr const char *kKeyStabMaxMs = "stab_max_ms";
+constexpr const char *kKeyMinTopupRt = "min_topup_rt";
+constexpr const char *kKeyTopupIntMs = "topup_int_ms";
+constexpr const char *kKeySsTimeoutS = "ss_timeout_s";
+constexpr const char *kKeyBtnDebounce = "btn_debounce";
+constexpr const char *kKeyBtnHoldMs = "btn_hold_ms";
+constexpr const char *kKeyWifiReset = "wifi_reset";
+constexpr const char *kKeyWifiReboot = "wifi_reboot";
+
+// --- Field validators (§4, the AR-016 fix) --------------------------------
+//
+// Single source of truth per field. The live write path (applyWrite, below)
+// and the NVS load path both call these -- the NVS layer sits *behind* this
+// validation rather than duplicating or bypassing it: applyWrite validates
+// before a write ever lands in g_settings, saveSettingsToNvs only ever
+// persists that already-validated in-memory copy, and loadSettingsFromNvs
+// re-runs the same checks against whatever NVS actually contains (which may
+// predate a firmware change, or in principle have been corrupted) before
+// trusting it back into memory.
+//
+// Fields without a SettingsFieldId yet (no live write path in this skeleton
+// -- see Messages.h) still get a validator here, used only by the NVS loader,
+// so corrupt/out-of-range NVS content for those fields also falls back to
+// the compiled-in default instead of being trusted blindly.
+
+bool validCalibrationFactor(float v) { return std::isfinite(v) && v != 0.0f; }
+bool validDoseGrams(float v) { return std::isfinite(v) && v > 0.0f && v <= 100.0f; }
+bool validTopUpMargin(float v) { return std::isfinite(v) && v >= 0.0f; }
+bool validButtonDebounceMs(uint32_t v) { return v > 0 && v <= 2000; }
+
+// read_samples feeds ADS1232::setRingBufferSize, capped at
+// lib/ADS1232/ADS1232.h's RING_BUFFER_MAX_SIZE (48).
+bool validReadSamples(uint8_t v) { return v >= 1 && v <= 48; }
+// speed/gain feed ADS1232::setSpeed/setGain, which only accept these exact
+// hardware-defined values (lib/ADS1232/ADS1232.cpp).
+bool validSpeedSps(uint8_t v) { return v == 10 || v == 80; }
+bool validGain(uint8_t v) { return v == 1 || v == 2 || v == 64 || v == 128; }
+bool validMinTopupGrams(float v) { return std::isfinite(v) && v >= 0.0f && v <= 5.0f; }
+bool validRateCalcPct(float v) { return std::isfinite(v) && v > 0.0f && v <= 1.0f; }
+// Generic bound for the various ms-scale timeouts/wait windows: must be
+// positive (used as timing bounds, same divisor/UB-adjacent concern as
+// AR-016) and below a generous 10-minute ceiling.
+bool validTimeoutMs(uint32_t v) { return v > 0 && v <= 600000UL; }
+bool validScreensaverTimeoutS(uint32_t v) { return v > 0 && v <= 86400UL; }
+
+// --- NVS load/save (§4) ----------------------------------------------------
 
 bool loadSettingsFromNvs(SettingsSnapshot &out) {
-  (void)out;
-  Serial.println("[Settings] NVS load stubbed -- using compiled-in defaults");
-  return false;  // "no valid data" -> caller falls back to defaults, like AR-010's fix
+  if (!g_prefs.begin(kNvsNamespace, /*readOnly=*/true)) {
+    Serial.println(
+        "[Settings] NVS namespace not found (first boot / blank partition) "
+        "-- using compiled-in defaults");
+    return false;
+  }
+
+  const uint32_t stored_schema = g_prefs.getUInt(kKeySchemaVer, 0);
+  if (stored_schema != kSettingsSchemaVersion) {
+    Serial.printf(
+        "[Settings] NVS schema_ver=%u (expected %u) -- using compiled-in "
+        "defaults\n",
+        static_cast<unsigned>(stored_schema),
+        static_cast<unsigned>(kSettingsSchemaVersion));
+    g_prefs.end();
+    return false;
+  }
+
+  const SettingsSnapshot defaults{};  // per-field fallback values
+  out = defaults;
+
+  uint8_t read_samples = g_prefs.getUChar(kKeyReadSamples, defaults.read_samples);
+  if (validReadSamples(read_samples)) {
+    out.read_samples = read_samples;
+  } else {
+    Serial.println("[Settings] NVS read_samples out of range -- using default");
+  }
+
+  uint8_t speed = g_prefs.getUChar(kKeySpeed, defaults.speed);
+  if (validSpeedSps(speed)) {
+    out.speed = speed;
+  } else {
+    Serial.println("[Settings] NVS speed invalid -- using default");
+  }
+
+  uint8_t gain = g_prefs.getUChar(kKeyGain, defaults.gain);
+  if (validGain(gain)) {
+    out.gain = gain;
+  } else {
+    Serial.println("[Settings] NVS gain invalid -- using default");
+  }
+
+  float cal_factor = g_prefs.getFloat(kKeyCalFactor, defaults.calibration_factor);
+  if (validCalibrationFactor(cal_factor)) {
+    out.calibration_factor = cal_factor;
+  } else {
+    Serial.println("[Settings] NVS calibration_factor invalid -- using default");
+  }
+
+  float dose_single = g_prefs.getFloat(kKeyDoseSingle, defaults.target_dose_single);
+  if (validDoseGrams(dose_single)) {
+    out.target_dose_single = dose_single;
+  } else {
+    Serial.println("[Settings] NVS target_dose_single invalid -- using default");
+  }
+
+  float dose_double = g_prefs.getFloat(kKeyDoseDouble, defaults.target_dose_double);
+  if (validDoseGrams(dose_double)) {
+    out.target_dose_double = dose_double;
+  } else {
+    Serial.println("[Settings] NVS target_dose_double invalid -- using default");
+  }
+
+  float margin_single = g_prefs.getFloat(kKeyMarginSingle, defaults.top_up_margin_single);
+  if (validTopUpMargin(margin_single)) {
+    out.top_up_margin_single = margin_single;
+  } else {
+    Serial.println("[Settings] NVS top_up_margin_single invalid -- using default");
+  }
+
+  float margin_double = g_prefs.getFloat(kKeyMarginDouble, defaults.top_up_margin_double);
+  if (validTopUpMargin(margin_double)) {
+    out.top_up_margin_double = margin_double;
+  } else {
+    Serial.println("[Settings] NVS top_up_margin_double invalid -- using default");
+  }
+
+  float min_topup_grams = g_prefs.getFloat(kKeyMinTopupG, defaults.min_topup_grams);
+  if (validMinTopupGrams(min_topup_grams)) {
+    out.min_topup_grams = min_topup_grams;
+  } else {
+    Serial.println("[Settings] NVS min_topup_grams invalid -- using default");
+  }
+
+  float rate_calc_pct =
+      g_prefs.getFloat(kKeyRateCalcPct, defaults.rate_calculation_percentage);
+  if (validRateCalcPct(rate_calc_pct)) {
+    out.rate_calculation_percentage = rate_calc_pct;
+  } else {
+    Serial.println("[Settings] NVS rate_calculation_percentage invalid -- using default");
+  }
+
+  uint32_t topup_to_ms = g_prefs.getUInt(kKeyTopupToMs, defaults.topup_timeout_ms);
+  if (validTimeoutMs(topup_to_ms)) {
+    out.topup_timeout_ms = topup_to_ms;
+  } else {
+    Serial.println("[Settings] NVS topup_timeout_ms invalid -- using default");
+  }
+
+  uint32_t grind_to_ms = g_prefs.getUInt(kKeyGrindToMs, defaults.grinding_timeout_ms);
+  if (validTimeoutMs(grind_to_ms)) {
+    out.grinding_timeout_ms = grind_to_ms;
+  } else {
+    Serial.println("[Settings] NVS grinding_timeout_ms invalid -- using default");
+  }
+
+  uint32_t final_to_ms = g_prefs.getUInt(kKeyFinalToMs, defaults.finalize_timeout_ms);
+  if (validTimeoutMs(final_to_ms)) {
+    out.finalize_timeout_ms = final_to_ms;
+  } else {
+    Serial.println("[Settings] NVS finalize_timeout_ms invalid -- using default");
+  }
+
+  uint32_t confirm_to_ms = g_prefs.getUInt(kKeyConfirmToMs, defaults.confirm_timeout_ms);
+  if (validTimeoutMs(confirm_to_ms)) {
+    out.confirm_timeout_ms = confirm_to_ms;
+  } else {
+    Serial.println("[Settings] NVS confirm_timeout_ms invalid -- using default");
+  }
+
+  uint32_t stab_min_ms = g_prefs.getUInt(kKeyStabMinMs, defaults.stability_min_wait_ms);
+  if (validTimeoutMs(stab_min_ms)) {
+    out.stability_min_wait_ms = stab_min_ms;
+  } else {
+    Serial.println("[Settings] NVS stability_min_wait_ms invalid -- using default");
+  }
+
+  uint32_t stab_max_ms = g_prefs.getUInt(kKeyStabMaxMs, defaults.stability_max_wait_ms);
+  if (validTimeoutMs(stab_max_ms)) {
+    out.stability_max_wait_ms = stab_max_ms;
+  } else {
+    Serial.println("[Settings] NVS stability_max_wait_ms invalid -- using default");
+  }
+
+  uint32_t min_topup_rt = g_prefs.getUInt(kKeyMinTopupRt, defaults.min_topup_runtime_ms);
+  if (validTimeoutMs(min_topup_rt)) {
+    out.min_topup_runtime_ms = min_topup_rt;
+  } else {
+    Serial.println("[Settings] NVS min_topup_runtime_ms invalid -- using default");
+  }
+
+  uint32_t topup_int_ms = g_prefs.getUInt(kKeyTopupIntMs, defaults.min_topup_interval_ms);
+  if (validTimeoutMs(topup_int_ms)) {
+    out.min_topup_interval_ms = topup_int_ms;
+  } else {
+    Serial.println("[Settings] NVS min_topup_interval_ms invalid -- using default");
+  }
+
+  uint32_t ss_timeout_s = g_prefs.getUInt(kKeySsTimeoutS, defaults.screensaver_timeout_s);
+  if (validScreensaverTimeoutS(ss_timeout_s)) {
+    out.screensaver_timeout_s = ss_timeout_s;
+  } else {
+    Serial.println("[Settings] NVS screensaver_timeout_s invalid -- using default");
+  }
+
+  uint32_t btn_debounce_ms = g_prefs.getUInt(kKeyBtnDebounce, defaults.button_debounce_ms);
+  if (validButtonDebounceMs(btn_debounce_ms)) {
+    out.button_debounce_ms = btn_debounce_ms;
+  } else {
+    Serial.println("[Settings] NVS button_debounce_ms invalid -- using default");
+  }
+
+  uint32_t btn_hold_ms = g_prefs.getUInt(kKeyBtnHoldMs, defaults.button_min_hold_ms);
+  if (validTimeoutMs(btn_hold_ms)) {
+    out.button_min_hold_ms = btn_hold_ms;
+  } else {
+    Serial.println("[Settings] NVS button_min_hold_ms invalid -- using default");
+  }
+
+  // Flags have no illegal state -- any stored bool is trusted as-is.
+  out.wifi_reset_flag = g_prefs.getBool(kKeyWifiReset, defaults.wifi_reset_flag);
+  out.wifi_reboot_flag = g_prefs.getBool(kKeyWifiReboot, defaults.wifi_reboot_flag);
+
+  g_prefs.end();
+  return true;
 }
 
 void saveSettingsToNvs(const SettingsSnapshot &snap) {
-  (void)snap;
-  Serial.println("[Settings] NVS save stubbed (not persisted)");
+  // snap is always g_settings here, i.e. already validated by applyWrite
+  // before this function is ever called (§4) -- this is a plain write-
+  // through, not a second validation gate.
+  if (!g_prefs.begin(kNvsNamespace, /*readOnly=*/false)) {
+    Serial.println("[Settings] NVS open for write failed -- settings not persisted");
+    return;
+  }
+
+  g_prefs.putUInt(kKeySchemaVer, kSettingsSchemaVersion);
+  g_prefs.putUChar(kKeyReadSamples, snap.read_samples);
+  g_prefs.putUChar(kKeySpeed, snap.speed);
+  g_prefs.putUChar(kKeyGain, snap.gain);
+  g_prefs.putFloat(kKeyCalFactor, snap.calibration_factor);
+  g_prefs.putFloat(kKeyDoseSingle, snap.target_dose_single);
+  g_prefs.putFloat(kKeyDoseDouble, snap.target_dose_double);
+  g_prefs.putFloat(kKeyMarginSingle, snap.top_up_margin_single);
+  g_prefs.putFloat(kKeyMarginDouble, snap.top_up_margin_double);
+  g_prefs.putFloat(kKeyMinTopupG, snap.min_topup_grams);
+  g_prefs.putFloat(kKeyRateCalcPct, snap.rate_calculation_percentage);
+  g_prefs.putUInt(kKeyTopupToMs, snap.topup_timeout_ms);
+  g_prefs.putUInt(kKeyGrindToMs, snap.grinding_timeout_ms);
+  g_prefs.putUInt(kKeyFinalToMs, snap.finalize_timeout_ms);
+  g_prefs.putUInt(kKeyConfirmToMs, snap.confirm_timeout_ms);
+  g_prefs.putUInt(kKeyStabMinMs, snap.stability_min_wait_ms);
+  g_prefs.putUInt(kKeyStabMaxMs, snap.stability_max_wait_ms);
+  g_prefs.putUInt(kKeyMinTopupRt, snap.min_topup_runtime_ms);
+  g_prefs.putUInt(kKeyTopupIntMs, snap.min_topup_interval_ms);
+  g_prefs.putUInt(kKeySsTimeoutS, snap.screensaver_timeout_s);
+  g_prefs.putUInt(kKeyBtnDebounce, snap.button_debounce_ms);
+  g_prefs.putUInt(kKeyBtnHoldMs, snap.button_min_hold_ms);
+  g_prefs.putBool(kKeyWifiReset, snap.wifi_reset_flag);
+  g_prefs.putBool(kKeyWifiReboot, snap.wifi_reboot_flag);
+
+  g_prefs.end();
 }
+
+// --- Topup model NVS -------------------------------------------------------
+//
+// Still stubbed -- out of scope for this pass (which covers SettingsSnapshot
+// persistence only, per the task brief). TopupModelV1 round-tripping to its
+// own NVS namespace is a separate, still-open follow-up (§5).
 
 bool loadTopupModelFromNvs(TopupModelV1 &out) {
   (void)out;
@@ -59,29 +345,27 @@ void broadcastSnapshot() {
 bool applyWrite(const SettingsWriteRequest &req) {
   switch (req.field_id) {
     case SettingsFieldId::CALIBRATION_FACTOR:
-      if (!std::isfinite(req.value.f) || req.value.f == 0.0f) return false;
+      if (!validCalibrationFactor(req.value.f)) return false;
       g_settings.calibration_factor = req.value.f;
       return true;
     case SettingsFieldId::TARGET_DOSE_SINGLE:
-      if (!std::isfinite(req.value.f) || req.value.f <= 0.0f || req.value.f > 100.0f)
-        return false;
+      if (!validDoseGrams(req.value.f)) return false;
       g_settings.target_dose_single = req.value.f;
       return true;
     case SettingsFieldId::TARGET_DOSE_DOUBLE:
-      if (!std::isfinite(req.value.f) || req.value.f <= 0.0f || req.value.f > 100.0f)
-        return false;
+      if (!validDoseGrams(req.value.f)) return false;
       g_settings.target_dose_double = req.value.f;
       return true;
     case SettingsFieldId::TOP_UP_MARGIN_SINGLE:
-      if (!std::isfinite(req.value.f) || req.value.f < 0.0f) return false;
+      if (!validTopUpMargin(req.value.f)) return false;
       g_settings.top_up_margin_single = req.value.f;
       return true;
     case SettingsFieldId::TOP_UP_MARGIN_DOUBLE:
-      if (!std::isfinite(req.value.f) || req.value.f < 0.0f) return false;
+      if (!validTopUpMargin(req.value.f)) return false;
       g_settings.top_up_margin_double = req.value.f;
       return true;
     case SettingsFieldId::BUTTON_DEBOUNCE_MS:
-      if (req.value.u == 0 || req.value.u > 2000) return false;
+      if (!validButtonDebounceMs(req.value.u)) return false;
       g_settings.button_debounce_ms = req.value.u;
       return true;
     case SettingsFieldId::WIFI_RESET_FLAG:
