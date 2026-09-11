@@ -17,8 +17,7 @@
  * mailbox, one "did the mode change -> full clear; otherwise ->
  * per-field targeted redraw" path, no per-mode special case at the top
  * level) and a connection indicator drawn with a symmetric erase, so a
- * client disconnecting can never leave a stale dot on screen the way it
- * previously could.
+ * client disconnecting can never leave a stale dot on screen.
  *
  * Per-mode color fields (`current_color`/`target_color`/`time_color`)
  * are part of `DisplayCommand` so the producer can drive them, but
@@ -53,11 +52,46 @@ constexpr int16_t kH = 160;
 SPIClass g_spi(HSPI);
 Adafruit_ST7735 g_tft(&g_spi, DISPLAY_CS_PIN, DISPLAY_DC_PIN, DISPLAY_RESET_PIN);
 
+// --- Accent palette (RGB565), matched to iOS system colors ------------------
+
+constexpr uint16_t kColorPrimary = ST7735_WHITE;  ///< Main readouts: calm, neutral.
+constexpr uint16_t kColorSecondary = 0x9CD3;      ///< #98989D -- supporting text.
+constexpr uint16_t kColorTrack = 0x39C7;          ///< #3A3A3C -- progress bar track.
+constexpr uint16_t kColorAccentBlue = 0x0C3F;     ///< #0A84FF -- active/primary action.
+constexpr uint16_t kColorAccentGreen = 0x368B;    ///< #30D158 -- success/finalize.
+
+/** Cache of the top-of-screen progress bar's last-drawn width/color. */
+struct { int16_t lastWidth = -1; uint16_t lastColor = 0; } g_progress;
+
+/**
+ * Draws (or skips, if unchanged) a thin progress bar across the top of the
+ * screen -- `frac` (0..1, clamped) of `color` over a dim track.
+ */
+void drawProgressBar(float frac, uint16_t color, bool force) {
+  constexpr int16_t barH = 3;
+  if (frac < 0.0f) frac = 0.0f;
+  if (frac > 1.0f) frac = 1.0f;
+  int16_t width = static_cast<int16_t>(frac * kW + 0.5f);
+
+  if (!force && width == g_progress.lastWidth && color == g_progress.lastColor) {
+    return;
+  }
+  if (force || color != g_progress.lastColor) {
+    g_tft.fillRect(0, 0, kW, barH, kColorTrack);
+    g_tft.fillRect(0, 0, width, barH, color);
+  } else if (width > g_progress.lastWidth) {
+    g_tft.fillRect(g_progress.lastWidth, 0, width - g_progress.lastWidth, barH, color);
+  } else if (width < g_progress.lastWidth) {
+    g_tft.fillRect(width, 0, g_progress.lastWidth - width, barH, kColorTrack);
+  }
+  g_progress.lastWidth = width;
+  g_progress.lastColor = color;
+}
+
 // --- Panel bring-up ----------------------------------------------------------
 
-// ledcSetup(1, 100, 8) configures an 8-bit duty register (0-255) --
-// duty is scaled from that same 8-bit range below, not a wider constant
-// that would get silently truncated by the hardware.
+// ledcSetup(1, 100, 8) is an 8-bit duty register (0-255); duty below is
+// scaled from that same range, not a wider constant.
 void backlightPercent(uint8_t percent) {
   uint32_t duty = (static_cast<uint32_t>(percent) * 255u) / 100u;
   ledcWrite(1, duty);
@@ -98,11 +132,8 @@ void drawConnectionIndicator(uint16_t color) {
 
 // --- Small formatting helpers ------------------------------------------------
 
-/*
- * Rounds tiny +/-0.0x readings to a clean 0.0 so the display never
- * flickers between "0.0" and "-0.0" from load-cell noise around zero
- * (kept from the old code's identical guard).
- */
+// Rounds tiny +/-0.0x readings to a clean 0.0 so the display never
+// flickers between "0.0" and "-0.0" from load-cell noise around zero.
 float cleanZero(float grams) { return (grams > -0.05f && grams < 0.05f) ? 0.0f : grams; }
 
 /** Splits |grams| into integer/decigram strings and a separate sign flag. */
@@ -153,7 +184,7 @@ struct {
   char text[16] = "";
   int16_t intStartX = -1;
   bool isNegative = false;
-  bool wasMax = false;
+  bool wasWide = false;
 } g_idle;
 
 /** Draws (or skips, if unchanged) the IDLE screen's weight readout. */
@@ -165,7 +196,11 @@ void drawIdleLayout(float currentGrams, uint16_t connColor, bool force) {
   constexpr int16_t currentY = (kH - 32) / 2;
 
   if (fabsf(currentGrams) > 99.95f) {
-    if (!force && strcmp(g_idle.text, "MAX") == 0) {
+    // Too wide for the normal one-decimal layout -- show the full
+    // integer value instead.
+    char text[16];
+    snprintf(text, sizeof(text), "%.0f", currentGrams);
+    if (!force && g_idle.wasWide && strcmp(g_idle.text, text) == 0) {
       drawConnectionIndicator(connColor);
       return;
     }
@@ -174,12 +209,13 @@ void drawIdleLayout(float currentGrams, uint16_t connColor, bool force) {
     g_tft.setTextSize(3);
     int16_t x, y;
     uint16_t w, h;
-    g_tft.getTextBounds("MAX", 0, 0, &x, &y, &w, &h);
+    g_tft.getTextBounds(text, 0, 0, &x, &y, &w, &h);
     g_tft.setCursor((kW - w) / 2, (kH - h) / 2);
-    g_tft.print("MAX");
-    strncpy(g_idle.text, "MAX", sizeof(g_idle.text));
+    g_tft.print(text);
+    strncpy(g_idle.text, text, sizeof(g_idle.text) - 1);
+    g_idle.text[sizeof(g_idle.text) - 1] = '\0';
     g_idle.intStartX = -1;
-    g_idle.wasMax = true;
+    g_idle.wasWide = true;
     drawConnectionIndicator(connColor);
     return;
   }
@@ -203,7 +239,7 @@ void drawIdleLayout(float currentGrams, uint16_t connColor, bool force) {
     int16_t intWidth = strlen(intStr) * 6 * intSize;
     int16_t intStartX = 60 - intWidth;
 
-    if (g_idle.wasMax) {
+    if (g_idle.wasWide) {
       g_tft.fillRect(0, currentY, kW, 32, ST7735_BLACK);
     } else if (g_idle.intStartX != -1) {
       if (intStartX > g_idle.intStartX) {
@@ -239,7 +275,7 @@ void drawIdleLayout(float currentGrams, uint16_t connColor, bool force) {
     g_idle.text[sizeof(g_idle.text) - 1] = '\0';
     g_idle.intStartX = intStartX;
     g_idle.isNegative = isNegative;
-    g_idle.wasMax = false;
+    g_idle.wasWide = false;
   }
 
   drawConnectionIndicator(connColor);
@@ -378,31 +414,33 @@ void drawGrindingBlock(float currentGrams, float targetGrams, float seconds,
   g_grind.targetColor = targetColor;
   g_grind.timeColor = timeColor;
 
+  float frac = targetGrams > 0.0f ? displayGrams / targetGrams : 0.0f;
+  drawProgressBar(frac, currentColor, force);
   drawConnectionIndicator(connColor);
 }
 
-/** Old main.cpp's per-mode color scheme -- used when a producer color field is 0/unset. */
+/** Per-mode color scheme -- used when a producer color field is 0/unset. */
 void defaultColorsFor(DisplayMode mode, uint16_t *current, uint16_t *target,
                       uint16_t *time) {
-  *target = ST7735_WHITE;
-  *time = ST7735_WHITE;
+  *target = kColorSecondary;
+  *time = kColorSecondary;
   switch (mode) {
     case DisplayMode::TOPUP:
     case DisplayMode::STOPPING:
-      *current = ST7735_CYAN;
+      *current = kColorAccentBlue;
       break;
     case DisplayMode::FINALIZE:
-      *current = ST7735_GREEN;
+      *current = kColorAccentGreen;
       break;
     default:
-      *current = ST7735_WHITE;
+      *current = kColorPrimary;
       break;
   }
 }
 
 // --- CONFIRM layout: large target weight + "OK?" prompt --------------------
-// Targeted fillRect over just the two text regions instead of the old code's
-// full-screen fillScreen on every redraw.
+// Targeted fillRect over just the two text regions, not a full-screen
+// clear, to avoid visible flicker on every redraw.
 
 struct { float targetGrams = -1.0f; } g_confirm;
 
@@ -440,10 +478,13 @@ void drawConfirmLayout(float targetGrams, bool force) {
   int16_t titleX = (kW - w) / 2;
   int16_t titleY = weightY + 32 + 20;
 
+  // Accent-colored: this is the one screen whose whole purpose is a
+  // pending confirmation, so both the number and the prompt get the
+  // primary-action color rather than the neutral readout white.
   g_tft.fillRect(0, weightY, kW, 32, ST7735_BLACK);
-  g_tft.fillRect(0, titleY, kW, h, ST7735_BLACK);
+  g_tft.fillRect(0, titleY, kW, h + 8, ST7735_BLACK);
 
-  g_tft.setTextColor(ST7735_WHITE, ST7735_BLACK);
+  g_tft.setTextColor(kColorAccentBlue, ST7735_BLACK);
   g_tft.setCursor(weightX, weightY);
   g_tft.setTextSize(intSize);
   g_tft.print(intStr);
@@ -461,6 +502,7 @@ void drawConfirmLayout(float targetGrams, bool force) {
   g_tft.setCursor(titleX, titleY);
   g_tft.setTextSize(titleSize);
   g_tft.print(title);
+  g_tft.fillRoundRect(titleX, titleY + h + 4, w, 2, 1, kColorAccentBlue);
 }
 
 // --- SCREENSAVER layout: H/M/S/centiseconds, each row independently diffed -
@@ -480,7 +522,9 @@ void drawScreensaver(uint32_t h, uint32_t m, uint32_t s, uint32_t ms, bool force
 
   constexpr int16_t startY = 12;
   constexpr int16_t rowHeight = 40;
-  g_tft.setTextColor(ST7735_WHITE, ST7735_BLACK);
+  // Dimmer than the active-state screens -- an idle clock should recede,
+  // not compete for attention (same intent as an always-on watch face).
+  g_tft.setTextColor(kColorSecondary, ST7735_BLACK);
 
   auto drawRow = [&](uint32_t value, uint32_t &last, int16_t rowIndex,
                      const char *fmt, uint8_t size, int16_t rowH) {
@@ -582,6 +626,12 @@ void drawOtaLayout(uint8_t percent, bool force) {
   char bottom[8];
   snprintf(bottom, sizeof(bottom), "%3u%%", percent);
   drawTwoRow("UPDATE", bottom, force);
+  // drawTwoRow's top row always clears y=0.. regardless of `force` (it
+  // only skips its own one-time full-row clear, not the per-call text
+  // redraw) -- always redraw the bar after it rather than relying on
+  // drawProgressBar's own diff, which could otherwise stay skipped while
+  // the pixels underneath were just wiped.
+  drawProgressBar(percent / 100.0f, kColorAccentBlue, /*force=*/true);
   g_ota.percent = percent;
 }
 
@@ -590,6 +640,11 @@ void renderMode(const DisplayCommand &cmd, bool force) {
   switch (cmd.mode) {
     case DisplayMode::BOOT:
       drawCentered("Eureka", 2, ST7735_WHITE, force);
+      if (force) {
+        // A small brand accent under the wordmark -- drawn once, since
+        // this mode is otherwise static for its whole (brief) lifetime.
+        g_tft.fillRoundRect(kW / 2 - 14, kH / 2 + 14, 28, 3, 1, kColorAccentBlue);
+      }
       break;
 
     case DisplayMode::IDLE:
@@ -632,19 +687,21 @@ void renderMode(const DisplayCommand &cmd, bool force) {
   }
 }
 
-/** Display task entry point: renders whatever DisplayCommand arrives, at ~30fps. */
+/** Display task entry point: renders whatever DisplayCommand arrives, at ~60fps. */
 void displayTaskFn(void *) {
   panelBegin();
   xEventGroupSetBits(g_sys_events, kDisplayReadyBit);
 
-  // Dosing task's BOOT state never reaches the mailbox, so this task
-  // shows its own splash before the first real command arrives.
-  drawCentered("Eureka", 2, ST7735_WHITE, true);
-
+  // Dosing task's BOOT state never reaches the mailbox (it transitions to
+  // IDLE before sending its first command), so the boot splash is seeded
+  // as the initial `last` state and rendered once through the same path
+  // every other mode uses -- not a separate direct draw the mode-change
+  // tracking below doesn't know about.
   DisplayCommand last{};
-  bool haveLast = false;
+  last.mode = DisplayMode::BOOT;
+  renderMode(last, true);
 
-  const TickType_t frameFloor = pdMS_TO_TICKS(33);  // ~30fps frame-rate floor.
+  const TickType_t frameFloor = pdMS_TO_TICKS(16);  // ~60fps frame-rate floor.
   TickType_t lastFrame = xTaskGetTickCount();
 
   for (;;) {
@@ -652,14 +709,13 @@ void displayTaskFn(void *) {
     // Block up to the frame floor for a new command; this both rate-limits
     // needless redraw work and lets the task idle when nothing changed.
     if (xQueueReceive(g_display_mailbox, &cmd, frameFloor) == pdTRUE) {
-      bool modeChanged = !haveLast || cmd.mode != last.mode;
+      bool modeChanged = cmd.mode != last.mode;
       if (modeChanged) {
         g_tft.fillScreen(ST7735_BLACK);
         g_lastConnColor = 0;  // a freshly-cleared screen has no indicator yet
       }
       renderMode(cmd, modeChanged);
       last = cmd;
-      haveLast = true;
     }
 
     vTaskDelayUntil(&lastFrame, frameFloor);
