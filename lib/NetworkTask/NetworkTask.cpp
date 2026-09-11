@@ -13,6 +13,7 @@
 #include <ArduinoOTA.h>
 #include <ESPAsyncWebServer.h>
 #include <ESPmDNS.h>
+#include <LittleFS.h>
 #include <Update.h>
 #include <cmath>
 #include <cstring>
@@ -117,6 +118,7 @@ String buildSettingsJson(const SettingsSnapshot &s) {
   JsonDocument doc;
   doc["type"] = "settings";
   doc["version"] = s.version;
+  doc["calibration_factor"] = s.calibration_factor;
   doc["target_dose_single"] = s.target_dose_single;
   doc["target_dose_double"] = s.target_dose_double;
   doc["top_up_margin_single"] = s.top_up_margin_single;
@@ -438,24 +440,29 @@ void handleGetDosage(AsyncWebServerRequest *request) {
   request->send(200, "application/json", out);
 }
 
-// D4 scope note: the SPA/LittleFS-served filesystem is separate, later work
-// (explicitly out of scope for this pass) -- "/" is a placeholder so the
-// server is genuinely reachable and self-describing at eureka.local in the
-// meantime.
+// D4: the SPA (webapp/, built by Vite into webapp/dist -- see
+// webapp/README.md) is served straight from the LittleFS partition.
+// Client-side routing there is hash-based ("#/settings", not "/settings"),
+// so unlike a history-API SPA there's no need for a catch-all fallback to
+// index.html on unknown paths -- every real HTTP request is either "/",
+// a concrete built asset, or an API/WS endpoint, and 404 is the honest
+// answer for anything else.
 void setupWebServer() {
+  // formatOnFail=true: a device that's never had `pio run -t uploadfs` run
+  // has a raw/erased partition, not a missing one -- format it as LittleFS
+  // on first mount rather than failing forever. WS/API endpoints below
+  // don't depend on LittleFS, only static asset serving does, so a mount
+  // failure here still leaves the rest of the device fully functional.
+  if (!LittleFS.begin(true)) {
+    Serial.println("[Network] LittleFS mount failed -- SPA assets unavailable");
+  }
+
   g_ws.onEvent(onWsEvent);
   g_server.addHandler(&g_ws);
 
-  g_server.on("/", HTTP_GET, [](AsyncWebServerRequest *request) {
-    request->send(200, "text/html",
-                  "<!doctype html><html><body>"
-                  "<h1>Eureka</h1>"
-                  "<p>SPA not deployed yet. Realtime channel: <code>/ws</code>. "
-                  "Dose API: <code>/api/getDosage?grams=N</code>.</p>"
-                  "</body></html>");
-  });
-
   g_server.on("/api/getDosage", HTTP_GET, handleGetDosage);
+
+  g_server.serveStatic("/", LittleFS, "/").setDefaultFile("index.html");
 
   g_server.onNotFound(
       [](AsyncWebServerRequest *request) { request->send(404, "text/plain", "not found"); });

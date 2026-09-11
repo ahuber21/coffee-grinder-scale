@@ -1,0 +1,223 @@
+/* Deliberately dark-only -- matches the physical device's ST7735 display
+   aesthetic (D3) and the old dev/graph, dev/settings mock pages this SPA
+   replaces. Not a theme-detection oversight; a kitchen appliance UI has
+   one context (near the machine), not "whatever OS theme the visitor
+   prefers" the way a general web page would. */
+
+:root {
+  --bg: #1a1a1a;
+  --panel: #242424;
+  --panel-2: #2c3e50;
+  --accent: #ffcc00;
+  --accent-dim: #b38f00;
+  --blue: #3498db;
+  --green: #2ecc71;
+  --red: #e74c3c;
+  --text: #ecf0f1;
+  --text-dim: #9aa5ab;
+  --border: #33414c;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: "Courier New", ui-monospace, monospace;
+  -webkit-font-smoothing: antialiased;
+}
+
+a {
+  color: var(--accent);
+}
+
+h1,
+h2,
+h3 {
+  color: var(--accent);
+  margin: 0 0 0.5em;
+}
+
+button {
+  font-family: inherit;
+  font-size: 0.95rem;
+  background: var(--panel-2);
+  color: var(--text);
+  border: none;
+  border-radius: 6px;
+  padding: 0.5em 0.9em;
+  cursor: pointer;
+}
+
+button:hover {
+  filter: brightness(1.15);
+}
+
+button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+button.primary {
+  background: var(--blue);
+}
+
+button.danger {
+  background: var(--red);
+}
+
+input[type="number"],
+input[type="text"] {
+  font-family: inherit;
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0.4em 0.6em;
+  width: 8em;
+}
+
+.app-shell {
+  max-width: 960px;
+  margin: 0 auto;
+  padding: 1rem 1.25rem 3rem;
+}
+
+nav.tabs {
+  display: flex;
+  gap: 0.5rem;
+  margin-bottom: 1.5rem;
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 0.5rem;
+  flex-wrap: wrap;
+}
+
+nav.tabs a {
+  text-decoration: none;
+  color: var(--text-dim);
+  padding: 0.4em 0.8em;
+  border-radius: 6px;
+}
+
+nav.tabs a.active {
+  color: var(--bg);
+  background: var(--accent);
+}
+
+.status-dot {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  margin-right: 0.5em;
+}
+
+.status-dot.open {
+  background: var(--green);
+}
+
+.status-dot.connecting {
+  background: var(--accent);
+}
+
+.status-dot.closed {
+  background: var(--red);
+}
+
+.panel {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 1rem 1.25rem;
+  margin-bottom: 1.25rem;
+}
+
+.setting-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.6em 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.setting-row:last-child {
+  border-bottom: none;
+}
+
+.setting-row .label {
+  color: var(--text-dim);
+}
+
+.setting-row .current {
+  font-size: 0.85em;
+  color: var(--text-dim);
+  margin-right: 0.75em;
+}
+
+.big-number {
+  font-size: 3.5rem;
+  font-weight: bold;
+  line-height: 1;
+}
+
+.muted {
+  color: var(--text-dim);
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+th,
+td {
+  text-align: left;
+  padding: 0.5em 0.6em;
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+}
+
+th {
+  color: var(--text-dim);
+  font-weight: normal;
+}
+
+tr.session-row {
+  cursor: pointer;
+}
+
+tr.session-row:hover {
+  background: var(--panel-2);
+}
+
+.outcome {
+  padding: 0.1em 0.5em;
+  border-radius: 4px;
+  font-size: 0.85em;
+}
+
+.outcome.completed {
+  background: #1f4d2c;
+  color: var(--green);
+}
+
+.outcome.in_progress {
+  background: #4d3f1f;
+  color: var(--accent);
+}
+
+.outcome.aborted,
+.outcome.timed_out {
+  background: #4d1f1f;
+  color: var(--red);
+}

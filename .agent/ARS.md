@@ -768,8 +768,9 @@ Format per entry:
 
 ### AR-033 — WiFiManager AP-provisioning status no longer drawn directly to the display (deliberate, from the single-writer SPI rule)
 - **Area**: firmware/display, firmware/network
-- **Status**: open — behavior change worth the owner's awareness, not a
-  bug
+- **Status**: open — deferred. Owner has seen this (2026-09-11) and
+  confirmed it's a "sad side-effect," not urgent; leave for a later pass,
+  don't pick this up proactively.
 - **Found**: 2026-09-11, implementing real NetworkTask WiFi provisioning.
   The old pre-rewrite code drew AP-portal status directly to the ST7735
   from WiFiManager callbacks running in Network's context.
@@ -785,23 +786,68 @@ Format per entry:
   of drawing directly — small, contained addition, just not done yet.
 - **Resolution**: —
 
-### AR-034 — Flash usage jumped from 21.7% to 89.7% across the four parallel task implementations, before the SPA/LittleFS work has even landed
+### AR-034 — Flash usage jumped from 21.7% to 93.2% across the four parallel task implementations plus LittleFS; ~86KB headroom left in the app partition
 - **Area**: firmware/build, firmware/network
-- **Status**: open — needs-owner-awareness, not yet a hard blocker
+- **Status**: open — needs-owner-awareness, not a blocker (confirmed OTA
+  still functions). Update: enabling `board_build.filesystem = littlefs`
+  for the SPA (D19) added another ~47KB on top of the 89.7% figure below,
+  bringing it to **93.2% (1,222,181 / 1,310,720 bytes)** — **88,539 bytes
+  (6.8%) headroom** left in the currently-inactive OTA slot. Still
+  functional, but the margin is now thin enough that the next feature
+  added to the app binary (not the SPA's own assets, which live in the
+  separate LittleFS partition and don't count against this number) should
+  budget carefully, and `min_spiffs.csv` (see below) is worth actually
+  planning to switch to rather than treating as a hypothetical lever.
 - **Found**: 2026-09-11, `pio run -e esp_wroom_02` after merging
   SettingsTask/DisplayTask/NetworkTask/TelemetryTask's real
-  implementations (RAM 10.0%, flash 89.7% of the ESP32-WROOM's 1.25MB
-  app partition). NetworkTask's own build alone measured 74.7% before the
-  other three were merged in — WiFiManager + ESPAsyncWebServer + AsyncTCP
-  + ArduinoOTA + HTTPClient/WiFiClientSecure account for most of the jump.
-- **Why it matters**: the web SPA (D4) still needs to be built and served
-  from a LittleFS partition — that's a separate filesystem partition, not
-  app flash, so it doesn't directly compete with this number, but the
-  *app* partition itself now has only ~10% headroom left for the SPA's own
-  serving code, any future task growth, or partition-table adjustments
-  (e.g. OTA needs two app partitions to swap between — worth double-
-  checking `partitions.csv` still has room for a second 1.25MB-class OTA
-  slot at this size). Not urgent, but the next piece of work that touches
-  partitioning or adds a library dependency should check `pio run`'s
-  size report before assuming there's slack.
+  implementations (RAM 10.0%, flash 1,175,133 / 1,310,720 bytes = 89.7%).
+  Confirmed no partition-table change happened (`platformio.ini`'s
+  `board_build.partitions` override is still commented out, so the
+  framework default `default.csv` is in effect: two 0x140000-byte
+  (1,310,720B) OTA app slots `app0`/`app1`, plus an untouched separate
+  0x160000-byte `spiffs` partition reserved for the future SPA/LittleFS
+  image). **OTA is structurally unaffected** — the two-slot scheme is
+  intact — but the currently-inactive slot only has **135,587 bytes
+  (10.3%) headroom** left for a new image to be written into via OTA.
+  Ranked by static library size (`xtensa-esp32-elf-size` on each
+  `lib*/*.a`): ESPAsyncWebServer 80.8KB, WiFiManager 80.4KB, WiFi (core)
+  44.3KB, legacy WebServer (pulled in by WiFiManager's captive portal)
+  35.2KB, HTTPClient 19.7KB, WiFiClientSecure/mbedTLS 12.2KB, AsyncTCP
+  11.6KB, ArduinoOTA 8.7KB, ESPmDNS 5.7KB — roughly 300KB total for the
+  networking stack alone, plus Adafruit GFX (21.7KB) linking in for the
+  first time now that DisplayTask actually calls it (it was already a
+  declared dependency, just previously unused/garbage-collected by the
+  linker).
+- **Why it matters**: none of this is waste — it's the real cost of the
+  features NetworkTask/TelemetryTask exist to provide — but ~130KB is a
+  thin margin. The web SPA's own *assets* go to the separate spiffs
+  partition and don't compete with this number, but any serving glue code
+  added to the app binary itself, or any future `lib_dep` addition (or
+  task growth), should check `pio run`'s size report against this budget
+  before assuming there's slack. If it's ever exceeded, `min_spiffs.csv`
+  (already present as a commented-out option in `platformio.ini`) trades
+  spiffs/LittleFS space for a larger app partition — worth knowing that
+  lever exists, not necessarily worth pulling yet.
+- **Resolution**: —
+
+### AR-035 — SPA (`webapp/`) built and type-checked, but never visually verified in a real browser or against a real device
+- **Area**: web, firmware/network
+- **Status**: open — needs-owner-verification, not a known bug
+- **Found**: 2026-09-11, building the SPA (D4/D19). `npm run build`
+  (`tsc --noEmit && vite build`) passes clean, and a raw HTTP smoke-test
+  of `npm run dev`'s output confirmed the page's HTML/JS/CSS serve without
+  server errors — but the Claude-in-Chrome browser extension wasn't
+  connected in this session, so no actual rendering, layout, or
+  interactive behavior (WS reconnect handling, chart rendering, settings
+  form round-trip, PostgREST fetch/CORS in a real browser context) was
+  ever exercised. There's also no live ESP32 running this NetworkTask
+  build yet to test the WS contract end-to-end from the browser side —
+  only the firmware's own compile-time check and TelemetryTask's earlier
+  curl-based PostgREST verification exist so far.
+- **Why it matters**: a clean type-check doesn't catch layout bugs, a
+  WebSocket message the frontend mis-parses at runtime despite matching
+  types on paper, or a CORS/mixed-content issue that only shows up in an
+  actual browser. Low risk given how directly the TS types mirror
+  NetworkTask.cpp's actual JSON output (checked by hand, not generated),
+  but this is real unverified surface, not just a formality.
 - **Resolution**: —

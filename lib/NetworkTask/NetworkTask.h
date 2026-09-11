@@ -8,9 +8,9 @@
 // (eureka.local, D5), ArduinoOTA wired to the D12 refuse-before-start gate,
 // an AsyncWebServer instance, and the one multiplexed WebSocket at "/ws"
 // (connection handling, a JSON envelope with a "type" discriminator,
-// AR-013/AR-014's cleanupClients()/connection-cap fixes). The SPA itself
-// doesn't exist yet (separate work) -- "/" serves a plain placeholder page,
-// and there is no LittleFS filesystem wired up.
+// AR-013/AR-014's cleanupClients()/connection-cap fixes). "/" now serves
+// the real SPA (webapp/, D4/D19) from a mounted LittleFS partition --
+// see webapp/README.md for the build step that populates it.
 //
 // Still stubbed: nothing NVS-shaped lives here (Settings task owns that);
 // most TelemetryEvent/DisplayCommand *consumers* of the data this task

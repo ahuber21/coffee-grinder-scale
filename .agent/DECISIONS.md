@@ -210,3 +210,25 @@ status is most useful (no other UI exists during initial setup) — flagged
 for the owner to decide whether it's worth a small `DisplayMode`/
 `DisplayCommand` addition (NetworkTask sends, DisplayTask renders) or
 whether log-only is acceptable given this is a one-time setup step.
+
+**D19 — SPA framework: React + TypeScript + Vite, no CSS framework.**
+D4 left "framework TBD by whoever implements it." Picked React/TS/Vite as
+a genuinely modern, widely-legible stack (readable by someone learning
+the pattern, per D4's framing) with a real build pipeline (`npm run
+build` → `webapp/dist`, which `platformio.ini`'s `data_dir` now points
+`pio run -t buildfs` at directly — see `webapp/README.md`). No Tailwind/
+CSS framework: the old `dev/graph`/`dev/settings` mock pages already
+established a specific dark/monospace visual language (matches the
+physical ST7735 display's own aesthetic, D3) that's simpler to carry
+forward as plain CSS (`webapp/src/index.css`) than to re-derive through a
+utility-class system. Client-side routing is a minimal custom hash router
+(`#/live`, `#/settings`, `#/history`) rather than a routing library —
+three flat tabs don't need one, and hash routing sidesteps needing a
+server-side catch-all fallback route for `AsyncWebServer::serveStatic`.
+Chart.js was kept from the old `dev/graph` mock (bundled via npm now,
+not a CDN script tag — the app must work fully offline/LAN-only, matching
+the rest of this project's no-internet-dependency stance).
+`board_build.filesystem = littlefs` (default.csv's `spiffs`-labeled
+partition subtype is legacy naming; PlatformIO's LittleFS support mounts
+the same partition region under that label regardless — confirmed
+working via `pio run -t buildfs`).

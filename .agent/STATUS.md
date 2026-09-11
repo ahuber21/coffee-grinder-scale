@@ -1,13 +1,13 @@
 # Status
 
-*Last updated: 2026-09-11 — all 7 FreeRTOS tasks have real bodies (only the
-web SPA itself remains unbuilt).*
+*Last updated: 2026-09-11 — all 7 FreeRTOS tasks have real bodies and the
+web SPA is built; only real-browser/real-device verification remains.*
 
 ## Where things stand
 
 Planning and design are done; implementation is underway. Branch
 `rewrite/rtos-fork`. Standing rules in `AGENTS.md`, full decision log in
-`DECISIONS.md` (D1-D17), all findings in `ARS.md` (AR-001-034, all
+`DECISIONS.md` (D1-D19), all findings in `ARS.md` (AR-001-034, all
 resolved or non-blocking), design docs in `.agent/design/`.
 
 **Design work completed:**
@@ -135,10 +135,45 @@ resolved or non-blocking), design docs in `.agent/design/`.
   limited headroom left). `pio test -e native` still 22/22
   (`lib/DosingModel` itself untouched by any of this).
 
-**Not yet started:** the web SPA itself (and serving it from LittleFS —
-D4), decommissioning `coffee_grinder_api` (waits until the new pipeline is
-verified in real use). Everything else the original 7-task skeleton left
-stubbed now has a real implementation.
+- **Web SPA** (`webapp/`, D4/D19): React + TypeScript + Vite, plain CSS
+  (no framework) matching the old `dev/graph`/`dev/settings` mocks' dark
+  aesthetic. Three tabs (hash-routed, no router library): **Live** (real-time
+  weight/target/session status off the `/ws` telemetry stream, a Chart.js
+  weight-vs-time chart per session, a manual "request a dose" form via
+  `dose_request`, recent log lines), **Settings** (read/write the 8
+  `SettingsSnapshot` fields the firmware currently accepts writes for,
+  armed-confirm WiFi reset/reboot buttons), **History** (queries PostgREST
+  *directly from the browser*, per D9 — bypasses the device entirely;
+  recent-sessions table, per-session event/raw-sample detail, and a live
+  D13-accuracy scoreboard computed from whatever real completed sessions
+  exist so far). `lib/NetworkTask/NetworkTask.cpp` now mounts LittleFS
+  (`formatOnFail=true`, so a never-flashed device self-formats on first
+  boot) and serves the SPA from `/` via `serveStatic`, replacing the old
+  placeholder page; `buildSettingsJson` was extended to include
+  `calibration_factor` (closing a gap found while building the Settings
+  page — it was writable but not broadcast). `platformio.ini` gained
+  `board_build.filesystem = littlefs` and a `[platformio] data_dir =
+  webapp/dist` (a real gotcha: `data_dir` is a project-wide
+  `[platformio]`-section option, not per-`[env]` — it's silently ignored
+  if placed under `[env:esp_wroom_02]`, which is where it went on the
+  first attempt here before being caught and fixed).
+
+  Verified: `npm run build` (`tsc --noEmit && vite build`) succeeds, 40
+  modules, ~312KB output (103KB gzipped) against the 1.375MB `spiffs`-
+  labeled partition. `pio run -t buildfs -e esp_wroom_02` packages it into
+  a real LittleFS image (**never** `uploadfs` — that's the owner's call).
+  `pio run -e esp_wroom_02` and `pio test -e native` (22/22) both still
+  pass with LittleFS enabled. **Not verified**: actual rendering/
+  interaction in a real browser — the Claude-in-Chrome extension wasn't
+  connected in this session, so only build-time type-checking and a raw
+  HTTP smoke-test of the dev server were possible. Worth a real look in a
+  browser (and ideally against a live device) before considering this
+  done-done.
+
+**Not yet started:** decommissioning `coffee_grinder_api` (waits until the
+new pipeline is verified in real use). Everything else the original
+7-task skeleton left stubbed now has a real implementation, including the
+SPA.
 
 ## Infrastructure on hand
 
