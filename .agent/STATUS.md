@@ -57,6 +57,19 @@ main-grind sessions, 209,848 raw sensor rows). Headline results:
   AR-022, `needs-owner-input`. This is the one thing blocking moving from
   "model designed" to "model locked in" for implementation.
 
+**FreeRTOS task architecture designed.** Full proposal in
+`.agent/design/rtos-architecture.md`: 7 tasks (Scale, Dosing/Session
+Control, Input, Display, Settings/NVS, Network, Telemetry), strict
+single-writer ownership per piece of state, two message primitives chosen
+per link (queues where every item matters, length-1 overwrite mailboxes
+where only the latest value matters). Closes 15 of the audit's findings by
+construction (full traceability table in the doc §9) — most notably both
+shared-state races (AR-001, AR-009), the button-handling asymmetry
+(AR-007/008), and AR-011's overshoot-margin bug. Surfaced one new minor
+open question (**AR-024**, low urgency): should an OTA update mid-grind
+abort the grind, or should OTA be refused while a grind is in progress?
+Has a stated safe default (abort-and-stop), not blocking.
+
 Infrastructure groundwork done during planning:
 - Read-only Postgres role (`claude_agent`) created on `192.168.0.111` for
   exploring the historical topup/progress/raw-data tables (credentials in
@@ -73,10 +86,8 @@ Infrastructure groundwork done during planning:
 1. ~~Audit pass over the existing firmware~~ — done, see above.
 2. ~~Topup/dosing model design~~ — done, see below and
    `.agent/design/topup-model.md`. **One open question for the owner.**
-3. **FreeRTOS task architecture** — design the task/queue boundaries
-   (scale sampling, dosing control, display, network, logging) before
-   implementing any of them. Should account for AR-001/AR-007/AR-008/AR-009
-   (the input and settings race conditions) by construction.
+3. ~~FreeRTOS task architecture~~ — done, see below and
+   `.agent/design/rtos-architecture.md`.
 4. **PostgREST deployment plan** — schema for the new `sessions` table,
    INSERT-only role, systemd unit — as a concrete plan before touching the
    live Proxmox host.
@@ -98,12 +109,15 @@ Infrastructure groundwork done during planning:
 
 ## Open questions for the owner
 
-- **AR-022**: is the 80%-of-sessions-within-Δ0.05g accuracy target still
-  the goal as stated, knowing the grinder's own minimum controllable dose
-  increment (~0.15-0.2g) is physically coarser than that tolerance? The
-  95%/Δ0.2g and overshoot-≤0.3g targets both look solidly achievable
-  either way. See `.agent/design/topup-model.md` §5 for the full
-  reasoning.
+- **AR-022** (blocking model lock-in): is the 80%-of-sessions-within-Δ0.05g
+  accuracy target still the goal as stated, knowing the grinder's own
+  minimum controllable dose increment (~0.15-0.2g) is physically coarser
+  than that tolerance? The 95%/Δ0.2g and overshoot-≤0.3g targets both look
+  solidly achievable either way. See `.agent/design/topup-model.md` §5.
+- **AR-024** (not blocking, low urgency): should an OTA update mid-grind
+  abort the grind, or should OTA be refused while a grind is in progress?
+  Recommended default (abort-and-stop) is fine to proceed with unless the
+  owner prefers otherwise.
 
 ## Decisions made
 

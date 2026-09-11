@@ -565,3 +565,26 @@ Format per entry:
   remaining gap rather than 100%, rather than unconditionally firing a
   fixed duration.
 - **Resolution**: —
+
+### AR-024 — Should an OTA update mid-grind abort the grind, or should OTA be refused while a grind is in progress?
+- **Area**: firmware/architecture, product decision
+- **Status**: needs-owner-input (low urgency — has a stated safe default,
+  not blocking further design work)
+- **Found**: 2026-09-11, `.agent/design/rtos-architecture.md` §7/§10, while
+  designing the Network↔Dosing task interaction around OTA.
+- **What**: today's firmware only pumps `ArduinoOTA.handle()` from
+  `loopIdle()`/`loopScreensaver()`, so an OTA flash can only ever start
+  while idle — a grind in progress structurally can't be interrupted by
+  one. The new task architecture decouples OTA handling (Network task) from
+  grind state (Dosing task) as a matter of responsiveness, which reopens
+  the question explicitly: should Dosing task (a) force an immediate
+  `STOPPING` (relay off) if an OTA flash begins mid-grind, or (b) should
+  Network task refuse to start an OTA flash at all while Dosing is outside
+  `IDLE`/`SCREENSAVER`? The design doc recommends (a) as the safer default
+  given a live relay is involved, but (b) is a defensible alternative.
+- **Why it matters**: low real-world likelihood (OTA deploys are already
+  gated to the owner only, per `AGENTS.md`'s hard constraint — nobody is
+  triggering one by accident mid-grind), so this doesn't block further
+  work; the recommended default ((a), abort-and-stop) can be implemented
+  and revisited if the owner prefers (b).
+- **Resolution**: —
