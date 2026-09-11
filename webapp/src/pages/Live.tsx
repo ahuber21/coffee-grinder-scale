@@ -77,18 +77,20 @@ export default function LivePage() {
     const dataset: ChartDataset<"line"> = {
       label: "Weight (g)",
       data: [],
-      borderColor: "#ffcc00",
-      backgroundColor: "#ffcc00",
-      borderWidth: 2,
-      pointRadius: 3,
+      borderColor: "#0a84ff",
+      backgroundColor: "#0a84ff",
+      borderWidth: 2.5,
+      pointRadius: 0,
+      tension: 0.15,
       fill: false,
       parsing: false,
     };
     const targetDataset: ChartDataset<"line"> = {
       label: "Target",
       data: [],
-      borderColor: "#a83632",
-      borderWidth: 2,
+      borderColor: "rgba(255, 159, 10, 0.7)",
+      borderDash: [4, 4],
+      borderWidth: 1.5,
       pointRadius: 0,
       fill: false,
       parsing: false,
@@ -102,18 +104,18 @@ export default function LivePage() {
         scales: {
           x: {
             type: "linear",
-            title: { display: true, text: "Time (s)", color: "#9aa5ab" },
-            ticks: { color: "#9aa5ab" },
-            grid: { color: "#33414c" },
+            title: { display: true, text: "Time (s)", color: "rgba(235, 235, 245, 0.6)" },
+            ticks: { color: "rgba(235, 235, 245, 0.6)" },
+            grid: { color: "rgba(84, 84, 88, 0.3)" },
           },
           y: {
             type: "linear",
-            title: { display: true, text: "Weight (g)", color: "#9aa5ab" },
-            ticks: { color: "#9aa5ab" },
-            grid: { color: "#33414c" },
+            title: { display: true, text: "Weight (g)", color: "rgba(235, 235, 245, 0.6)" },
+            ticks: { color: "rgba(235, 235, 245, 0.6)" },
+            grid: { color: "rgba(84, 84, 88, 0.3)" },
           },
         },
-        plugins: { legend: { labels: { color: "#ecf0f1" } } },
+        plugins: { legend: { labels: { color: "#ffffff" } } },
       },
     });
     return () => chartRef.current?.destroy();
@@ -136,8 +138,8 @@ export default function LivePage() {
       chart.data.datasets[1].data = [];
     }
     (chart.data.datasets[0] as ChartDataset<"line">).borderColor = isComplete
-      ? "#2ecc71"
-      : "#ffcc00";
+      ? "#30d158"
+      : "#0a84ff";
     chart.update();
   }, [sessionMessages, targetGrams, isComplete]);
 

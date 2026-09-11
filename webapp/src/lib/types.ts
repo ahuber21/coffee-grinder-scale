@@ -51,8 +51,8 @@ export type TelemetryMessage =
   | TelemetryRawSample
   | TelemetryLog;
 
-// buildSettingsJson's field list. Deliberately NOT every SettingsSnapshot
-// field -- only what the firmware currently broadcasts.
+// Mirrors buildSettingsJson's field list, which now covers every
+// SettingsSnapshot field except the two write-only WiFi action flags.
 export interface SettingsMessage {
   type: "settings";
   version: number;
@@ -64,6 +64,19 @@ export interface SettingsMessage {
   min_topup_grams: number;
   button_debounce_ms: number;
   screensaver_timeout_s: number;
+  read_samples: number;
+  speed: number;
+  gain: number;
+  rate_calculation_percentage: number;
+  topup_timeout_ms: number;
+  grinding_timeout_ms: number;
+  finalize_timeout_ms: number;
+  confirm_timeout_ms: number;
+  stability_min_wait_ms: number;
+  stability_max_wait_ms: number;
+  min_topup_runtime_ms: number;
+  min_topup_interval_ms: number;
+  button_min_hold_ms: number;
 }
 
 export interface ErrorMessage {
@@ -86,7 +99,22 @@ export type WritableSettingsField =
   | "top_up_margin_double"
   | "button_debounce_ms"
   | "wifi_reset_flag"
-  | "wifi_reboot_flag";
+  | "wifi_reboot_flag"
+  | "read_samples"
+  | "speed"
+  | "gain"
+  | "min_topup_grams"
+  | "rate_calculation_percentage"
+  | "topup_timeout_ms"
+  | "grinding_timeout_ms"
+  | "finalize_timeout_ms"
+  | "confirm_timeout_ms"
+  | "stability_min_wait_ms"
+  | "stability_max_wait_ms"
+  | "min_topup_runtime_ms"
+  | "min_topup_interval_ms"
+  | "screensaver_timeout_s"
+  | "button_min_hold_ms";
 
 export interface SettingsWriteOutbound {
   type: "settings_write";

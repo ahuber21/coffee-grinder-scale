@@ -1,20 +1,48 @@
 /* Deliberately dark-only -- matches the physical device's own ST7735
    display aesthetic. Not a theme-detection oversight; a kitchen
    appliance UI has one context (near the machine), not "whatever OS
-   theme the visitor prefers" the way a general web page would. */
+   theme the visitor prefers" the way a general web page would.
+
+   Palette/typography follow iOS/macOS system conventions (dark mode
+   system colors, the -apple-system font stack) rather than a bespoke
+   look -- on an Apple device this renders in actual San Francisco with
+   zero font download; elsewhere it falls back to each platform's own
+   native UI font, which is the same trick native-feeling web apps use
+   generally. */
 
 :root {
-  --bg: #1a1a1a;
-  --panel: #242424;
-  --panel-2: #2c3e50;
-  --accent: #ffcc00;
-  --accent-dim: #b38f00;
-  --blue: #3498db;
-  --green: #2ecc71;
-  --red: #e74c3c;
-  --text: #ecf0f1;
-  --text-dim: #9aa5ab;
-  --border: #33414c;
+  color-scheme: dark;
+  --bg: #000000;
+  --bg-elevated: #1c1c1e;
+  --bg-elevated-2: #2c2c2e;
+  --bg-elevated-3: #3a3a3c;
+  --separator: rgba(84, 84, 88, 0.65);
+  --label: #ffffff;
+  --label-secondary: rgba(235, 235, 245, 0.6);
+  --label-tertiary: rgba(235, 235, 245, 0.3);
+  --accent: #0a84ff;
+  --accent-wash: rgba(10, 132, 255, 0.15);
+  --green: #30d158;
+  --green-wash: rgba(48, 209, 88, 0.15);
+  --red: #ff453a;
+  --red-wash: rgba(255, 69, 58, 0.15);
+  --orange: #ff9f0a;
+  --orange-wash: rgba(255, 159, 10, 0.15);
+  --radius-lg: 16px;
+  --radius-md: 12px;
+  --radius-sm: 9px;
+  --font: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display", "Segoe UI",
+    Roboto, Helvetica, Arial, sans-serif;
+
+  /* Back-compat aliases -- a handful of components still reference the
+     old token names via inline styles. */
+  --panel: var(--bg-elevated);
+  --text: var(--label);
+  --text-dim: var(--label-secondary);
+  --border: var(--separator);
+  --blue: var(--accent);
+  --green-old: var(--green);
+  --red-old: var(--red);
 }
 
 * {
@@ -30,9 +58,11 @@ body,
 body {
   margin: 0;
   background: var(--bg);
-  color: var(--text);
-  font-family: "Courier New", ui-monospace, monospace;
+  color: var(--label);
+  font-family: var(--font);
+  font-size: 15px;
   -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
 }
 
 a {
@@ -40,92 +70,134 @@ a {
 }
 
 h1,
-h2,
+h2 {
+  color: var(--label);
+  margin: 0 0 0.6em;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+
+h1 {
+  font-size: 1.5rem;
+  display: flex;
+  align-items: center;
+  gap: 0.1em;
+}
+
+/* Section-label style, matching iOS grouped-list group headers -- small,
+   uppercase, secondary-colored, not a bold display heading. */
 h3 {
-  color: var(--accent);
-  margin: 0 0 0.5em;
+  margin: 0 0 0.6em;
+  font-size: 0.78rem;
+  color: var(--label-secondary);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
 }
 
 button {
   font-family: inherit;
   font-size: 0.95rem;
-  background: var(--panel-2);
-  color: var(--text);
+  font-weight: 500;
+  background: var(--bg-elevated-3);
+  color: var(--label);
   border: none;
-  border-radius: 6px;
-  padding: 0.5em 0.9em;
+  border-radius: var(--radius-sm);
+  padding: 0.55em 1em;
   cursor: pointer;
+  transition: filter 0.15s ease, transform 0.08s ease;
 }
 
 button:hover {
-  filter: brightness(1.15);
+  filter: brightness(1.2);
+}
+
+button:active {
+  transform: scale(0.96);
 }
 
 button:disabled {
-  opacity: 0.5;
+  opacity: 0.4;
   cursor: not-allowed;
+  transform: none;
 }
 
 button.primary {
-  background: var(--blue);
+  background: var(--accent);
+  color: #ffffff;
 }
 
 button.danger {
   background: var(--red);
+  color: #ffffff;
 }
 
 input[type="number"],
-input[type="text"] {
+input[type="text"],
+select {
   font-family: inherit;
-  background: var(--bg);
-  color: var(--text);
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  padding: 0.4em 0.6em;
+  font-size: 0.95rem;
+  background: var(--bg-elevated-2);
+  color: var(--label);
+  border: 1px solid var(--separator);
+  border-radius: var(--radius-sm);
+  padding: 0.5em 0.7em;
   width: 8em;
+}
+
+input:focus,
+select:focus {
+  outline: 2px solid var(--accent);
+  outline-offset: -1px;
 }
 
 .app-shell {
   max-width: 960px;
   margin: 0 auto;
-  padding: 1rem 1.25rem 3rem;
+  padding: 1.25rem 1.25rem 3rem;
 }
 
 nav.tabs {
   display: flex;
-  gap: 0.5rem;
+  gap: 2px;
+  background: var(--bg-elevated-2);
+  border-radius: var(--radius-md);
+  padding: 3px;
   margin-bottom: 1.5rem;
-  border-bottom: 1px solid var(--border);
-  padding-bottom: 0.5rem;
-  flex-wrap: wrap;
 }
 
 nav.tabs a {
+  flex: 1;
+  text-align: center;
   text-decoration: none;
-  color: var(--text-dim);
-  padding: 0.4em 0.8em;
-  border-radius: 6px;
+  color: var(--label-secondary);
+  font-size: 0.88rem;
+  font-weight: 500;
+  padding: 0.5em 0.6em;
+  border-radius: calc(var(--radius-md) - 3px);
+  transition: background 0.15s ease, color 0.15s ease;
 }
 
 nav.tabs a.active {
-  color: var(--bg);
-  background: var(--accent);
+  background: var(--bg-elevated-3);
+  color: var(--label);
 }
 
 .status-dot {
   display: inline-block;
-  width: 10px;
-  height: 10px;
+  width: 9px;
+  height: 9px;
   border-radius: 50%;
-  margin-right: 0.5em;
+  margin-right: 0.15em;
 }
 
 .status-dot.open {
   background: var(--green);
+  box-shadow: 0 0 6px 0 var(--green-wash);
 }
 
 .status-dot.connecting {
-  background: var(--accent);
+  background: var(--orange);
 }
 
 .status-dot.closed {
@@ -133,11 +205,10 @@ nav.tabs a.active {
 }
 
 .panel {
-  background: var(--panel);
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  padding: 1rem 1.25rem;
-  margin-bottom: 1.25rem;
+  background: var(--bg-elevated);
+  border-radius: var(--radius-lg);
+  padding: 1.1rem 1.25rem;
+  margin-bottom: 1rem;
 }
 
 .setting-row {
@@ -146,8 +217,8 @@ nav.tabs a.active {
   justify-content: space-between;
   flex-wrap: wrap;
   gap: 0.4rem 1rem;
-  padding: 0.6em 0;
-  border-bottom: 1px solid var(--border);
+  padding: 0.7em 0;
+  border-bottom: 1px solid var(--separator);
 }
 
 .setting-row:last-child {
@@ -155,23 +226,27 @@ nav.tabs a.active {
 }
 
 .setting-row .label {
-  color: var(--text-dim);
+  color: var(--label);
+  font-size: 0.92rem;
 }
 
 .setting-row .current {
   font-size: 0.85em;
-  color: var(--text-dim);
+  color: var(--label-tertiary);
   margin-right: 0.75em;
+  font-variant-numeric: tabular-nums;
 }
 
 .big-number {
-  font-size: 3.5rem;
-  font-weight: bold;
+  font-size: 3.75rem;
+  font-weight: 800;
+  letter-spacing: -0.02em;
   line-height: 1;
+  font-variant-numeric: tabular-nums;
 }
 
 .muted {
-  color: var(--text-dim);
+  color: var(--label-secondary);
 }
 
 .table-scroll {
@@ -186,42 +261,51 @@ table {
 th,
 td {
   text-align: left;
-  padding: 0.5em 0.6em;
-  border-bottom: 1px solid var(--border);
+  padding: 0.55em 0.6em;
+  border-bottom: 1px solid var(--separator);
   white-space: nowrap;
 }
 
 th {
-  color: var(--text-dim);
-  font-weight: normal;
+  color: var(--label-tertiary);
+  font-weight: 500;
+  font-size: 0.78rem;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+td {
+  font-variant-numeric: tabular-nums;
 }
 
 tr.session-row {
   cursor: pointer;
+  transition: background 0.1s ease;
 }
 
 tr.session-row:hover {
-  background: var(--panel-2);
+  background: var(--bg-elevated-2);
 }
 
 .outcome {
-  padding: 0.1em 0.5em;
-  border-radius: 4px;
-  font-size: 0.85em;
+  padding: 0.15em 0.65em;
+  border-radius: 999px;
+  font-size: 0.78rem;
+  font-weight: 600;
 }
 
 .outcome.completed {
-  background: #1f4d2c;
+  background: var(--green-wash);
   color: var(--green);
 }
 
 .outcome.in_progress {
-  background: #4d3f1f;
+  background: var(--accent-wash);
   color: var(--accent);
 }
 
 .outcome.aborted,
 .outcome.timed_out {
-  background: #4d1f1f;
+  background: var(--red-wash);
   color: var(--red);
 }

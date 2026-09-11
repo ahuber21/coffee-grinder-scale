@@ -44,6 +44,47 @@ function NumberSettingRow({ field, label, currentValue, step, unit }: NumberFiel
   );
 }
 
+interface SelectFieldProps {
+  field: WritableSettingsField;
+  label: string;
+  currentValue: number | null;
+  options: number[];
+  unit?: string;
+}
+
+// For the ADS1232 driver's hardware-fixed choices (gain, speed) where any
+// other value is meaningless -- a free-typed number invites a rejected write.
+function SelectSettingRow({ field, label, currentValue, options, unit }: SelectFieldProps) {
+  const { send, nextRequestId } = useDeviceSocket();
+
+  return (
+    <div className="setting-row">
+      <div className="label">{label}</div>
+      <div style={{ display: "flex", alignItems: "center" }}>
+        <span className="current">
+          {currentValue !== null ? `${currentValue}${unit ?? ""}` : "not reported yet"}
+        </span>
+        <select
+          value={currentValue ?? ""}
+          onChange={(e) => {
+            const value = parseInt(e.target.value, 10);
+            if (!Number.isFinite(value)) return;
+            send({ type: "settings_write", field, value, request_id: nextRequestId() });
+          }}
+        >
+          {currentValue === null && <option value="">--</option>}
+          {options.map((opt) => (
+            <option key={opt} value={opt}>
+              {opt}
+              {unit ?? ""}
+            </option>
+          ))}
+        </select>
+      </div>
+    </div>
+  );
+}
+
 function ArmedActionButton({
   label,
   field,
@@ -80,6 +121,7 @@ function ArmedActionButton({
 
 export default function SettingsPage() {
   const { settings, lastError } = useDeviceSocket();
+  const [showAdvanced, setShowAdvanced] = useState(false);
 
   return (
     <>
@@ -146,6 +188,129 @@ export default function SettingsPage() {
           <ArmedActionButton label="Reboot device" field="wifi_reboot_flag" />
         </div>
       </div>
+
+      <button onClick={() => setShowAdvanced((v) => !v)}>
+        {showAdvanced ? "Hide advanced settings" : "Show advanced settings"}
+      </button>
+
+      {showAdvanced && (
+        <>
+          <div className="panel">
+            <h3>ADC (advanced)</h3>
+            <SelectSettingRow
+              field="gain"
+              label="Gain"
+              currentValue={settings?.gain ?? null}
+              options={[1, 2, 64, 128]}
+            />
+            <SelectSettingRow
+              field="speed"
+              label="Speed"
+              currentValue={settings?.speed ?? null}
+              options={[10, 80]}
+              unit=" SPS"
+            />
+            <NumberSettingRow
+              field="read_samples"
+              label="Ring buffer window"
+              currentValue={settings?.read_samples ?? null}
+              step="1"
+              unit=" samples"
+            />
+          </div>
+
+          <div className="panel">
+            <h3>Topup model (advanced)</h3>
+            <NumberSettingRow
+              field="min_topup_grams"
+              label="Min top-up pulse"
+              currentValue={settings?.min_topup_grams ?? null}
+              step="0.01"
+              unit=" g"
+            />
+            <NumberSettingRow
+              field="rate_calculation_percentage"
+              label="Rate calculation fraction"
+              currentValue={settings?.rate_calculation_percentage ?? null}
+              step="0.01"
+            />
+          </div>
+
+          <div className="panel">
+            <h3>Timeouts (advanced)</h3>
+            <NumberSettingRow
+              field="grinding_timeout_ms"
+              label="Grinding safety timeout"
+              currentValue={settings?.grinding_timeout_ms ?? null}
+              step="100"
+              unit=" ms"
+            />
+            <NumberSettingRow
+              field="topup_timeout_ms"
+              label="Top-up timeout"
+              currentValue={settings?.topup_timeout_ms ?? null}
+              step="100"
+              unit=" ms"
+            />
+            <NumberSettingRow
+              field="finalize_timeout_ms"
+              label="Finalize screen duration"
+              currentValue={settings?.finalize_timeout_ms ?? null}
+              step="100"
+              unit=" ms"
+            />
+            <NumberSettingRow
+              field="confirm_timeout_ms"
+              label="Confirm screen timeout"
+              currentValue={settings?.confirm_timeout_ms ?? null}
+              step="100"
+              unit=" ms"
+            />
+            <NumberSettingRow
+              field="stability_min_wait_ms"
+              label="Stability min wait"
+              currentValue={settings?.stability_min_wait_ms ?? null}
+              step="10"
+              unit=" ms"
+            />
+            <NumberSettingRow
+              field="stability_max_wait_ms"
+              label="Stability max wait"
+              currentValue={settings?.stability_max_wait_ms ?? null}
+              step="10"
+              unit=" ms"
+            />
+            <NumberSettingRow
+              field="min_topup_runtime_ms"
+              label="Min top-up pulse runtime"
+              currentValue={settings?.min_topup_runtime_ms ?? null}
+              step="10"
+              unit=" ms"
+            />
+            <NumberSettingRow
+              field="min_topup_interval_ms"
+              label="Min top-up pulse interval"
+              currentValue={settings?.min_topup_interval_ms ?? null}
+              step="10"
+              unit=" ms"
+            />
+            <NumberSettingRow
+              field="screensaver_timeout_s"
+              label="Screensaver idle timeout"
+              currentValue={settings?.screensaver_timeout_s ?? null}
+              step="1"
+              unit=" s"
+            />
+            <NumberSettingRow
+              field="button_min_hold_ms"
+              label="Button min hold"
+              currentValue={settings?.button_min_hold_ms ?? null}
+              step="1"
+              unit=" ms"
+            />
+          </div>
+        </>
+      )}
 
       {lastError && (
         <div className="panel" style={{ borderColor: "var(--red)" }}>
