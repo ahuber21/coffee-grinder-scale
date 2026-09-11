@@ -35,6 +35,28 @@ and none contradict "mostly bug-free in day-to-day use" — they're latent/
 edge-case issues, not things misbehaving right now. Full detail in
 `ARS.md`.
 
+**Topup/dosing model designed.** Full analysis and proposal in
+`.agent/design/topup-model.md`, built from live queries against the real
+historical data (5,525 genuine topup pulses, 1,460 reconstructed
+main-grind sessions, 209,848 raw sensor rows). Headline results:
+- Sensor noise floor (~0.02g) is not the bottleneck for anything.
+- The 95%/Δ0.2g and overshoot-≤0.3g targets from D7 both look achievable
+  with the proposed design (two tiny recursive-least-squares linear
+  models — main-grind rate, topup pulse response — persisted to NVS,
+  replacing the single-point rate estimate and the static lookup table).
+- Found a real, quantified problem with the *current* live system: the
+  shortest lookup-table topup pulse already exceeds the 0.3g overshoot cap
+  ~21% of the time, on its own (AR-023) — matches the owner's stated pain
+  point directly.
+- Found and traced a firmware bug that corrupted ~28% of the historical
+  topup log (main-grind tail misreported as a topup event — AR-021),
+  harmless to live behavior but worth fixing.
+- **Flagged, not decided**: the 80%/Δ0.05g target may not be physically
+  achievable — the grinder's electromechanical minimum controllable dose
+  increment (~0.15-0.2g) is coarser than the 0.05g tolerance itself. See
+  AR-022, `needs-owner-input`. This is the one thing blocking moving from
+  "model designed" to "model locked in" for implementation.
+
 Infrastructure groundwork done during planning:
 - Read-only Postgres role (`claude_agent`) created on `192.168.0.111` for
   exploring the historical topup/progress/raw-data tables (credentials in
@@ -49,10 +71,8 @@ Infrastructure groundwork done during planning:
 ## What's next (in rough order)
 
 1. ~~Audit pass over the existing firmware~~ — done, see above.
-2. **Topup/dosing model design** — in progress. Analyzing the historical
-   `topup`/`progress` data (distribution of current errors, what a
-   recency-weighted fit buys vs. the current static lookup table) to
-   propose a concrete model before writing firmware code against it.
+2. ~~Topup/dosing model design~~ — done, see below and
+   `.agent/design/topup-model.md`. **One open question for the owner.**
 3. **FreeRTOS task architecture** — design the task/queue boundaries
    (scale sampling, dosing control, display, network, logging) before
    implementing any of them. Should account for AR-001/AR-007/AR-008/AR-009
@@ -78,9 +98,12 @@ Infrastructure groundwork done during planning:
 
 ## Open questions for the owner
 
-None right now — everything from planning is resolved. This section will
-list anything genuinely blocking as it comes up (flagged in `ARS.md` as
-`needs-owner-input`).
+- **AR-022**: is the 80%-of-sessions-within-Δ0.05g accuracy target still
+  the goal as stated, knowing the grinder's own minimum controllable dose
+  increment (~0.15-0.2g) is physically coarser than that tolerance? The
+  95%/Δ0.2g and overshoot-≤0.3g targets both look solidly achievable
+  either way. See `.agent/design/topup-model.md` §5 for the full
+  reasoning.
 
 ## Decisions made
 

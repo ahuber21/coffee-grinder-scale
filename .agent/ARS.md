@@ -479,3 +479,89 @@ Format per entry:
   IP. Worth pointing `upload_port` at `eureka.local` in the rewrite's
   `platformio.ini` instead of a numeric address, consistent with D5.
 - **Resolution**: —
+
+### AR-021 — `loopTopUp()`'s first metrics event misreports the main-grind tail as a topup pulse, contaminating the historical `topup` table
+- **Area**: firmware/dosing, data-infra
+- **Status**: confirmed (found via data analysis, then traced to the exact
+  code path)
+- **Found**: 2026-09-11, during topup-model data analysis
+  (`.agent/design/topup-model.md` §0). `src/main.cpp`: `grinderOff()` at
+  the end of `loopRunning()` sets `grinder_runtime_millis` to the *main
+  grind's* duration; state moves to `TOPUP`; the very first pass through
+  `loopTopUp()` (with `grinder_is_running == false`) calls
+  `metrics.sendTopUp(grinder_runtime_millis, delta_grams)` before any real
+  topup pulse has fired — so the first "topup" event reported for every
+  single session is actually the main grind's own runtime/weight,
+  mislabeled.
+- **What**: confirmed statistically — reconstructing per-session clusters
+  in the historical `topup` table, row 1 of every cluster averages ~11s
+  runtime / ~11.7g weight (obviously a full dose, not a pulse), while rows
+  2+ average 0.5-1.7s / <1.5g (genuine pulses). 2,122 of 7,647 historical
+  `topup` rows (~28%) are this misattributed main-grind tail, not real
+  topup data.
+- **Why it matters**: harmless to current on-device behavior (it's just a
+  metrics/logging event, doesn't affect grinder control), but it
+  corrupted a chunk of the very historical dataset D7's model is being
+  fit from — the topup-model analysis had to filter it out by heuristic
+  (first row per ~20s-gap cluster). The new `sessions` schema (D8/D9,
+  and `.agent/design/topup-model.md` §6) should tag events by explicit
+  `event_type` (`MAIN_GRIND`/`TOPUP`) at write time so this class of bug
+  is structurally impossible going forward, and the firmware fix itself
+  (don't emit a topup event before a real pulse has happened) should ship
+  with the rewrite.
+- **Resolution**: —
+
+### AR-022 — D7's 80%/Δ0.05g accuracy target may not be physically achievable on the current hardware — needs owner input
+- **Area**: firmware/dosing
+- **Status**: needs-owner-input
+- **Found**: 2026-09-11, `.agent/design/topup-model.md` §5, from live
+  analysis of 5,525 genuine historical topup pulses.
+- **What**: sensor noise floor is ~0.02g (2.5x tighter than needed — not
+  the bottleneck). But the smallest *reliably controllable* topup
+  increment — the output of the shortest pulse that reliably clears the
+  ~300ms electromechanical dead zone — has a measured spread of roughly
+  0.15-0.2g effective size with ~0.14g sd around it. That is physically
+  coarser than the 0.05g "spot on" tolerance by roughly 3-4x: a single
+  relay-switched topup pulse cannot reliably add exactly 0.05g on this
+  grinder, full stop, no amount of modeling fixes that. Landing inside
+  0.05g in 80% of sessions therefore depends almost entirely on the
+  *main grind* itself stopping close to target on its own, not on topup
+  fine-tuning it in — sessions that need more than ~0.15g of topup
+  correction will mostly land in the 0.05-0.2g band, not under 0.05g.
+- **Why it matters**: this is the owner's own stated success criterion
+  (D7), not an implementation detail — it should not be silently
+  reinterpreted. The 95%/Δ0.2g and overshoot-≤0.3g targets both look
+  achievable (see AR-023 for a currently-unmet baseline on the overshoot
+  side). The 80%/Δ0.05g target is achievable but tight, and its
+  achievability now depends on how good the *main-grind* stop estimate
+  turns out to be in practice, not on the topup logic. Given hardware is
+  fixed (D1), there's no mechanical lever to pull here.
+- **Resolution**: pending — see conversation; flagged for the owner to
+  confirm whether the target stands as-is (accepting most 0.05-0.2g-band
+  sessions won't count as "spot on"), or should be revisited given the
+  measured hardware ceiling.
+
+### AR-023 — Current topup lookup table already breaches the 0.3g overshoot cap ~21% of the time at its shortest pulse setting
+- **Area**: firmware/dosing
+- **Status**: confirmed (data-driven finding about the *current live*
+  system's real-world behavior, distinct from AR-011's separate fallback-
+  path bug)
+- **Found**: 2026-09-11, `.agent/design/topup-model.md` §1.4/§5, from the
+  400-500ms bucket of genuine historical topup pulses (n=3,911): 20.9%
+  exceeded 0.3g added by that single pulse alone; 44.9% exceeded 0.2g.
+- **What**: the shortest bucket of `topup_lookup_table` fires whenever the
+  remaining gap is ≤0.1g — but the pulse duration that bucket is tuned to
+  has enough inherent scatter that roughly 1 in 5 firings alone overshoots
+  the 0.3g cap, independent of any other bug. This is a property of the
+  mechanism (dead time + flow-rate noise at short durations), not a coding
+  mistake, but the current lookup table has no logic to account for it —
+  it always fires the configured duration regardless of the risk.
+- **Why it matters**: directly relevant to the owner's stated top
+  complaint (overshoot forces discarding ground coffee). Strong evidence
+  the *current* device already overshoots more often in practice than the
+  new D7 target allows, not just a theoretical risk. The proposed model
+  (`.agent/design/topup-model.md` §4.5) addresses this directly: refuse to
+  fire below a minimum controllable gap, and aim each pulse at ~90% of the
+  remaining gap rather than 100%, rather than unconditionally firing a
+  fixed duration.
+- **Resolution**: —
