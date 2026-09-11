@@ -1,12 +1,13 @@
 # Status
 
-*Last updated: 2026-09-11 — FreeRTOS task skeleton implemented and building.*
+*Last updated: 2026-09-11 — all 7 FreeRTOS tasks have real bodies (only the
+web SPA itself remains unbuilt).*
 
 ## Where things stand
 
 Planning and design are done; implementation is underway. Branch
 `rewrite/rtos-fork`. Standing rules in `AGENTS.md`, full decision log in
-`DECISIONS.md` (D1-D17), all findings in `ARS.md` (AR-001-027, all
+`DECISIONS.md` (D1-D17), all findings in `ARS.md` (AR-001-034, all
 resolved or non-blocking), design docs in `.agent/design/`.
 
 **Design work completed:**
@@ -78,25 +79,66 @@ resolved or non-blocking), design docs in `.agent/design/`.
   are concrete in this code (`target_grams_corrected` as the one canonical
   stop-comparison value; `computeCorrectedTarget()` as the one function
   both the button and API/`DoseRequest` paths call).
-  Display/Network/Telemetry task *bodies* are stubbed to logging (real
-  ST7735 rendering, WiFiManager/AsyncWebServer/ArduinoOTA, and the
-  PostgREST POST are all follow-up work) — see D15-D17 and AR-026/AR-027
-  for the implementation-pass decisions/findings this produced. The
-  ADS1232 driver is vendored in directly (D6, executed via D16 — the
+  The ADS1232 driver is vendored in directly (D6, executed via D16 — the
   submodule was never checked out in this repo, so its two source files
   were copied from the sister checkout instead of running
-  `git submodule update --init`). Verified: `pio run -e esp_wroom_02`
-  succeeds (RAM 4.4%, flash 21.7%); `pio test -e native` still 22/22
-  (`lib/DosingModel` itself untouched). Old `lib/API`/`Display`/
+  `git submodule update --init`). Old `lib/API`/`Display`/
   `WebSocketSettings`/etc. modules are left in place for reference
   (AR-026) but no longer compiled into `esp_wroom_02` (nothing includes
   their headers).
 
-**Not yet started:** web SPA, real ST7735 rendering in `DisplayTask`, real
-WiFiManager/AsyncWebServer/ArduinoOTA in `NetworkTask`, real NVS read/write
-in `SettingsTask`, wiring the PostgREST POST into `TelemetryTask`,
-decommissioning `coffee_grinder_api` (waits until the new pipeline is
-verified in real use).
+- **SettingsTask, DisplayTask, NetworkTask, TelemetryTask real bodies**
+  (all four remaining stubs from the skeleton pass, implemented in
+  parallel by four subagents in isolated git worktrees, then merged):
+  - **SettingsTask**: real `SettingsSnapshot` NVS persistence via
+    `Preferences` (`"settings"` namespace, one key per field, a
+    `schema_ver` guard), sharing the same field-validation functions as
+    the live write path (AR-016) rather than a second copy. `TopupModelV1`
+    NVS persistence is a separate structure and is still stubbed
+    (AR-028).
+  - **DisplayTask**: real ST7735 rendering for all 11 `DisplayMode`
+    values, porting the old code's already-correct dirty-rect redraw
+    discipline (only repaint changed pixels, not full-screen) rather than
+    a naive per-frame redraw — and fixing two latent bugs surfaced in the
+    process (AR-018 full-redraw-on-CONFIRM, AR-012 stale connection
+    indicator never erased). `current_color`/`target_color`/`time_color`,
+    idle countdown, debug IP, and OTA percent aren't populated by their
+    producer tasks yet (AR-032) — cosmetic gap, not a DisplayTask bug.
+  - **NetworkTask**: real WiFiManager provisioning (AP name `"Eureka
+    setup"`, ported from the old code), `eureka.local` mDNS, and real
+    ArduinoOTA gated by the existing `otaSafeToStart()` (D12) — the gate
+    works by never pumping `ArduinoOTA.handle()` while a grind is active
+    (so the espota handshake never even starts), with an `onStart()`
+    check as a narrow race backstop. AsyncWebServer is live with the D4
+    consolidated single-websocket channel scaffolded (4-client cap per
+    AR-014, `cleanupClients()` per AR-013, typed JSON envelope, real
+    inbound `settings_write`/`dose_request` handling forwarded to the
+    owning task) — the SPA content itself is explicitly out of scope here
+    (placeholder root response) and AP-portal status during provisioning
+    is currently log-only, not shown on-screen, since DisplayTask now
+    exclusively owns the SPI bus (AR-033).
+  - **TelemetryTask**: real PostgREST POST/PATCH against the live `v2`
+    schema (`/sessions`, `/events`, `/raw_samples`), plain HTTP with no
+    auth header per the deployment's actual `postgrest_anon`-by-port
+    config, live-verified against `192.168.0.111:3000` and cleaned up
+    afterward. TOPUP pulse timestamps are currently approximated from one
+    value rather than DosingTask's two real ones (AR-029), session
+    `outcome` (aborted vs. timed_out) is inferred heuristically rather
+    than reported explicitly (AR-030), and `firmware_version` posts a
+    hardcoded placeholder pending a real version-stamping scheme
+    (AR-031).
+
+  Verified after merging all four: `pio run -e esp_wroom_02` succeeds —
+  **RAM 10.0%, flash 89.7%** (up from 4.4%/21.7% at the skeleton stage;
+  flagged as AR-034, worth checking before the SPA/LittleFS work or any
+  further library additions land, since the app partition now has
+  limited headroom left). `pio test -e native` still 22/22
+  (`lib/DosingModel` itself untouched by any of this).
+
+**Not yet started:** the web SPA itself (and serving it from LittleFS —
+D4), decommissioning `coffee_grinder_api` (waits until the new pipeline is
+verified in real use). Everything else the original 7-task skeleton left
+stubbed now has a real implementation.
 
 ## Infrastructure on hand
 
@@ -105,6 +147,10 @@ verified in real use).
   above, scoped to old tables only, no access to the new `v2` schema.
 - PostgREST live at `http://192.168.0.111:3000` (see `AGENTS.md`), with
   its own scoped `postgrest_anon`/`postgrest_authenticator` roles.
+  `TelemetryTask` now posts to it for real (see above) — the `v2` tables
+  are no longer purely theoretical, though nothing has posted from *actual
+  hardware* yet (only build-time/native verification and a live curl-style
+  request-shape check so far).
 - `coffee_grinder_api` (Python trampoline on `192.168.0.112`) still
   running unchanged — retirement (D8) waits until firmware actually posts
   to PostgREST and the new pipeline is verified in real use.

@@ -682,3 +682,126 @@ Format per entry:
   actual convergence behavior can be observed, rather than guessing at a
   number now.
 - **Resolution**: —
+
+### AR-028 — `TopupModelV1` NVS persistence still stubbed after the SettingsTask NVS pass
+- **Area**: firmware/settings, firmware/dosing
+- **Status**: open
+- **Found**: 2026-09-11, implementing real `SettingsSnapshot` NVS
+  read/write in `lib/SettingsTask/SettingsTask.cpp` (`design/topup-model.md`
+  §5 calls for persisting the recency-weighted model state across reboots).
+- **What**: the task brief scoped this pass to `SettingsSnapshot` only;
+  `TopupModelV1`'s own NVS load/save (a separate, larger persisted
+  structure — the model's running regression state) is untouched and still
+  effectively volatile across reboots.
+- **Why it matters**: every device reboot currently loses the
+  recency-weighted model's learned state and restarts from the prior/
+  cold-start values documented in `topup-model.md` §4 — functionally
+  correct (the model degrades gracefully to its prior) but throws away
+  real learning between power cycles, which matters for D13's accuracy
+  target given how few sessions a home device runs per day.
+- **Resolution**: —
+
+### AR-029 — TelemetryTask approximates TOPUP pulse relay-on/off timestamps with one shared value
+- **Area**: firmware/telemetry, data-infra
+- **Status**: open
+- **Found**: 2026-09-11, wiring `TelemetryTask` to POST `/events` rows for
+  each `TOPUP_PULSE` telemetry event.
+- **What**: `TelemetryEvent` as currently defined only carries the
+  pulse's settle-complete timestamp, not DosingTask's real
+  `g_topup_pulse_start_ms`/relay-off timestamps, so both the events-table
+  columns for pulse start and pulse end are populated from the one value
+  TelemetryTask actually has.
+- **Why it matters**: degrades the precision of exactly the topup-pulse
+  duration data `topup-model.md`'s regression is fit from (D7) — new
+  sessions posted through the rewritten pipeline would carry coarser
+  timing than the historical `topup` table did, undermining the model's
+  own future retraining data. Fix is mechanical: forward the two real
+  timestamps DosingTask already has locally into `TelemetryEvent`.
+- **Resolution**: —
+
+### AR-030 — Session `outcome` (completed/aborted/timed_out) is inferred heuristically by TelemetryTask, not reported explicitly by DosingTask
+- **Area**: firmware/telemetry, data-infra
+- **Status**: open
+- **Found**: 2026-09-11, wiring the `PATCH /sessions` finalize call.
+- **What**: DosingTask's telemetry stream doesn't currently distinguish
+  *why* a session ended (BACK-button abort vs. the TOPUP-loop wall-clock
+  safety cutoff in AR-027 vs. normal completion) — both non-normal paths
+  collapse to a generic `aborted` outcome in the schema rather than
+  `timed_out` getting its own value.
+- **Why it matters**: loses a real signal for later analysis (AR-027's
+  safety cutoff firing in practice would be exactly the kind of thing
+  worth knowing about from field data, and currently looks identical to a
+  manual abort in the database).
+- **Resolution**: —
+
+### AR-031 — No firmware-version scheme yet; PostgREST rows post a hardcoded placeholder
+- **Area**: firmware/telemetry, data-infra
+- **Status**: open
+- **Found**: 2026-09-11, TelemetryTask needed *some* value for the
+  schema's `NOT NULL firmware_version` column and used the literal string
+  `"rtos-rewrite-dev"`.
+- **What**: the project has no build-time version-stamping mechanism
+  (git SHA, semver tag, build timestamp) wired into the firmware yet.
+- **Why it matters**: minor now (single developer, single branch), but
+  once this firmware is actually flashed and iterated on, session rows in
+  Postgres become unable to distinguish which build produced them — makes
+  debugging field behavior against a specific commit much harder later.
+  Cheap to fix whenever OTA/build tooling is next touched (e.g. embed
+  `git describe` via a PlatformIO build flag).
+- **Resolution**: —
+
+### AR-032 — Several `DisplayCommand` fields (colors, idle countdown, debug IP, OTA percent) aren't populated by the tasks that should fill them yet
+- **Area**: firmware/display, firmware/dosing, firmware/network
+- **Status**: open
+- **Found**: 2026-09-11, implementing real DisplayTask rendering — it
+  renders every `DisplayMode` correctly against whatever `DisplayCommand`
+  it's handed, but DosingTask's `sendDisplayCommand()` doesn't yet set
+  `current_color`/`target_color`/`time_color` or `idle_h/m/s/ms`, and
+  NetworkTask doesn't yet set `debug_ip`/`ota_percent`.
+- **Why it matters**: cosmetic only — DisplayTask defaults colors
+  sensibly per-mode and renders gracefully on zero/empty fields — but the
+  SCREENSAVER, DEBUG, and OTA_UPDATE screens will look sparse/incomplete
+  until Dosing/Network tasks are extended to populate their half of the
+  contract. Not a bug in DisplayTask; a remaining wiring gap in its
+  producers.
+- **Resolution**: —
+
+### AR-033 — WiFiManager AP-provisioning status no longer drawn directly to the display (deliberate, from the single-writer SPI rule)
+- **Area**: firmware/display, firmware/network
+- **Status**: open — behavior change worth the owner's awareness, not a
+  bug
+- **Found**: 2026-09-11, implementing real NetworkTask WiFi provisioning.
+  The old pre-rewrite code drew AP-portal status directly to the ST7735
+  from WiFiManager callbacks running in Network's context.
+- **What**: under the new architecture DisplayTask exclusively owns the
+  SPI bus (single-writer rule, closes the original audit's shared-resource
+  findings) — so NetworkTask can no longer draw to the screen itself
+  during WiFi setup and currently only logs AP-portal status instead.
+- **Why it matters**: during initial WiFi provisioning (captive portal
+  active), the display won't show "connect to Eureka setup" or similar —
+  arguably the single moment this information is most useful, since
+  there's no other UI to convey it. Proper fix is a new `DisplayMode` /
+  `DisplayCommand` that NetworkTask sends to DisplayTask to render instead
+  of drawing directly — small, contained addition, just not done yet.
+- **Resolution**: —
+
+### AR-034 — Flash usage jumped from 21.7% to 89.7% across the four parallel task implementations, before the SPA/LittleFS work has even landed
+- **Area**: firmware/build, firmware/network
+- **Status**: open — needs-owner-awareness, not yet a hard blocker
+- **Found**: 2026-09-11, `pio run -e esp_wroom_02` after merging
+  SettingsTask/DisplayTask/NetworkTask/TelemetryTask's real
+  implementations (RAM 10.0%, flash 89.7% of the ESP32-WROOM's 1.25MB
+  app partition). NetworkTask's own build alone measured 74.7% before the
+  other three were merged in — WiFiManager + ESPAsyncWebServer + AsyncTCP
+  + ArduinoOTA + HTTPClient/WiFiClientSecure account for most of the jump.
+- **Why it matters**: the web SPA (D4) still needs to be built and served
+  from a LittleFS partition — that's a separate filesystem partition, not
+  app flash, so it doesn't directly compete with this number, but the
+  *app* partition itself now has only ~10% headroom left for the SPA's own
+  serving code, any future task growth, or partition-table adjustments
+  (e.g. OTA needs two app partitions to swap between — worth double-
+  checking `partitions.csv` still has room for a second 1.25MB-class OTA
+  slot at this size). Not urgent, but the next piece of work that touches
+  partitioning or adds a library dependency should check `pio run`'s
+  size report before assuming there's slack.
+- **Resolution**: —

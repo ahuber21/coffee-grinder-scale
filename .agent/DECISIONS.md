@@ -196,3 +196,17 @@ with `OTA_UPDATE` simply a value Dosing task never assigns (Network task's
 narrow second-writer case per §7 is unaffected). If a future FSM state ever
 needs to exist without a corresponding display layout (or vice versa), this
 should be revisited — nothing here prevents splitting them later.
+
+**D18 — WiFi-provisioning (AP portal) status is log-only, not shown on the
+ST7735, under the new task architecture.** A side effect of the FreeRTOS
+rewrite's single-writer-per-resource rule (closes the original audit's
+shared-SPI-bus class of findings), not a deliberate UX decision: the old
+code drew AP-portal status directly to the display from WiFiManager's own
+callback, which ran outside Display's control. Under the new design,
+DisplayTask exclusively owns the SPI bus, so NetworkTask can no longer draw
+to the screen itself and currently just logs. Left as AR-033 rather than
+fully resolved here, since it's arguably the single moment on-screen
+status is most useful (no other UI exists during initial setup) — flagged
+for the owner to decide whether it's worth a small `DisplayMode`/
+`DisplayCommand` addition (NetworkTask sends, DisplayTask renders) or
+whether log-only is acceptable given this is a one-time setup step.
