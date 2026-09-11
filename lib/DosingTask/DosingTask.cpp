@@ -1,6 +1,8 @@
 #include "DosingTask.h"
 
 #include <Arduino.h>
+#include <cstdio>
+#include <cstring>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 #include <time.h>
@@ -79,8 +81,48 @@ void setDosingActiveBit() {
   }
 }
 
+/** Human-readable name for a DosingState, for diagnostic log lines. */
+const char *dosingStateName(DosingState s) {
+  switch (s) {
+    case DosingState::BOOT: return "BOOT";
+    case DosingState::IDLE: return "IDLE";
+    case DosingState::CONFIRM: return "CONFIRM";
+    case DosingState::TARE: return "TARE";
+    case DosingState::GRINDING: return "GRINDING";
+    case DosingState::TOPUP: return "TOPUP";
+    case DosingState::STOPPING: return "STOPPING";
+    case DosingState::FINALIZE: return "FINALIZE";
+    case DosingState::SCREENSAVER: return "SCREENSAVER";
+    case DosingState::DEBUG: return "DEBUG";
+    case DosingState::OTA_UPDATE: return "OTA_UPDATE";
+  }
+  return "?";
+}
+
+/**
+ * Sends a free-text diagnostic line over the WS "log" channel (see
+ * NetworkTask.cpp's buildTelemetryJson and the SPA's Live page) --
+ * lets state transitions and button presses be watched remotely
+ * without a serial cable.
+ */
+void sendLog(const char *line) {
+  TelemetryEvent ev{};
+  ev.type = TelemetryType::LOG_LINE;
+  ev.session_id = g_session_id;
+  ev.runtime_ms = g_grinder_started_ms ? (millis() - g_grinder_started_ms) : 0;
+  strncpy(ev.log_line, line, sizeof(ev.log_line) - 1);
+  ev.log_line[sizeof(ev.log_line) - 1] = '\0';
+  xQueueSend(g_telemetry_q, &ev, 0);
+}
+
 /** Moves the FSM to `next`, resetting the state-entry timer and active bit. */
 void transitionTo(DosingState next) {
+  if (next != g_state) {
+    char line[96];
+    snprintf(line, sizeof(line), "state %s -> %s", dosingStateName(g_state),
+              dosingStateName(next));
+    sendLog(line);
+  }
   g_state = next;
   g_state_entered_ms = millis();
   setDosingActiveBit();
@@ -292,12 +334,25 @@ void dosingTaskFn(void *) {
     // different-button-cancels logic lives here.
     ButtonPress press;
     while (xQueueReceive(g_button_press_q, &press, 0) == pdTRUE) {
+      {
+        char line[96];
+        snprintf(line, sizeof(line), "button %d received in state %s",
+                  static_cast<int>(press.button), dosingStateName(g_state));
+        sendLog(line);
+      }
       switch (g_state) {
         case DosingState::IDLE:
         case DosingState::SCREENSAVER:
           if (press.button == ButtonId::LEFT || press.button == ButtonId::RIGHT) {
             g_is_double = press.button == ButtonId::RIGHT;
             g_pending_confirm_button = press.button;
+            // Preview the real target immediately, not whatever
+            // g_target_grams happened to hold before this press --
+            // otherwise the CONFIRM screen shows a stale or default value.
+            float base = g_is_double ? g_settings.target_dose_double
+                                      : g_settings.target_dose_single;
+            computeCorrectedTarget(base, g_is_double, g_target_grams,
+                                   g_target_grams_corrected);
             transitionTo(DosingState::CONFIRM);
           }
           break;
@@ -328,6 +383,16 @@ void dosingTaskFn(void *) {
 
     // Non-sample-driven state transitions.
     switch (g_state) {
+      case DosingState::CONFIRM: {
+        // Lapses back to IDLE if nobody confirms or cancels in time --
+        // otherwise a missed button press (or nobody ever pressing one)
+        // leaves this state waiting forever, which also permanently
+        // blocks OTA since CONFIRM counts as an active session.
+        if (millis() - g_state_entered_ms >= g_settings.confirm_timeout_ms) {
+          transitionTo(DosingState::IDLE);
+        }
+        break;
+      }
       case DosingState::TARE: {
         if (g_have_sample) {
           g_grams_on_grind_start = g_last_sample.grams;  // software tare baseline
@@ -375,6 +440,30 @@ void dosingTaskFn(void *) {
       }
       default:
         break;
+    }
+
+    /*
+     * Backstop: no non-idle state should ever persist indefinitely.
+     * GRINDING/TOPUP/FINALIZE/CONFIRM already have their own faster,
+     * purpose-built timeouts above; this is a much longer last-resort
+     * net for whatever isn't -- e.g. TARE waiting on a scale sample
+     * that never arrives because Scale task died, or any future state
+     * this reasoning didn't anticipate. Without it, any such gap leaves
+     * the device stuck until a physical power-cycle, and also blocks
+     * OTA indefinitely, since every non-idle state counts as an active
+     * session.
+     */
+    constexpr uint32_t kMaxStateDurationMs = 60000;
+    if (g_state != DosingState::IDLE && g_state != DosingState::SCREENSAVER &&
+        g_state != DosingState::BOOT &&
+        millis() - g_state_entered_ms >= kMaxStateDurationMs) {
+      char line[96];
+      snprintf(line, sizeof(line), "backstop: forcing IDLE from %s after %lums",
+                dosingStateName(g_state), static_cast<unsigned long>(kMaxStateDurationMs));
+      sendLog(line);
+      grinderRelay(false);
+      g_finalize_done = false;
+      transitionTo(DosingState::IDLE);
     }
 
     if (got_sample || g_state != DosingState::GRINDING) {

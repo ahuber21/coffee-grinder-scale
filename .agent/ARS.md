@@ -940,3 +940,56 @@ Format per entry:
   (see DECISIONS.md) -- 128/10/12 are now the compiled-in defaults
   directly, reflecting this device's actual, confirmed hardware
   configuration.
+
+### AR-039 — CONFIRM had no timeout, could get permanently stuck, and that also permanently blocked OTA with no remote recovery
+- **Area**: firmware/dosing, firmware/network
+- **Status**: fixed
+- **Found**: 2026-09-11, live on the device: the display showed "0.0
+  OK?" (the CONFIRM screen) and stayed there through repeated button
+  presses. `SettingsSnapshot.confirm_timeout_ms` already existed as a
+  field for exactly this purpose but was never wired to anything --
+  CONFIRM only ever left via a matching/non-matching button press, with
+  no fallback. Independently confirmed by a second symptom: the next
+  OTA upload failed ("No response from the ESP") because
+  `otaSafeToStart()` treats every non-IDLE/SCREENSAVER/BOOT state,
+  including CONFIRM, as an active session and refuses to even pump
+  ArduinoOTA's protocol handling -- so a stuck CONFIRM also permanently
+  blocked OTA, and there was no WS/HTTP command that could cancel it
+  remotely. Recovered this time via a physical power-cycle.
+- **Why it matters**: a device that can get permanently stuck with no
+  remote recovery path is a real operational hazard, independent of
+  whatever originally causes a given state to stop advancing -- the
+  guard rail matters even without knowing that root cause. (Root cause
+  of *this specific instance* -- why button presses stopped registering
+  in the first place -- is still open; diagnostic logging was added
+  in the same pass to help pin it down, see below.)
+- **Resolution**: two fixes. (1) `confirm_timeout_ms` now actually wired
+  up -- CONFIRM lapses back to IDLE on its own if nothing confirms or
+  cancels it in time, same as FINALIZE/GRINDING/TOPUP already did with
+  their own timeouts. (2) A general 60s backstop added after the state
+  machine's per-state handling: any non-idle state that persists longer
+  than that is forced back to IDLE (relay off) regardless of cause --
+  a last-resort net for whatever isn't covered by a purpose-built
+  timeout (e.g. TARE waiting on a scale sample that never arrives), so
+  no future gap in this reasoning can strand the device or block OTA
+  for more than a bounded time again.
+
+### AR-040 — Button/state diagnostic logging added over the existing WS "log" channel
+- **Area**: firmware/dosing, firmware/input
+- **Status**: open — deployed for live diagnosis, not yet a completed investigation
+- **Found**: 2026-09-11, needed to diagnose AR-039's underlying "why
+  did button presses stop registering" question without a serial
+  cable. `TelemetryType::LOG_LINE` -> the WS `"log"` envelope -> the
+  SPA's Live page already existed as plumbing but nothing emitted
+  LOG_LINE events for button/state activity. Added: InputTask logs
+  every debounce decision (button id, pin, whether it read HIGH at
+  verification time), independent of whether a press is actually sent
+  on; DosingTask logs every ButtonPress it receives (with the state it
+  arrived in) and every state transition.
+- **Why it matters**: this turns "buttons do nothing" from a guess
+  into an observable fact -- whether the ISR/debounce layer ever sees a
+  press, whether Dosing task receives it, and what it decides to do
+  with it, all become visible live over `/ws` without touching the
+  device physically.
+- **Resolution**: pending a live session watching the log stream while
+  the owner presses buttons.

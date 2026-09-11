@@ -1,6 +1,7 @@
 #include "InputTask.h"
 
 #include <Arduino.h>
+#include <cstdio>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 
@@ -79,7 +80,17 @@ void inputTaskFn(void *) {
       DebounceState &d = g_debounce[i];
       if (d.pending && (now - d.edge_ms) >= g_min_hold_ms) {
         auto pin = i == 0 ? BUTTON_LEFT : (i == 1 ? BUTTON_RIGHT : BUTTON_BACK);
-        if (digitalRead(pin) == HIGH) {
+        bool held_high = digitalRead(pin) == HIGH;
+        // Diagnostic: reports every debounce decision, not just accepted
+        // presses, so a wiring/pin issue (button never reads HIGH) is
+        // visible over the WS log even though nothing gets sent below.
+        TelemetryEvent diag{};
+        diag.type = TelemetryType::LOG_LINE;
+        snprintf(diag.log_line, sizeof(diag.log_line),
+                  "InputTask debounce id=%u pin=%d held_high=%d", i,
+                  static_cast<int>(pin), held_high ? 1 : 0);
+        xQueueSend(g_telemetry_q, &diag, 0);
+        if (held_high) {
           ButtonPress press{static_cast<ButtonId>(i), now};
           xQueueSend(g_button_press_q, &press, 0);
         }
