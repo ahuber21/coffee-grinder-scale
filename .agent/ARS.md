@@ -623,10 +623,10 @@ Format per entry:
   levers found for the latter, since it's a main-grind-side fix rather
   than a topup-pulse-side one (which is capped by clumping per D13,
   unlike this).
-- **Resolution**: design addition made — a third small persisted model
+- **Resolution**: Fixed. Design addition — a third small persisted model
   ("Model C", `coast_weight_hat`) alongside the two from
   `topup-model.md` §4, subtracting a predicted coast offset from the
   effective stop threshold. See `topup-model.md` §8 for the full design.
-  Not yet implemented in code — the in-progress `DosingModel` library
-  implementation covers Models A/B only; Model C is a follow-up addition
-  to that same module.
+  Implemented in `lib/DosingModel/` (`CoastModel` class,
+  `MainGrindModel::predictStopTimeMsWithCoast`), commit `f9fad2f`, 6 new
+  unit tests passing (22/22 total in the module).

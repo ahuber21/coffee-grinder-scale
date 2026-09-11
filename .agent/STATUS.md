@@ -35,14 +35,19 @@ resolved or non-blocking), design docs in `.agent/design/`.
   chosen per link. Closes 15 audit findings by construction. D12: OTA is
   refused outright during a grind, not aborted.
 
-**Implementation in progress:**
-- `lib/DosingModel/` — Models A + B (main-grind rate, topup pulse
-  response) from `topup-model.md` §4, natively unit-tested. Model C
-  (coast, §8/D14) is a queued follow-up to the same module.
+**Implemented:**
+- `lib/DosingModel/` — all three models (main-grind rate, topup pulse
+  response, coast anticipation) from `topup-model.md` §4/§8, natively
+  unit-tested (22/22 passing, independently re-verified). Not yet wired
+  into any actual control loop — that happens once the FreeRTOS task
+  implementation exists.
 
-**Not yet started:** PostgREST/`sessions` schema plan, web SPA, FreeRTOS
-task implementation (scale/display/network/settings), integration of the
-dosing model into an actual control loop.
+**In progress:** PostgREST schema + deployment on `192.168.0.111`
+(explicitly approved by the owner, including the systemd service).
+
+**Not yet started:** web SPA, FreeRTOS task implementation
+(scale/display/network/settings), integration of the dosing model into an
+actual control loop.
 
 ## Infrastructure on hand
 
