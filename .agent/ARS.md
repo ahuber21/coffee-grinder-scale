@@ -513,7 +513,7 @@ Format per entry:
 
 ### AR-022 — D7's 80%/Δ0.05g accuracy target may not be physically achievable on the current hardware — needs owner input
 - **Area**: firmware/dosing
-- **Status**: needs-owner-input
+- **Status**: fixed
 - **Found**: 2026-09-11, `.agent/design/topup-model.md` §5, from live
   analysis of 5,525 genuine historical topup pulses.
 - **What**: sensor noise floor is ~0.02g (2.5x tighter than needed — not
@@ -536,10 +536,20 @@ Format per entry:
   achievability now depends on how good the *main-grind* stop estimate
   turns out to be in practice, not on the topup logic. Given hardware is
   fixed (D1), there's no mechanical lever to pull here.
-- **Resolution**: pending — see conversation; flagged for the owner to
-  confirm whether the target stands as-is (accepting most 0.05-0.2g-band
-  sessions won't count as "spot on"), or should be revisited given the
-  measured hardware ceiling.
+- **Resolution**: Resolved, no change to D7's numbers — see `DECISIONS.md`
+  D13. Owner confirmed the physical read (relay minimum on-time roughly
+  0.3-0.4s; within that window ground coffee clumps unpredictably, and
+  whether a clump falls is what produces the ~0.15-0.2g granularity — not
+  something a smarter topup-pulse model can fix). Strategy: chase 0.05g
+  primarily through a much better *main-grind* stop estimate — a
+  continuous flow during the main grind isn't subject to the same
+  clumping (it's a steady stream, not discrete bursts) — so topup is
+  invoked as rarely as possible, rather than trying to make topup pulses
+  themselves more precise than the mechanism allows. Owner independently
+  tried a naive `total_grams_out / time_running` rate estimate and found
+  it insufficient; this is exactly why `topup-model.md`'s Model A uses a
+  continuous regression over the post-dead-time plateau instead of a
+  single division from t=0 — see the addendum added there.
 
 ### AR-023 — Current topup lookup table already breaches the 0.3g overshoot cap ~21% of the time at its shortest pulse setting
 - **Area**: firmware/dosing

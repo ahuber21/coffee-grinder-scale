@@ -112,3 +112,21 @@ rejects the OTA begin while Dosing task is outside `IDLE`/`SCREENSAVER`,
 rather than the design doc's originally-recommended abort-and-stop
 default. See `.agent/design/rtos-architecture.md` §7 for the mechanism
 this replaces.
+
+**D13 — D7's accuracy targets stand unchanged, including 80%/Δ0.05g.**
+Data analysis (AR-022) found the grinder's minimum controllable topup
+increment (~0.15-0.2g, driven by clumping within the relay's ~0.3-0.4s
+minimum on-time) is coarser than the 0.05g "spot on" tolerance — raised as
+a question of whether the target itself needed revising. Owner reviewed
+the physics and declined to relax the number: clumping during a short
+topup pulse is a real, unpredictable limitation, but the *main grind*
+itself is a continuous stream, not discrete clumped bursts, and isn't
+subject to the same granularity floor. The path to 80%/0.05g is therefore
+a much better main-grind stop estimate (so topup is rarely needed at all),
+not a more precise topup pulse (which can't get better than the mechanism
+allows). The owner independently found a naive `total_grams_out /
+time_running` rate estimate insufficient before this was discussed —
+consistent with, and validating, `topup-model.md` §4.2's proposal to fit a
+continuous regression over the post-dead-time plateau rather than a single
+division. No change to the 95%/Δ0.2g or ≤0.3g overshoot-cap targets either
+— both were already assessed as achievable.

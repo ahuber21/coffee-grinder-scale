@@ -51,11 +51,11 @@ main-grind sessions, 209,848 raw sensor rows). Headline results:
 - Found and traced a firmware bug that corrupted ~28% of the historical
   topup log (main-grind tail misreported as a topup event — AR-021),
   harmless to live behavior but worth fixing.
-- **Flagged, not decided**: the 80%/Δ0.05g target may not be physically
-  achievable — the grinder's electromechanical minimum controllable dose
-  increment (~0.15-0.2g) is coarser than the 0.05g tolerance itself. See
-  AR-022, `needs-owner-input`. This is the one thing blocking moving from
-  "model designed" to "model locked in" for implementation.
+- **Resolved (AR-022/D13)**: 80%/Δ0.05g stands unchanged. Owner confirmed
+  the mechanism (relay min on-time ~0.3-0.4s, unpredictable clumping
+  within that window) and chose to chase the target via a better
+  main-grind stop estimate rather than relaxing the number. Model design
+  is now locked in for implementation.
 
 **FreeRTOS task architecture designed.** Full proposal in
 `.agent/design/rtos-architecture.md`: 7 tasks (Scale, Dosing/Session
@@ -109,15 +109,16 @@ Infrastructure groundwork done during planning:
 
 ## Open questions for the owner
 
-- **AR-022** (blocking model lock-in, the only open question left): is the
-  80%-of-sessions-within-Δ0.05g accuracy target still the goal as stated,
-  knowing the grinder's own minimum controllable dose increment
-  (~0.15-0.2g) is physically coarser than that tolerance? The 95%/Δ0.2g
-  and overshoot-≤0.3g targets both look solidly achievable either way. See
-  `.agent/design/topup-model.md` §5.
+None right now. AR-022 resolved: D7's targets stand unchanged (D13) — the
+path to 80%/Δ0.05g is a better main-grind stop estimate, not a more
+precise topup pulse (physically capped by clumping at ~0.15-0.2g, per the
+owner's own explanation of the relay/clumping mechanism). AR-024 resolved:
+OTA is refused outright while a grind is in progress (D12). Design phase
+for the dosing model and task architecture is now fully unblocked.
 
-~~AR-024~~ resolved — OTA is refused outright while a grind is in
-progress, not aborted mid-grind. See `DECISIONS.md` D12.
+A hardware idea (reducing topup-pulse clumping via a chute/funnel
+modification) came up during this discussion — explicitly parked for
+later, not in scope now. See `.agent/ideas.md`.
 
 ## Decisions made
 

@@ -517,3 +517,44 @@ support strictly better modeling than this document, add:
 None of this blocks the model in §4 — it's usable today, cold, with the
 existing schema. But every field above closes a specific reconstruction gap
 I had to work around in this document.
+
+---
+
+## 7. Addendum: owner physical context (2026-09-11, resolves AR-022 / D13)
+
+The owner reviewed §5's finding and confirmed the physical mechanism
+directly rather than just accepting the statistics: the relay has a
+practical minimum on-time around 0.3-0.4s (matches §1.2's measured
+~300-320ms dead-time almost exactly), and within a pulse that short,
+ground coffee **clumps unpredictably** — whether a clump breaks free and
+falls during that window can't be predicted pulse-to-pulse. A clump
+landing is what produces the ~0.15-0.2g effective granularity measured in
+§1.4. This is a real mechanical limitation, not a modeling gap — no amount
+of statistics on the topup pulse itself gets around it.
+
+The owner's own framing, and the reason D7's targets stand unchanged
+(no relaxation of the 0.05g figure): the **main grind is a continuous
+stream, not a sequence of discrete clumped bursts**, so it isn't subject
+to the same granularity floor — §2's data agrees (session-to-session CV
+~9%, a smooth plateau, no clump-like discontinuities). The path to hitting
+0.05g in 80% of sessions is therefore to make the *main-grind* stop
+estimate as good as possible — so topup, with its clump-limited precision,
+is invoked as rarely as possible and only for small corrections — not to
+try to make topup pulses themselves hit 0.05g (physically not possible on
+this hardware).
+
+The owner also independently attempted a naive `total_grams_out /
+time_running` rate estimate before this conversation and found it
+insufficient ("subtleties"). This validates §4.2's design choice directly:
+a single division from `t=0` is dragged down by the ~0.8-1.0s dead-time
+at the start of every grind (§2.1) and by instantaneous ADC noise if
+sampled at one point — exactly the failure mode a continuous
+weighted-regression fit over the post-dead-time plateau (Model A) is
+designed to avoid. No design change needed here; this is confirmation the
+proposed approach addresses the specific problem the owner had already
+run into by hand.
+
+**Parked for later, explicitly out of scope for this rewrite** (hardware
+is fixed per D1): the owner floated modifying the grinder itself to
+reduce clumping (e.g. a chute/funnel geometry change) as a future
+hypothesis. Not pursued here — noted in `.agent/ideas.md` for later.
