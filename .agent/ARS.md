@@ -851,17 +851,25 @@ Format per entry:
   scroll container despite `white-space: nowrap` cells (would have
   overflowed the page once real session rows exist, since none did at
   verification time to visually trigger it) — both fixed in
-  `webapp/src/index.css`/`History.tsx`. Still open: no live ESP32 running
-  this NetworkTask build exists yet to test the actual `/ws` contract
-  end-to-end from a browser (message shapes only checked by hand against
-  NetworkTask.cpp's source, never exercised against the real running
-  server) — only the firmware's own compile-time check and TelemetryTask's
-  earlier curl-based PostgREST verification exist for that side.
-- **Why it matters**: a clean type-check doesn't catch a WebSocket message
-  the frontend mis-parses at runtime despite matching types on paper. The
-  layout/CORS/console-error class of risk this AR originally flagged is
-  now covered; the live-device WS integration risk is not, and won't be
-  until real hardware runs this firmware.
+  `webapp/src/index.css`/`History.tsx`.
+
+  Update 2026-09-11 (later still): the SPA's LittleFS image was
+  uploaded to the physical device. `GET /` on the real device now
+  returns the actual built `index.html`, and its referenced JS/CSS
+  assets both serve with correct size/content-type -- the SPA is
+  genuinely reachable end-to-end on real hardware, not just in
+  `npm run dev`. Still open: nobody has opened that page in a browser
+  pointed at the live device and exercised the actual `/ws` contract
+  during a real session (message shapes are only checked by hand
+  against NetworkTask.cpp's source, never watched live) -- doing that
+  safely needs a real grind to generate telemetry, which is exactly the
+  kind of live-hardware action this project treats carefully.
+- **Why it matters**: a clean type-check doesn't catch a WebSocket
+  message the frontend mis-parses at runtime despite matching types on
+  paper. The layout/CORS/console-error/static-serving class of risk
+  this AR originally flagged is now covered; the live `/ws` telemetry
+  path specifically is not, and won't be until a real dosing session
+  is watched through the SPA.
 - **Resolution**: partially — see Status. Fully closes once this firmware
   runs on the real device and the SPA is exercised against it.
 

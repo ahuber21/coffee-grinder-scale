@@ -214,11 +214,17 @@ resolved or non-blocking), design docs in `.agent/design/`.
   same flash size as before (93.2%, confirming no behavior changed),
   `pio test -e native` still 22/22.
 
-**Not yet started:** actually uploading the SPA's filesystem image to the
-physical device (`pio run -t uploadfs` has never been run — `/` on the
-real device still 404s; `/ws` and `/api/getDosage` work since those don't
-depend on the filesystem) and decommissioning `coffee_grinder_api` (waits
-until the new pipeline is verified in real use).
+- **SPA filesystem image uploaded to the physical device** (`pio run -t
+  uploadfs -e esp_wroom_02_ota`, owner's go-ahead). Verified live:
+  `GET /` on the device returns the real built `index.html`, and its
+  referenced JS/CSS assets both serve with correct size/content-type.
+  `http://eureka.local/` is now a fully working SPA end-to-end on real
+  hardware, not just in `npm run dev`.
+
+**Not yet started:** decommissioning `coffee_grinder_api` (waits until
+the new pipeline is verified in real use). Everything else the original
+7-task skeleton and the SPA left stubbed now has a real implementation,
+deployed and verified on the physical device.
 
 ## Infrastructure on hand
 
