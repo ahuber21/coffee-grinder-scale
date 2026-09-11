@@ -10,7 +10,7 @@ export const deviceHost = override && override.length > 0 ? override : window.lo
 
 export const wsUrl = `ws://${deviceHost}/ws`;
 
-// D9: the browser queries PostgREST directly, bypassing the device --
-// hardcoded to the known LAN host/port (.agent/design/postgrest-deployment.md).
-// Not device-relative, so no override needed the way deviceHost has one.
+// The browser queries PostgREST directly, bypassing the device --
+// hardcoded to the known LAN host/port. Not device-relative, so no
+// override needed the way deviceHost has one.
 export const postgrestBase = "http://192.168.0.111:3000";

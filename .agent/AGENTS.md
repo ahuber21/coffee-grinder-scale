@@ -134,3 +134,15 @@ source of truth.
   test environment is the right tool. Static asserts are welcome wherever
   they catch a real invariant (struct sizes vs. EEPROM/NVS budget, pin
   conflicts, enum bounds) cheaply.
+- **Comment style**: code should be mostly self-explanatory; comments
+  exist for what isn't. Every class/struct/function/enum gets a short
+  doxygen-style (`/** ... */` or `///<`) doc comment. Anywhere else, an
+  inline comment is explanatory, procedural, or a findings note — plain
+  `//`, at most two lines; something genuinely complex enough to need
+  more goes in a `/* ... */` block, but that's the rare exception, not
+  the default whenever a comment runs long. Never cite a bare decision/
+  section/finding code (`D12`, `§4.5`, `AR-016`) as the explanation
+  itself — the comment must stand on its own without the reader needing
+  to open `DECISIONS.md`/the design doc/`ARS.md` to understand it. Citing
+  a real file path (`.agent/design/topup-model.md`) is fine since that's
+  directly openable, not an opaque code.

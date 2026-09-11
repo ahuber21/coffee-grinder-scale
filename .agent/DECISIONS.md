@@ -232,3 +232,38 @@ the rest of this project's no-internet-dependency stance).
 partition subtype is legacy naming; PlatformIO's LittleFS support mounts
 the same partition region under that label regardless — confirmed
 working via `pio run -t buildfs`).
+
+**D20 — `SettingsSnapshot`'s scale-config defaults (`gain=128`,
+`speed=10`, `read_samples=12`, `calibration_factor`) are this device's
+real, confirmed hardware calibration, hardcoded directly — not a
+migration path kept around indefinitely.** The first OTA deploy of the
+rewritten firmware to the physical device exposed two stacked bugs
+(AR-037, AR-038): `calibration_factor`'s own default was `0.0f`
+(silently zeroing the scale), and a one-time migration added to pull
+the pre-rewrite firmware's still-present EEPROM-emulated settings
+forward omitted `gain`/`speed`/`read_samples` — breaking the migrated
+calibration factor, since it's only meaningful relative to the ADC gain
+it was measured under. Once both were fixed and the correct values
+confirmed live on the device, the migration code was deleted rather than
+kept: both OTA and serial reflashing leave NVS untouched, so the
+migration could only ever do its job once, on this one physical unit,
+and this project is a single fixed device, not a fleet — there is no
+future device that would ever take that code path again. The values
+themselves are now the compiled-in defaults directly. Removing completed
+one-off code promptly (rather than leaving it as permanent dead weight,
+coupled to an already-deleted reference module's struct layout) matches
+this project's general stance on not keeping unused machinery around.
+
+**D21 — Standing comment-style convention: self-explanatory code first,
+doxygen for every declared class/struct/function/enum, plain inline
+comments capped at two lines, and no bare `D`/`§`/`AR-` citations used
+as the explanation itself.** Raised directly by the owner reviewing the
+FreeRTOS rewrite's comments: many carried "(D12)"/"(§4.5)"/"(AR-016)"-
+style tags that require opening `DECISIONS.md`, a design doc, or
+`ARS.md` to understand — the opposite of the "code should speak for
+itself" standard the rewrite is meant to showcase. A citation is fine
+when it points to something directly openable (a real file path); a
+one-letter-plus-number code that only resolves inside this project's own
+internal tracking docs is not. Recorded in `AGENTS.md`'s process
+expectations so it's followed automatically going forward, not just
+applied retroactively once and forgotten.

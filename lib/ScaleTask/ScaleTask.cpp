@@ -15,16 +15,14 @@ namespace {
 ADS1232 g_ads(ADC_PDWN_PIN, ADC_SCLK_PIN, ADC_DOUT_PIN, ADC_SPEED_PIN,
               ADC_GAIN1_PIN, ADC_GAIN0_PIN);
 
-// Cached "have we applied this settings version yet" -- Scale task only
-// needs to notice a version bump and re-apply calibration/ring-buffer
-// config, mirroring today's is_changed + setupScale() dance (§4).
+/** Version of SettingsSnapshot last applied to the ADS1232 driver. */
 uint32_t g_applied_settings_version = 0;
 
+/** Re-applies ADC config to the ADS1232 driver if a new settings version arrived. */
 void applySettingsIfChanged() {
   SettingsSnapshot snap;
-  // Peek, never consume -- this is a per-subscriber mailbox (§4); Scale task
-  // is its only reader, but xQueuePeek keeps the pattern identical to the
-  // multi-reader mailboxes elsewhere and never empties the box.
+  // Peek, never consume: Scale task is the only reader of this mailbox,
+  // and peeking never empties it.
   if (xQueuePeek(g_settings_mailbox_scale, &snap, 0) != pdTRUE) {
     return;
   }
@@ -38,11 +36,10 @@ void applySettingsIfChanged() {
   g_applied_settings_version = snap.version;
 }
 
+/** Scale task entry point: initializes the ADS1232, then samples at ~500Hz. */
 void scaleTaskFn(void *) {
-  // Boot: wait for Settings task's first snapshot before touching the ADC,
-  // so calibration is never applied from a default-constructed placeholder
-  // (§8 -- SETTINGS_LOADED gates this, not the shared BOOT gate other tasks
-  // wait on, since Scale is one of the things *producing* readiness bits).
+  // Wait for Settings task's first snapshot before touching the ADC, so
+  // calibration is never applied from a default-constructed placeholder.
   xEventGroupWaitBits(g_sys_events, kSettingsLoadedBit, pdFALSE, pdTRUE,
                        portMAX_DELAY);
   applySettingsIfChanged();
@@ -55,7 +52,7 @@ void scaleTaskFn(void *) {
   xEventGroupSetBits(g_sys_events, kScaleReadyBit);
 
   uint32_t seq = 0;
-  const TickType_t period = pdMS_TO_TICKS(2);  // ~500Hz poll, §6.1
+  const TickType_t period = pdMS_TO_TICKS(2);  // ~500Hz poll.
   TickType_t lastWake = xTaskGetTickCount();
 
   for (;;) {
@@ -74,8 +71,8 @@ void scaleTaskFn(void *) {
         .millis = millis(),
     };
 
-    // Zero-timeout send; on a full queue (dosing task stalled), drop the
-    // oldest sample rather than block the sampler, per §3.1.
+    // Zero-timeout send; on a full queue (Dosing task stalled), drop the
+    // oldest sample rather than block the sampler.
     if (xQueueSend(g_scale_sample_q, &sample, 0) != pdTRUE) {
       ScaleSample discard;
       xQueueReceive(g_scale_sample_q, &discard, 0);

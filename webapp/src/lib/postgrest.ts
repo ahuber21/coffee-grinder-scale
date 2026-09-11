@@ -1,8 +1,7 @@
-// D9: the browser queries PostgREST directly, bypassing the device --
-// these mirror .agent/design/db-schema/001_sessions_schema.sql's v2
-// tables (only the columns this page actually reads). CORS is open
-// (Access-Control-Allow-Origin: *, verified live against the deployment
-// on 2026-09-11) so no proxy/device involvement is needed.
+// The browser queries PostgREST directly, bypassing the device -- these
+// mirror the v2 schema's tables (only the columns this page actually
+// reads). CORS is open (Access-Control-Allow-Origin: *) so no
+// proxy/device involvement is needed.
 import { postgrestBase } from "./config";
 
 export interface Session {

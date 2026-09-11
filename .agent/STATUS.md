@@ -1,13 +1,14 @@
 # Status
 
-*Last updated: 2026-09-11 — all 7 FreeRTOS tasks have real bodies and the
-web SPA is built; only real-browser/real-device verification remains.*
+*Last updated: 2026-09-11 — all 7 FreeRTOS tasks have real bodies, the
+firmware has run on the physical device for the first time (OTA), and
+the scale reads real calibrated weight on it.*
 
 ## Where things stand
 
 Planning and design are done; implementation is underway. Branch
 `rewrite/rtos-fork`. Standing rules in `AGENTS.md`, full decision log in
-`DECISIONS.md` (D1-D19), all findings in `ARS.md` (AR-001-034, all
+`DECISIONS.md` (D1-D21), all findings in `ARS.md` (AR-001-038, all
 resolved or non-blocking), design docs in `.agent/design/`.
 
 **Design work completed:**
@@ -175,10 +176,49 @@ resolved or non-blocking), design docs in `.agent/design/`.
   contract against a live ESP32 running this firmware — no hardware has
   run this build yet (AR-035, still open on that half).
 
-**Not yet started:** decommissioning `coffee_grinder_api` (waits until the
-new pipeline is verified in real use). Everything else the original
-7-task skeleton left stubbed now has a real implementation, including the
-SPA.
+- **First real deployment to the physical device** (OTA, owner's explicit
+  go-ahead each time). Found and fixed two stacked bugs live, in order:
+  `calibration_factor`'s own compiled-in default was `0.0f`, silently
+  zeroing the scale on first boot (AR-037) — fixed by changing the
+  default to `1.0f`. A one-time migration was then added to fold the
+  pre-rewrite firmware's still-present EEPROM-emulated settings forward
+  (that data survives OTA/serial reflashing, since neither touches NVS)
+  — its first version migrated `calibration_factor` but not
+  `gain`/`speed`/`read_samples`, which silently broke the migrated
+  factor since it's only meaningful relative to the gain it was measured
+  under (AR-038, ~127x reading error, matching the real gain=128 vs.
+  the compiled default gain=1). Fixed in the same migration pass; once
+  the correct values (`gain=128`, `speed=10`, `read_samples=12`,
+  `calibration_factor≈0.000922`) were confirmed live on the device, the
+  migration code was deleted as a completed one-off and those values
+  became the compiled-in defaults directly (D20) — this is a single
+  fixed device, not a fleet, so the migration could only ever run once.
+  Also logged: a "read-only" API smoke test
+  (`/api/getDosage?grams=18`) actually triggered a real grind, since
+  that endpoint enqueues a live `DoseRequest` (AR-036) — no harm done,
+  logged as a process lesson about testing against live hardware.
+- **Comment/documentation cleanup** (D21, owner-directed): every
+  class/struct/function/enum across the rewritten `lib/` and `webapp/`
+  code now has a doxygen-style doc comment; inline comments were
+  tightened to plain, self-contained explanations (no bare
+  `D12`/`§4.5`/`AR-016`-style citations requiring another file to
+  understand); the fully-superseded old modules (`lib/API`, `lib/Display`,
+  `lib/RawDataWebSocket`, `lib/WebSocketGraph`, `lib/WebSocketLogger`,
+  `lib/WebSocketMetrics`, `lib/WebSocketSettings`, and the local-only
+  `dev/graph`/`dev/settings` mock tooling) were deleted outright rather
+  than left as dead weight (closing AR-026); `platformio.ini`'s
+  `lib_ignore` updated to match. `README.md` rewritten to briefly
+  describe the current rewrite (architecture, how to connect — SPA URL,
+  `/ws`, OTA — repo layout) instead of the original pre-rewrite feature
+  list. Verified after: `pio run -e esp_wroom_02` succeeds at the exact
+  same flash size as before (93.2%, confirming no behavior changed),
+  `pio test -e native` still 22/22.
+
+**Not yet started:** actually uploading the SPA's filesystem image to the
+physical device (`pio run -t uploadfs` has never been run — `/` on the
+real device still 404s; `/ws` and `/api/getDosage` work since those don't
+depend on the filesystem) and decommissioning `coffee_grinder_api` (waits
+until the new pipeline is verified in real use).
 
 ## Infrastructure on hand
 

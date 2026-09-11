@@ -11,9 +11,7 @@
 
 namespace {
 
-// §3.3 -- identical ISR template for all three buttons. No global state
-// touched, no settings read: closes AR-001's core hazard and removes the
-// back-vs-left/right asymmetry AR-007 found in the current firmware.
+/** Identical ISR template for all three buttons: no global state touched, no settings read. */
 template <ButtonId B, uint8_t Pin>
 void IRAM_ATTR buttonIsr() {
   ButtonEdge e{B, digitalRead(Pin) == HIGH, millis()};
@@ -22,16 +20,18 @@ void IRAM_ATTR buttonIsr() {
   portYIELD_FROM_ISR(woken);
 }
 
+/** Per-button candidate-press state, awaiting hold-time verification. */
 struct DebounceState {
   bool pending = false;
   bool level = false;
   uint32_t edge_ms = 0;
 };
 
-DebounceState g_debounce[3];  // indexed by ButtonId
+DebounceState g_debounce[3];  ///< Indexed by ButtonId.
 
-uint32_t g_min_hold_ms = 20;  // overwritten from settings once loaded
+uint32_t g_min_hold_ms = 20;  ///< Overwritten from settings once loaded.
 
+/** Refreshes g_min_hold_ms from the latest settings snapshot, if any. */
 void applySettings() {
   SettingsSnapshot snap;
   if (xQueuePeek(g_settings_mailbox_input, &snap, 0) == pdTRUE) {
@@ -39,6 +39,7 @@ void applySettings() {
   }
 }
 
+/** Input task entry point: attaches the button ISRs, then debounces edges. */
 void inputTaskFn(void *) {
   xEventGroupWaitBits(g_sys_events, kSettingsLoadedBit, pdFALSE, pdTRUE,
                        portMAX_DELAY);
@@ -71,8 +72,8 @@ void inputTaskFn(void *) {
       }
     }
 
-    // §3.3: every button, every state, the *same* hold-time verification --
-    // no per-state exception exists at this layer (AR-008's fix).
+    // Every button, every state, the same hold-time verification -- no
+    // per-state exception exists at this layer.
     uint32_t now = millis();
     for (uint8_t i = 0; i < 3; ++i) {
       DebounceState &d = g_debounce[i];

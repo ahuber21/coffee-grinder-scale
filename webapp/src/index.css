@@ -1,8 +1,7 @@
-/* Deliberately dark-only -- matches the physical device's ST7735 display
-   aesthetic (D3) and the old dev/graph, dev/settings mock pages this SPA
-   replaces. Not a theme-detection oversight; a kitchen appliance UI has
-   one context (near the machine), not "whatever OS theme the visitor
-   prefers" the way a general web page would. */
+/* Deliberately dark-only -- matches the physical device's own ST7735
+   display aesthetic. Not a theme-detection oversight; a kitchen
+   appliance UI has one context (near the machine), not "whatever OS
+   theme the visitor prefers" the way a general web page would. */
 
 :root {
   --bg: #1a1a1a;

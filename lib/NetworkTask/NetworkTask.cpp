@@ -4,10 +4,8 @@
 #include <WiFi.h>
 // WiFiManager.h must come before ESPAsyncWebServer.h: it pulls in the
 // synchronous WebServer.h, whose WEBSERVER_H include guard is what makes
-// ESPAsyncWebServer.h skip redefining the HTTP_GET/POST/... enum (it
-// `#ifndef WEBSERVER_H`-guards its own copy) -- reversed, the two libraries'
-// enums conflict at compile time. Same ordering the pre-rewrite
-// src/main.cpp used, for the same reason (see its comment there).
+// ESPAsyncWebServer.h skip redefining the HTTP_GET/POST/... enum -- reversed,
+// the two libraries' enums conflict at compile time.
 #include <WiFiManager.h>
 #include <ArduinoJson.h>
 #include <ArduinoOTA.h>
@@ -25,43 +23,37 @@
 #include "TaskConfig.h"
 #include "defines.h"  // SERVER_PORT
 
+/** True unless Dosing task is mid-grind, in which case an OTA start must be refused. */
 bool otaSafeToStart() {
-  // D12: refuse, don't abort. DOSING_ACTIVE is set/cleared by Dosing task on
-  // entering/leaving anything other than IDLE/SCREENSAVER (see DosingTask.cpp).
   EventBits_t bits = xEventGroupGetBits(g_sys_events);
   return (bits & kDosingActiveBit) == 0;
 }
 
 namespace {
 
-// WiFiManager AP name, reused verbatim from the pre-rewrite src/main.cpp's
-// setupWifi() (git history: "Eureka setup") -- no reason found to change it.
-constexpr const char *kApName = "Eureka setup";
+constexpr const char *kApName = "Eureka setup";  ///< WiFiManager AP name.
 
-// D5: mDNS hostname -> eureka.local, no OTA password (accepted risk, home
-// LAN only -- see DECISIONS.md D5; settled, not revisited here).
+// mDNS hostname -> eureka.local. No OTA password: accepted risk, home
+// LAN only.
 constexpr const char *kMdnsHostname = "eureka";
 constexpr uint16_t kOtaPort = 3232;
 
-// AR-014 fix: one WS, one connection-cap policy, picked once, here.
-constexpr size_t kMaxWsClients = 4;
+constexpr size_t kMaxWsClients = 4;  ///< One connection cap, enforced in one place.
 
 AsyncWebServer g_server(SERVER_PORT);
 AsyncWebSocket g_ws("/ws");
 
 uint32_t g_next_dose_request_id = 1;
 
-// ---------------------------------------------------------------------------
-// D4 multiplexed WS envelope: {"type": <discriminator>, ...fields}.
-// Replaces the five old separate sockets (WebSocketLogger, WebSocketGraph,
-// WebSocketMetrics, RawDataWebSocket, WebSocketSettings) with one channel;
-// each TelemetryType (Messages.h) maps to one envelope "type" string, plus
-// "settings" for the SettingsSnapshot broadcast and "error" for a per-client
-// rejection reply. Most of these types don't have a rendering consumer yet
-// (no SPA) -- the scaffolding is what's real here, not a full frontend
-// contract.
-// ---------------------------------------------------------------------------
+/*
+ * One multiplexed WS channel, not several separate sockets: every
+ * message is {"type": <discriminator>, ...fields}. Each TelemetryType
+ * maps to one envelope "type" string, plus "settings" for the
+ * SettingsSnapshot broadcast and "error" for a per-client rejection
+ * reply.
+ */
 
+/** Maps a TelemetryType to its WS envelope "type" string. */
 const char *telemetryTypeToString(TelemetryType t) {
   switch (t) {
     case TelemetryType::TARGET:
@@ -82,6 +74,7 @@ const char *telemetryTypeToString(TelemetryType t) {
   return "unknown";
 }
 
+/** Serializes one TelemetryEvent into its WS envelope JSON. */
 String buildTelemetryJson(const TelemetryEvent &ev) {
   JsonDocument doc;
   doc["type"] = telemetryTypeToString(ev.type);
@@ -114,6 +107,7 @@ String buildTelemetryJson(const TelemetryEvent &ev) {
   return out;
 }
 
+/** Serializes the broadcast subset of SettingsSnapshot into WS envelope JSON. */
 String buildSettingsJson(const SettingsSnapshot &s) {
   JsonDocument doc;
   doc["type"] = "settings";
@@ -131,6 +125,7 @@ String buildSettingsJson(const SettingsSnapshot &s) {
   return out;
 }
 
+/** Sends a per-client {"type":"error", ...} reply for a rejected request. */
 void sendError(AsyncWebSocketClient *client, const char *message, uint32_t request_id) {
   JsonDocument doc;
   doc["type"] = "error";
@@ -141,6 +136,7 @@ void sendError(AsyncWebSocketClient *client, const char *message, uint32_t reque
   client->text(out);
 }
 
+/** Maps a "settings_write" request's field name to a SettingsFieldId. */
 bool settingsFieldFromName(const char *name, SettingsFieldId &out) {
   if (strcmp(name, "calibration_factor") == 0) {
     out = SettingsFieldId::CALIBRATION_FACTOR;
@@ -177,9 +173,12 @@ bool settingsFieldFromName(const char *name, SettingsFieldId &out) {
   return false;
 }
 
-// §3.6/§4: Network task only does cheap syntactic validation and enqueues a
-// request to the task that owns the state -- it never reaches into another
-// task's memory, no matter how the eventual SPA's message shapes evolve.
+/**
+ * Parses one inbound WS text frame and dispatches "settings_write" /
+ * "dose_request". Network task only does cheap syntactic validation
+ * and enqueues a request to the task that owns the state -- it never
+ * reaches into another task's memory.
+ */
 void handleWsMessage(AsyncWebSocketClient *client, const uint8_t *data, size_t len) {
   JsonDocument doc;
   DeserializationError err = deserializeJson(doc, data, len);
@@ -209,9 +208,8 @@ void handleWsMessage(AsyncWebSocketClient *client, const uint8_t *data, size_t l
     } else {
       req.value.f = doc["value"] | NAN;
     }
-    // Settings task is the sole authority on whether this value is actually
-    // legal (AR-016) -- this is only a syntactic "does this look like a
-    // request" check, per §0.6/§4.
+    // This is only a syntactic "does this look like a request" check --
+    // Settings task is the sole authority on whether the value is legal.
     if (xQueueSend(g_settings_write_q, &req, 0) != pdTRUE) {
       sendError(client, "settings queue full, try again", request_id);
     }
@@ -220,9 +218,8 @@ void handleWsMessage(AsyncWebSocketClient *client, const uint8_t *data, size_t l
 
   if (strcmp(type, "dose_request") == 0) {
     float grams = doc["grams"] | 0.0f;
-    // Same range check as Dosing task's own defense-in-depth check (§3.6,
-    // DosingTask.cpp) -- the fast-fail half of the AR-015 fix; Dosing still
-    // re-validates itself, this doesn't replace that.
+    // Dosing task re-validates this range itself; this is just a
+    // fast-fail check so a bad request doesn't queue up for nothing.
     if (!std::isfinite(grams) || grams <= 0.0f || grams > 40.0f) {
       sendError(client, "grams out of range (0, 40]", request_id);
       return;
@@ -237,6 +234,7 @@ void handleWsMessage(AsyncWebSocketClient *client, const uint8_t *data, size_t l
   sendError(client, "unknown message type", request_id);
 }
 
+/** AsyncWebSocket event callback: connect/disconnect logging, the connection cap, and dispatch. */
 void onWsEvent(AsyncWebSocket *server, AsyncWebSocketClient *client, AwsEventType type,
                void *arg, uint8_t *data, size_t len) {
   switch (type) {
@@ -244,13 +242,11 @@ void onWsEvent(AsyncWebSocket *server, AsyncWebSocketClient *client, AwsEventTyp
       Serial.printf("[Network] WS client #%u connected from %s\n", client->id(),
                     client->remoteIP().toString().c_str());
       if (server->count() > kMaxWsClients) {
-        // AR-014 fix: one cap, enforced in the one place a client can join
-        // (there's only one socket now, so there's only one place to pick).
         client->close();
         return;
       }
       // New clients get the current settings snapshot immediately rather
-      // than waiting for the next write -- useful once a settings UI exists.
+      // than waiting for the next write.
       SettingsSnapshot snap;
       if (xQueuePeek(g_settings_mailbox_network, &snap, 0) == pdTRUE) {
         client->text(buildSettingsJson(snap));
@@ -265,8 +261,8 @@ void onWsEvent(AsyncWebSocket *server, AsyncWebSocketClient *client, AwsEventTyp
       if (info->final && info->index == 0 && info->len == len && info->opcode == WS_TEXT) {
         handleWsMessage(client, data, len);
       }
-      // Fragmented/binary frames aren't supported by this scaffolding yet --
-      // control messages are small enough not to need it.
+      // Fragmented/binary frames aren't supported -- control messages
+      // are small enough not to need it.
       break;
     }
     case WS_EVT_ERROR:
@@ -276,29 +272,27 @@ void onWsEvent(AsyncWebSocket *server, AsyncWebSocketClient *client, AwsEventTyp
   }
 }
 
-// ---------------------------------------------------------------------------
-// OTA (§7, D12: refuse outright, never abort an active grind).
-//
-// ArduinoOTA's public callback surface doesn't give a way to refuse *before*
-// Update.begin() runs: looking at the vendored library source
-// (framework-arduinoespressif32/libraries/ArduinoOTA/src/ArduinoOTA.cpp),
-// handle() only calls onStart() (via _runUpdate()) *after* Update.begin()
-// has already erased the target partition. The actual "refuse before it
-// starts" gate is therefore in networkTaskFn's loop below: ArduinoOTA.handle()
-// is simply never pumped while otaSafeToStart() is false, so the initial
-// UDP handshake that would move the library into OTA_RUNUPDATE never
-// happens -- the espota client just doesn't get a response until Dosing task
-// leaves GRINDING/TOPUP/etc, at which point a flash proceeds completely
-// normally. No grind is ever interrupted (D12's actual promise). onStart()
-// re-checks and Update.abort()s as a narrow defense-in-depth backstop for
-// the handful-of-ms race between a handshake completing and the next
-// handle() call actually invoking _runUpdate() -- if that race is lost, the
-// worst case is a wasted partition erase, never a disturbed grind.
-// ---------------------------------------------------------------------------
+/*
+ * OTA is refused outright while a grind is in progress, never aborted
+ * mid-flash. ArduinoOTA's public callback surface doesn't give a way to
+ * refuse *before* Update.begin() runs -- its handle() only calls
+ * onStart() after Update.begin() has already erased the target
+ * partition. The actual "refuse before it starts" gate is therefore in
+ * networkTaskFn's loop below: ArduinoOTA.handle() is simply never
+ * pumped while otaSafeToStart() is false, so the initial UDP handshake
+ * that would begin an update never happens -- the espota client just
+ * doesn't get a response until Dosing task leaves its active states, at
+ * which point a flash proceeds normally and no grind is ever
+ * interrupted. onStart() re-checks and aborts as a narrow backstop for
+ * the sub-millisecond race between a handshake completing and the next
+ * handle() call -- if that race is lost, the worst case is a wasted
+ * partition erase, never a disturbed grind.
+ */
 
+/** ArduinoOTA onStart callback: refuses (backstop only, see above) or begins. */
 void handleOtaStart() {
   if (!otaSafeToStart()) {
-    Serial.println("[Network] OTA refused: grind in progress (D12)");
+    Serial.println("[Network] OTA refused: grind in progress");
     Update.abort();
     return;
   }
@@ -307,17 +301,19 @@ void handleOtaStart() {
   DisplayCommand cmd{};
   cmd.mode = DisplayMode::OTA_UPDATE;
   cmd.ota_percent = 0;
-  // §7's one deliberate second writer to the display mailbox -- Dosing task
-  // never assigns OTA_UPDATE, and this only fires during the narrow,
-  // rare OTA-flash window signaled by kOtaInProgressBit.
+  // The one deliberate second writer to the display mailbox -- Dosing
+  // task never assigns OTA_UPDATE, and this only fires during an
+  // actual OTA flash.
   xQueueOverwrite(g_display_mailbox, &cmd);
 }
 
+/** ArduinoOTA onEnd callback: clears the in-progress bit before the reboot. */
 void handleOtaEnd() {
   xEventGroupClearBits(g_sys_events, kOtaInProgressBit);
   Serial.println("[Network] OTA finished, rebooting");
 }
 
+/** ArduinoOTA onProgress callback: forwards percent complete to Display task. */
 void handleOtaProgress(unsigned int progress, unsigned int total) {
   DisplayCommand cmd{};
   cmd.mode = DisplayMode::OTA_UPDATE;
@@ -325,26 +321,19 @@ void handleOtaProgress(unsigned int progress, unsigned int total) {
   xQueueOverwrite(g_display_mailbox, &cmd);
 }
 
+/** ArduinoOTA onError callback: clears the in-progress bit and logs. */
 void handleOtaError(ota_error_t error) {
   xEventGroupClearBits(g_sys_events, kOtaInProgressBit);
   Serial.printf("[Network] OTA error [%u]\n", static_cast<unsigned>(error));
 }
 
-// ---------------------------------------------------------------------------
-// WiFi provisioning -- config/AP-name pattern reused from the pre-rewrite
-// src/main.cpp's setupWifi()/resetWifi() (git history, "6576a6d blank
-// project with wifi manager & ota" onward): WiFiManager, AP name
-// "Eureka setup", no config-portal timeout (blocks until configured, same
-// as before), reboot after the portal saves new credentials. Not reused:
-// the old code drove the ST7735 display directly from these callbacks
-// (display.displayString("AP started", ...)) -- Display task now
-// exclusively owns the display (§2), and Network task isn't the one
-// deliberate second writer to DisplayCommand (that's OTA_UPDATE only, §7),
-// so portal-active/saving status is logged, not shown on screen. This is a
-// real (small) behavior change from the old firmware, worth a STATUS.md/AR
-// note -- see the task report.
-// ---------------------------------------------------------------------------
-
+/**
+ * Connects to WiFi (blocking): WiFiManager, AP name "Eureka setup", no
+ * config-portal timeout, reboot after the portal saves new
+ * credentials. Portal-active/saving status is logged, not shown on
+ * screen -- Display task exclusively owns the display, and Network
+ * task has no way to draw to it directly.
+ */
 void setupWifi() {
   WiFi.mode(WIFI_STA);
   WiFi.setHostname(kMdnsHostname);
@@ -357,15 +346,14 @@ void setupWifi() {
   });
   wm.setSaveConfigCallback([]() { Serial.println("[Network] WiFi credentials saved"); });
 
-  // Blocks here until WiFi is connected or the portal saves new credentials
-  // -- matches the old code's untimed autoConnect(). Only Network task
-  // blocks; every other task is already running independently (§8:
-  // WIFI_CONNECTED is deliberately not part of the boot gate).
+  // Blocks here until WiFi is connected or the portal saves new
+  // credentials. Only Network task blocks; every other task is already
+  // running independently.
   wm.autoConnect(kApName);
 
   if (portalWebServerStarted) {
-    // Mirrors the old code: start clean rather than continuing in the same
-    // runtime once new credentials were saved via the portal.
+    // Start clean rather than continuing in the same runtime once new
+    // credentials were saved via the portal.
     delay(100);
     ESP.restart();
   }
@@ -378,6 +366,7 @@ void setupWifi() {
   }
 }
 
+/** Starts mDNS (eureka.local) and ArduinoOTA, and advertises both services. */
 void setupMdnsAndOta() {
   if (!MDNS.begin(kMdnsHostname)) {
     Serial.println("[Network] mDNS init failed");
@@ -387,9 +376,8 @@ void setupMdnsAndOta() {
   }
 
   ArduinoOTA.setHostname(kMdnsHostname);
-  ArduinoOTA.setMdnsEnabled(false);  // we already own mDNS above; avoid a second MDNS.begin()
+  ArduinoOTA.setMdnsEnabled(false);  // Avoid a second MDNS.begin(); we already own mDNS above.
   ArduinoOTA.setPort(kOtaPort);
-  // D5: no OTA password -- accepted risk, home LAN only.
   ArduinoOTA.onStart(handleOtaStart);
   ArduinoOTA.onEnd(handleOtaEnd);
   ArduinoOTA.onProgress(handleOtaProgress);
@@ -401,12 +389,10 @@ void setupMdnsAndOta() {
   MDNS.addService("arduino", "tcp", kOtaPort);
 }
 
-// §3.6: the API endpoint isn't its own task (design doc §1) -- a thin
-// handler living in Network task's AsyncWebServer, cheap syntactic
-// validation only, forwards to Dosing task via g_dose_request_q. Fixes
-// AR-015's two halves: range-checked input (matches Dosing's own
-// defense-in-depth bound) instead of toFloat()'s silent-zero-on-garbage,
-// and a real JSON serializer instead of the old string concatenation.
+/**
+ * GET /api/getDosage?grams=N: cheap syntactic validation, then forwards
+ * to Dosing task's dose-request queue.
+ */
 void handleGetDosage(AsyncWebServerRequest *request) {
   JsonDocument doc;
   String out;
@@ -440,19 +426,18 @@ void handleGetDosage(AsyncWebServerRequest *request) {
   request->send(200, "application/json", out);
 }
 
-// D4: the SPA (webapp/, built by Vite into webapp/dist -- see
-// webapp/README.md) is served straight from the LittleFS partition.
-// Client-side routing there is hash-based ("#/settings", not "/settings"),
-// so unlike a history-API SPA there's no need for a catch-all fallback to
-// index.html on unknown paths -- every real HTTP request is either "/",
-// a concrete built asset, or an API/WS endpoint, and 404 is the honest
-// answer for anything else.
+/**
+ * Mounts LittleFS and starts the AsyncWebServer: the WS at "/ws",
+ * GET /api/getDosage, and the SPA served from "/". SPA routing there
+ * is hash-based ("#/settings", not "/settings"), so there's no need
+ * for a catch-all fallback to index.html on unknown paths -- every
+ * real HTTP request is either "/", a concrete built asset, or an
+ * API/WS endpoint, and 404 is the honest answer for anything else.
+ */
 void setupWebServer() {
-  // formatOnFail=true: a device that's never had `pio run -t uploadfs` run
-  // has a raw/erased partition, not a missing one -- format it as LittleFS
-  // on first mount rather than failing forever. WS/API endpoints below
-  // don't depend on LittleFS, only static asset serving does, so a mount
-  // failure here still leaves the rest of the device fully functional.
+  // formatOnFail=true: a device that's never had its filesystem image
+  // uploaded has a raw/erased partition, not a missing one -- format
+  // it as LittleFS on first mount rather than failing forever.
   if (!LittleFS.begin(true)) {
     Serial.println("[Network] LittleFS mount failed -- SPA assets unavailable");
   }
@@ -471,6 +456,7 @@ void setupWebServer() {
   Serial.printf("[Network] AsyncWebServer started on port %u\n", SERVER_PORT);
 }
 
+/** Network task entry point: connects WiFi, starts mDNS/OTA/the web server, then serves them. */
 void networkTaskFn(void *) {
   xEventGroupWaitBits(g_sys_events, kBootGateBits, pdFALSE, pdTRUE, portMAX_DELAY);
 
@@ -482,9 +468,8 @@ void networkTaskFn(void *) {
   uint32_t lastSeenVersion = 0;
 
   for (;;) {
-    // §4: re-broadcast the settings snapshot to WS clients on every version
-    // change, and act on the WiFi reset/reboot flags Network task owns the
-    // read side of (§2's ownership map).
+    // Re-broadcast the settings snapshot to WS clients on every version
+    // change, and act on the WiFi reset/reboot flags.
     if (xQueuePeek(g_settings_mailbox_network, &snap, 0) == pdTRUE &&
         snap.version != lastSeenVersion) {
       lastSeenVersion = snap.version;
@@ -503,18 +488,17 @@ void networkTaskFn(void *) {
       }
     }
 
-    // §7: drain Telemetry task's WS-broadcast inbox and fan each event out
-    // as one multiplexed envelope (D4) to every connected client.
+    // Drain Telemetry task's WS-broadcast inbox and fan each event out
+    // to every connected client.
     TelemetryEvent ev;
     while (xQueueReceive(g_ws_broadcast_q, &ev, 0) == pdTRUE) {
       g_ws.textAll(buildTelemetryJson(ev));
     }
 
-    // AR-013 fix: something now actually calls this, once per tick.
     g_ws.cleanupClients();
 
-    // D12: only pump ArduinoOTA's protocol handling while it's safe to --
-    // see the OTA section above for why this (not onStart alone) is the
+    // Only pump ArduinoOTA's protocol handling while it's safe to --
+    // see the OTA section above for why this, not onStart alone, is the
     // real "refuse before it starts" gate.
     if (otaSafeToStart()) {
       ArduinoOTA.handle();

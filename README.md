@@ -1,41 +1,63 @@
 # coffee-grinder-scale
 
-ESP32 project to control a coffee grinder by weight.
+ESP32 firmware that weighs coffee as it grinds, stops at a target dose,
+then tops up with short pulses to close the gap. Same physical behavior
+as the original project; this branch (`rewrite/rtos-fork`) is a ground-up
+FreeRTOS rewrite, kept as a permanent fork rather than merged back to
+`main`. Full rationale, current status, and design docs live in
+`.agent/` -- start with `.agent/AGENTS.md`.
 
 <img src="https://github.com/ahuber21/coffee-grinder-scale/blob/main/.doc/shot.png" width=300>
 
-## Features
+## Architecture
 
-* Control your grinder from an ESP32.
-  * State-machine approach with rich functionality and error handling.
-* Control the ESP32 from your browser.
-  * Websocket-based implementation of a logger, settings, and a weight graph.
-  * Using [esphome](https://github.com/esphome/) libraries: ESPAsyncWebServer, AsyncTCP.
-  * Settings are automatically persisted in EEPROM.
+Seven FreeRTOS tasks -- Scale, Dosing, Input, Display, Settings, Network,
+Telemetry -- communicating over queues/mailboxes instead of one
+`loop()`/state machine. Full design: `.agent/design/rtos-architecture.md`.
 
-<div style="flex: 0 0 300px;">
-<img src="https://github.com/ahuber21/coffee-grinder-scale/blob/main/.doc/console.png" width="300" alt="Console">
-</div>
-<div style="flex: 0 0 300px;">
-<img src="https://github.com/ahuber21/coffee-grinder-scale/blob/main/.doc/settings.png" width="300" alt="Settings">
-</div>
-<div style="flex: 0 0 300px;">
-<img src="https://github.com/ahuber21/coffee-grinder-scale/blob/main/.doc/graph.png" width="300" alt="Graph">
-</div>
+## Connecting to the device
 
-* OTA updates for wire-free development (awesome in combination with the websocket logger!).
-* GUI using a small TFT and Adafruit libraries.
-  * Introduced the concept of FPS to reduce flickering.
-* Configure two buttons for two pre-configured doses (grams).
-  * Including some logic to filter sporadic glitches and self-triggering
-* Fast, precise, responsive readout of ADS1232.
-* Confirm button press to avoid accidental starts.
-* Top-up logic to gradually converge to desired dose.
+- **Web app**: `http://eureka.local/` (mDNS, no OTA password -- trusted
+  home LAN only). A small React SPA (`webapp/`) with three tabs: **Live**
+  (current weight/target, a session chart, manual dose request),
+  **Settings** (calibration factor, target doses, top-up margins, button
+  debounce, WiFi reset/reboot), **History** (past sessions, queried
+  straight from PostgREST in the browser -- bypasses the device). Replaces
+  the old `/console` page and the local-only `dev/graph`/`dev/settings`
+  mock tooling.
+- **Realtime channel**: one WebSocket at `/ws` (typed JSON envelope) --
+  what the SPA's Live/Settings tabs actually talk to, and connectable
+  directly from any other client.
+- **OTA**: `pio run -t upload -e esp_wroom_02_ota` (espota, no password).
+  Serial: `pio run -t upload -e esp_wroom_02`.
+- **History data** is also queryable directly against PostgREST without
+  going through the device at all -- see
+  `.agent/design/postgrest-deployment.md`.
+
+## Repo layout
+
+- `lib/*Task/` -- the seven FreeRTOS tasks, one per directory.
+- `lib/Messaging/` -- shared message structs, queues/mailboxes, task config.
+- `lib/DosingModel/` -- the topup/coast/main-grind models, unit-tested
+  (`pio test -e native`).
+- `lib/ADS1232/` -- the vendored load-cell ADC driver, unchanged from the
+  original project (D6).
+- `webapp/` -- the SPA; see `webapp/README.md` to build/develop it.
+- `.agent/` -- the rewrite's working docs: `AGENTS.md` (rules),
+  `STATUS.md` (current state), `DECISIONS.md` (why), `ARS.md` (findings
+  log), `design/` (the design docs this was built from).
 
 ## Hardware
 
-This project is using the hardware from jousis' espresso-scale (https://gitlab.com/jousis/espresso-scale) just because I had it lying around. You can port it to other ESP32-based systems, as long as you also use the ADS1232. Feel free to open an issue if you have questions.
+Built on the hardware from jousis' espresso-scale
+(https://gitlab.com/jousis/espresso-scale). Portable to other ESP32-based
+systems as long as they also use the ADS1232. Open an issue with
+questions.
 
-My grinder is the Eureka Mignon. The hardware mod is based on this [Tech Dregs YouTube video](https://www.youtube.com/watch?v=ksemL5_kvDw). Note that the power supply of the 220 V version of the grinder is different and it doesn't seem to be capable of running the ESP32. I'm therefore using an external wall plug.
-
-The case is very basic, but works for me. I'm using [these buttons](https://www.amazon.de/gp/product/B0BF51N8CK/ref=ppx_yo_dt_b_search_asin_image?ie=UTF8&th=1&language=en_GB), but ever since I added them I'm experiencing glitches that I had to correct in software (see `loopButtonFilter`). If you want to build this, maybe try different buttons, and play around with adding other pull-ups/pull-downs and filter caps.
+Grinder: Eureka Mignon, modded per this
+[Tech Dregs video](https://www.youtube.com/watch?v=ksemL5_kvDw). The
+220V version's power supply can't run the ESP32, hence an external wall
+plug. The case is basic but works; the buttons
+(https://www.amazon.de/gp/product/B0BF51N8CK) needed some debounce
+filtering in software -- worth trying different buttons/pull-ups if you
+build this yourself.

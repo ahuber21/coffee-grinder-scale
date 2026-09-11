@@ -5,8 +5,7 @@ import SettingsPage from "./pages/Settings";
 import HistoryPage from "./pages/History";
 
 // Three tabs, one flat hash router -- no react-router dependency needed
-// for something this small (D4's ambition is the app itself, not the
-// choice of routing library).
+// for something this small.
 type Tab = "live" | "settings" | "history";
 
 function tabFromHash(hash: string): Tab {

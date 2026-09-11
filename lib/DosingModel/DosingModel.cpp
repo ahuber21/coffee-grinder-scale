@@ -7,16 +7,16 @@ namespace {
 constexpr double kMinDenom = 1e-9;
 constexpr double kMinWeight = 1e-9;
 constexpr double kSecondsPerDay = 86400.0;
-// Floor for residual variance so a (near-)perfect fit yields a very high but
-// finite precision instead of literal zero/infinity -- avoids the fused
-// estimate blowing up or collapsing to "no information" on unusually clean
-// data (e.g. synthetic test fixtures).
+/*
+ * Floor for residual variance so a (near-)perfect fit yields a very high
+ * but finite precision instead of literal zero/infinity -- avoids the
+ * fused estimate blowing up or collapsing to "no information" on
+ * unusually clean data (e.g. synthetic test fixtures).
+ */
 constexpr double kMinResidualVariance = 1e-6;
 }  // namespace
 
-// ---------------------------------------------------------------------------
-// WeightedLinearFit
-// ---------------------------------------------------------------------------
+// --- WeightedLinearFit ------------------------------------------------------
 
 void WeightedLinearFit::reset() {
   m_sw = m_swx = m_swy = m_swxx = m_swxy = m_swyy = 0.0;
@@ -81,9 +81,7 @@ double WeightedLinearFit::slopeVariance() const {
   return residualVariance() * m_sw / denom();
 }
 
-// ---------------------------------------------------------------------------
-// TopupModelV1
-// ---------------------------------------------------------------------------
+// --- TopupModelV1 -----------------------------------------------------------
 
 TopupModelV1 makeDefaultTopupModel() {
   TopupModelV1 m{};
@@ -103,9 +101,7 @@ TopupModelV1 makeDefaultTopupModel() {
   return m;
 }
 
-// ---------------------------------------------------------------------------
-// MainGrindModel
-// ---------------------------------------------------------------------------
+// --- MainGrindModel ----------------------------------------------------------
 
 MainGrindModel::MainGrindModel(const TopupModelV1 &persisted)
     : MainGrindModel(persisted, Config()) {}
@@ -127,7 +123,7 @@ void MainGrindModel::addSample(double runtime_ms, double weight_g) {
   m_last_runtime_ms = runtime_ms;
   m_last_weight_g = weight_g;
 
-  if (runtime_ms < m_cfg.deadtime_ms) return;  // chute not primed yet, §2.1
+  if (runtime_ms < m_cfg.deadtime_ms) return;  // chute not primed yet
   // Fit x in seconds so the resulting slope comes out directly in g/s,
   // matching rate_hat's persisted units.
   m_session_fit.addObservation(runtime_ms / 1000.0, weight_g, 1.0);
@@ -145,8 +141,8 @@ double MainGrindModel::currentRateEstimate() const {
   double session_precision = sessionPrecision();
   if (session_precision <= 0.0) return m_rate_hat;
 
-  // Bayesian normal-normal precision-weighted combination (§4.2): dominated
-  // by whichever side currently has more precision, with no hard cutover.
+  // Bayesian normal-normal precision-weighted combination: dominated by
+  // whichever side currently has more precision, with no hard cutover.
   double prior_precision = std::max(m_rate_precision, 0.0);
   double total_precision = prior_precision + session_precision;
   if (total_precision <= 0.0) return m_rate_hat;
@@ -197,8 +193,8 @@ bool MainGrindModel::finalizeSession(int64_t now_epoch_s) {
 
   if (new_rate_hat < m_cfg.min_plausible_rate ||
       new_rate_hat > m_cfg.max_plausible_rate) {
-    // §4.4 graceful fallback: discard this session's contribution outright,
-    // keep the last known-good persisted state untouched.
+    // Discard this session's contribution outright and keep the last
+    // known-good persisted state untouched.
     startSession();
     return false;
   }
@@ -220,9 +216,7 @@ TopupModelV1 MainGrindModel::dumpPersisted(const TopupModelV1 &base) const {
   return out;
 }
 
-// ---------------------------------------------------------------------------
-// TopupModel
-// ---------------------------------------------------------------------------
+// --- TopupModel ---------------------------------------------------------------
 
 TopupModel::TopupModel(const TopupModelV1 &persisted)
     : TopupModel(persisted, Config()) {}
@@ -244,14 +238,16 @@ void TopupModel::seedFromPersisted(const TopupModelV1 &persisted) {
                             ? 1.0 / std::sqrt(static_cast<double>(persisted.topup_precision))
                             : TopupPriors::kTopupResidualSd;
 
-  // Reconstruct an equivalent WeightedLinearFit from the compact persisted
-  // summary via four symmetric pseudo-observations at two x-locations
-  // (spanning the ~400-1300ms linear region from §1.1). Cluster means sit
-  // exactly on the persisted line, so the weighted regression through them
-  // reproduces `slope`/`deadtime` exactly; the +-residual_sd spread within
-  // each cluster reproduces the persisted residual variance. Total weight
-  // equals n0, so this carries forward the model's confidence, not just its
-  // point estimate.
+  /*
+   * Reconstruct an equivalent WeightedLinearFit from the compact
+   * persisted summary via four symmetric pseudo-observations at two
+   * x-locations (spanning the ~400-1300ms linear region the fit covers).
+   * Cluster means sit exactly on the persisted line, so the weighted
+   * regression through them reproduces `slope`/`deadtime` exactly; the
+   * +-residual_sd spread within each cluster reproduces the persisted
+   * residual variance. Total weight equals n0, so this carries forward
+   * the model's confidence, not just its point estimate.
+   */
   double x1 = deadtime_s + 0.2;
   double x2 = deadtime_s + 0.9;
   double y1 = slope * (x1 - deadtime_s);
@@ -286,7 +282,7 @@ uint32_t TopupModel::effectiveN() const {
 }
 
 void TopupModel::applyDecay(int64_t now_epoch_s) {
-  if (m_cfg.half_life_days <= 0.0) return;  // Model B decay can be omitted, §4.3
+  if (m_cfg.half_life_days <= 0.0) return;  // Decay can be disabled entirely.
   if (m_last_updated == 0 || now_epoch_s <= m_last_updated) return;
 
   double elapsed_days = (now_epoch_s - m_last_updated) / kSecondsPerDay;
@@ -310,9 +306,11 @@ TopupModel::PulseResult TopupModel::recordPulse(double runtime_ms,
                                                  int64_t now_epoch_s) {
   PulseResult r;
 
-  // Hard bounds first, §1.3: catches sensor-glitch garbage (e.g. the
-  // historical 483g / -129g entries) before it can influence anything,
-  // regardless of what the current model happens to predict.
+  /*
+   * Hard bounds first: catches sensor-glitch garbage (e.g. the
+   * historical 483g / -129g entries) before it can influence anything,
+   * regardless of what the current model happens to predict.
+   */
   if (weight_increment_g < m_cfg.reject_hard_min_g ||
       weight_increment_g > m_cfg.reject_hard_max_g) {
     r.hard_rejected = true;
@@ -335,8 +333,8 @@ TopupModel::PulseResult TopupModel::recordPulse(double runtime_ms,
   m_fit.addObservation(runtime_ms / 1000.0, weight_increment_g, 1.0);  // fit x is seconds
 
   if (!isPlausible()) {
-    // §4.4 graceful fallback: revert to the last known-good fit rather than
-    // let one update push the model somewhere physically implausible.
+    // Revert to the last known-good fit rather than let one update push
+    // the model somewhere physically implausible.
     m_fit = backup;
     r.fallback = true;
     return r;
@@ -352,19 +350,19 @@ TopupModel::Decision TopupModel::computeTopupDecision(double gap_g,
   Decision d;
 
   if (gap_g < m_cfg.min_controllable_gap_g) {
-    return d;  // §4.5 step 1: accept the undershoot, don't gamble a pulse
+    return d;  // Accept the undershoot, don't gamble a pulse
   }
 
   double s = m_fit.slope();
   if (!(s > 0.0)) return d;  // defensive; fallback logic should keep this positive
 
-  double target_weight = m_cfg.aim_fraction * gap_g;  // §4.5 step 2: aim ~90% of gap
+  double target_weight = m_cfg.aim_fraction * gap_g;  // Aim ~90% of the gap.
 
   double sd = residualStdDev();
   double predicted_upper = target_weight + m_cfg.overshoot_k_sigma * sd;
   if (predicted_upper > overshoot_budget_g) {
-    // §4.5 step 3: shrink toward whatever leaves the upper bound inside the
-    // remaining overshoot budget.
+    // Shrink toward whatever leaves the upper bound inside the remaining
+    // overshoot budget.
     double safe_weight = overshoot_budget_g - m_cfg.overshoot_k_sigma * sd;
     target_weight = std::min(target_weight, std::max(0.0, safe_weight));
   }
@@ -373,8 +371,8 @@ TopupModel::Decision TopupModel::computeTopupDecision(double gap_g,
 
   double duration_ms = deadtimeMs() + 1000.0 * target_weight / s;
 
-  // §4.5 step 4 / hygiene clamp, mirrors the legacy
-  // `top_up_seconds <= 0 || top_up_seconds > 5.0f` check in loopTopUp().
+  // Hygiene clamp, mirrors the old firmware's
+  // `top_up_seconds <= 0 || top_up_seconds > 5.0f` check.
   if (duration_ms <= m_cfg.hygiene_min_duration_ms ||
       duration_ms > m_cfg.hygiene_max_duration_ms) {
     return d;
@@ -397,9 +395,7 @@ TopupModelV1 TopupModel::dumpPersisted(const TopupModelV1 &base) const {
   return out;
 }
 
-// ---------------------------------------------------------------------------
-// CoastModel
-// ---------------------------------------------------------------------------
+// --- CoastModel ----------------------------------------------------------------
 
 CoastModel::CoastModel(const TopupModelV1 &persisted)
     : CoastModel(persisted, Config()) {}
@@ -414,9 +410,11 @@ CoastModel::RecordResult CoastModel::recordCoast(double observed_coast_g,
                                                    int64_t now_epoch_s) {
   RecordResult r;
 
-  // Plausibility bounds first, mirroring TopupModel's hard-bounds check
-  // (§1.3/§4.4): reject garbage (negative coast, or an absurdly large value)
-  // outright, before it can touch the persisted estimate at all.
+  /*
+   * Plausibility bounds first, mirroring TopupModel's hard-bounds check:
+   * reject garbage (negative coast, or an absurdly large
+   * value) outright, before it can touch the persisted estimate at all.
+   */
   if (observed_coast_g < m_cfg.min_plausible_coast_g ||
       observed_coast_g > m_cfg.max_plausible_coast_g) {
     r.rejected = true;
@@ -430,9 +428,12 @@ CoastModel::RecordResult CoastModel::recordCoast(double observed_coast_g,
     decayed_precision *= factor;
   }
 
-  // Bayesian normal-normal scalar blend: the new observation carries fixed
-  // precision 1/observation_sd^2 (there's no in-session fit to derive a
-  // per-observation precision from, unlike Model A's session_precision).
+  /*
+   * Bayesian normal-normal scalar blend: the new observation carries
+   * fixed precision 1/observation_sd^2 (there's no in-session fit to
+   * derive a per-observation precision from, unlike Model A's
+   * session_precision).
+   */
   double obs_sd = m_cfg.observation_sd > 0.0 ? m_cfg.observation_sd
                                               : TopupPriors::kCoastWeightSd;
   double obs_precision = 1.0 / (obs_sd * obs_sd);

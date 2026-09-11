@@ -1,26 +1,24 @@
 #pragma once
 
-// Task #6 -- Network. Per rtos-architecture.md §7: owns WiFiManager,
-// AsyncWebServer, the D4 consolidated WebSocket, and OTA.
-//
-// Real in this pass: WiFi provisioning (WiFiManager, AP name "Eureka setup"
-// -- reused from the pre-rewrite src/main.cpp's setupWifi()), mDNS
-// (eureka.local, D5), ArduinoOTA wired to the D12 refuse-before-start gate,
-// an AsyncWebServer instance, and the one multiplexed WebSocket at "/ws"
-// (connection handling, a JSON envelope with a "type" discriminator,
-// AR-013/AR-014's cleanupClients()/connection-cap fixes). "/" now serves
-// the real SPA (webapp/, D4/D19) from a mounted LittleFS partition --
-// see webapp/README.md for the build step that populates it.
-//
-// Still stubbed: nothing NVS-shaped lives here (Settings task owns that);
-// most TelemetryEvent/DisplayCommand *consumers* of the data this task
-// pushes out don't have a frontend to render it yet, but the data itself is
-// real (Dosing -> Telemetry -> g_ws_broadcast_q -> here -> ws.textAll()).
+/**
+ * Network task. Owns WiFiManager, AsyncWebServer, OTA, and the single
+ * multiplexed WebSocket at "/ws" (connection handling, a JSON envelope
+ * with a "type" discriminator). WiFi provisioning uses WiFiManager
+ * with AP name "Eureka setup"; mDNS advertises the device as
+ * eureka.local, with no OTA password (accepted risk, trusted home LAN
+ * only). "/" serves the SPA (webapp/) from a mounted LittleFS
+ * partition -- see webapp/README.md for the build step that populates
+ * it.
+ */
 
+/** Creates and starts the Network task. */
 void createNetworkTask();
 
-// D12: Network task's OTA-begin handler calls this before accepting a
-// flash -- true means "safe to proceed", false means "grind in progress,
-// refuse the OTA start". Exposed standalone so it can be exercised without a
-// real ArduinoOTA/AsyncWebServer instance.
+/**
+ * True if it is safe to begin an OTA flash right now, false if a grind
+ * is in progress and the OTA start must be refused. Network task's
+ * OTA-begin handler calls this before accepting a flash. Exposed
+ * standalone so it can be exercised without a real
+ * ArduinoOTA/AsyncWebServer instance.
+ */
 bool otaSafeToStart();

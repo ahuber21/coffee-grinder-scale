@@ -1,63 +1,33 @@
-// Task #4 -- Display. Real ST7735 rendering, per .agent/design/
-// rtos-architecture.md §3.2/§6.4 and D3 ("push the existing 80x160 ST7735 to
-// its limit -- smooth, flicker-free, high-framerate, no resolution upgrade
-// available").
-//
-// Redraw strategy (D10: question, don't transliterate):
-//
-// The old lib/Display/ module (kept in the tree for reference, AR-026)
-// already did the right thing at the *within-a-screen* level: every layout
-// function diffs the new value against a handful of static "what did we
-// draw last time" variables and issues `fillRect` only over the pixels that
-// actually need to change (e.g. only the shrinking digits of the integer
-// part, not the whole number). That discipline is kept and ported here
-// essentially unchanged -- it's exactly the "targeted partial/dirty-rect
-// redraw" this hardware needs to look flicker-free, and rewriting it from
-// scratch would just be re-deriving the same pixel math with more risk.
-//
-// What *does* change from the old code:
-//
-//   - One mode-dispatch loop instead of a `switch(state)` spread across
-//     main.cpp, driven by the single `DisplayCommand` mailbox (§3.2) --
-//     every mode goes through the same "did the mode change -> full clear;
-//     otherwise -> per-field targeted redraw" path. No per-mode special
-//     case at that top level (this is what closes AR-018: the old
-//     CONFIRM layout was the one holdout that did a full `fillScreen` on
-//     every value change instead of a targeted clear; it's now a small
-//     `fillRect` over just the digits/title, like every other layout).
-//   - The connection indicator is redrawn with a symmetric erase: if its
-//     color changes (including changing *to* "none", i.e. 0), the old dot
-//     is erased before anything else happens. The old code only ever drew
-//     the dot when the color was non-zero and never erased it otherwise,
-//     so a client disconnecting left a stale dot on screen forever (the
-//     exact bug AR-012 names). Because `DisplayCommand` always carries
-//     `connection_indicator_color` as a first-class field, this task's one
-//     diffing pass naturally covers it -- there's no separate code path
-//     that could "forget" to erase it.
-//   - The old per-widget millis()-based FPS limiter (`m_fps`,
-//     `m_lastDisplayRefreshMillis`) is dropped. It's redundant here: the
-//     mailbox is a depth-1 overwrite box (§3.2, "latest wins") and this
-//     task only ever drains it inside its own ~33ms `vTaskDelayUntil`
-//     floor, so the frame rate is already capped once, at the task level
-//     (§6.4). A second, per-widget cap inside the draw functions bought
-//     nothing but the risk of a value update being silently skipped inside
-//     its own rate window (a real edge case in the old code).
-//   - The old backlight on/off (`wakeUp()`/`shutDown()`) machinery is
-//     dropped -- grep of the old main.cpp shows `shutDown()` was never
-//     called anywhere; the backlight was always just "on". Carrying forward
-//     unused state-toggling machinery didn't seem worth it (D10).
-//
-// Per-mode color fields (`current_color`/`target_color`/`time_color`) are
-// part of `DisplayCommand` so the producer can drive them, but Dosing task's
-// `sendDisplayCommand()` (lib/DosingTask/DosingTask.cpp) doesn't populate
-// them yet -- they arrive as 0 (black), which would render invisible text.
-// This task treats 0 as "unset" and falls back to the same per-mode color
-// scheme the old main.cpp hardcoded at each `displayGrindingLayout()` call
-// site (white while grinding, cyan while topping up/settling, green at
-// finalize) -- see `defaultColorFor()`. A non-zero value from the producer
-// always wins. Worth revisiting once Dosing task is extended to set these
-// explicitly; noted for STATUS/ARs, not fixed by touching DosingTask.cpp
-// here (out of this task's scope).
+/**
+ * Real ST7735 rendering for the Display task, pushing the existing
+ * 80x160 panel as close to smooth/flicker-free as this hardware allows
+ * -- no resolution upgrade is available, so all the headroom has to
+ * come from how carefully pixels are redrawn.
+ *
+ * Redraw strategy: the original firmware already did the right thing
+ * at the *within-a-screen* level -- every layout function diffs the
+ * new value against a handful of static "what did we draw last time"
+ * variables and issues `fillRect` only over the pixels that actually
+ * need to change (e.g. only the shrinking digits of the integer part,
+ * not the whole number). That discipline is kept and ported here
+ * essentially unchanged: it's exactly the targeted partial/dirty-rect
+ * redraw this hardware needs to look flicker-free, and rewriting it
+ * from scratch would just be re-deriving the same pixel math with more
+ * risk. What's new is a single mode-dispatch loop (one `DisplayCommand`
+ * mailbox, one "did the mode change -> full clear; otherwise ->
+ * per-field targeted redraw" path, no per-mode special case at the top
+ * level) and a connection indicator drawn with a symmetric erase, so a
+ * client disconnecting can never leave a stale dot on screen the way it
+ * previously could.
+ *
+ * Per-mode color fields (`current_color`/`target_color`/`time_color`)
+ * are part of `DisplayCommand` so the producer can drive them, but
+ * Dosing task doesn't populate them yet -- they arrive as 0 (black),
+ * which would render invisible text. This task treats 0 as "unset" and
+ * falls back to a sensible per-mode color scheme instead (white while
+ * grinding, cyan while topping up/settling, green at finalize) -- see
+ * `defaultColorsFor()`. A non-zero value from the producer always wins.
+ */
 
 #include "DisplayTask.h"
 
@@ -83,22 +53,17 @@ constexpr int16_t kH = 160;
 SPIClass g_spi(HSPI);
 Adafruit_ST7735 g_tft(&g_spi, DISPLAY_CS_PIN, DISPLAY_DC_PIN, DISPLAY_RESET_PIN);
 
-// ---------------------------------------------------------------------------
-// Panel bring-up
-// ---------------------------------------------------------------------------
+// --- Panel bring-up ----------------------------------------------------------
 
-// ledcSetup(1, 100, 8) below configures an 8-bit duty register (0-255); the
-// old code's equivalent (Display::setBrightness) scaled from a 32-bit
-// 0xFFFFFFFF constant instead of the actual 8-bit resolution, so the duty
-// value it wrote was effectively truncated/wrapped by hardware rather than
-// meaning what its own math implied -- harmless there since it was only ever
-// called with 0 or 1 (an on/off toggle, never a real percentage), but worth
-// doing correctly here since backlight is called with a real percent.
+// ledcSetup(1, 100, 8) configures an 8-bit duty register (0-255) --
+// duty is scaled from that same 8-bit range below, not a wider constant
+// that would get silently truncated by the hardware.
 void backlightPercent(uint8_t percent) {
   uint32_t duty = (static_cast<uint32_t>(percent) * 255u) / 100u;
   ledcWrite(1, duty);
 }
 
+/** Initializes the SPI bus, the ST7735 panel, and the backlight PWM channel. */
 void panelBegin() {
   g_spi.begin(DISPLAY_SCK_PIN, DISPLAY_MISO_PIN, DISPLAY_MOSI_PIN, DISPLAY_SS_PIN);
   g_tft.initR(INITR_MINI160x80);
@@ -110,13 +75,11 @@ void panelBegin() {
   g_tft.fillScreen(ST7735_BLACK);
 }
 
-// ---------------------------------------------------------------------------
-// Connection indicator -- AR-012 fix: symmetric erase, not just conditional
-// draw. Small bottom-left dot; 0 = none.
-// ---------------------------------------------------------------------------
+// --- Connection indicator: small bottom-left dot; 0 = none -----------------
 
 uint16_t g_lastConnColor = 0;
 
+/** Symmetric erase-then-draw so a stale dot never survives a color change to 0. */
 void drawConnectionIndicator(uint16_t color) {
   if (color == g_lastConnColor) {
     return;
@@ -133,15 +96,16 @@ void drawConnectionIndicator(uint16_t color) {
   g_lastConnColor = color;
 }
 
-// ---------------------------------------------------------------------------
-// Small formatting helpers
-// ---------------------------------------------------------------------------
+// --- Small formatting helpers ------------------------------------------------
 
-// Rounds tiny +/-0.0x readings to a clean 0.0 so the display never flickers
-// between "0.0" and "-0.0" from load-cell noise around zero (kept from the
-// old code's identical guard in displayGrindingLayout/displayIdleLayout).
+/*
+ * Rounds tiny +/-0.0x readings to a clean 0.0 so the display never
+ * flickers between "0.0" and "-0.0" from load-cell noise around zero
+ * (kept from the old code's identical guard).
+ */
 float cleanZero(float grams) { return (grams > -0.05f && grams < 0.05f) ? 0.0f : grams; }
 
+/** Splits |grams| into integer/decigram strings and a separate sign flag. */
 void splitDecigrams(float grams, char *intStr, size_t intCap, char *decStr,
                      size_t decCap, bool *isNegative) {
   long totalDecigrams = lroundf(fabsf(grams) * 10.0f);
@@ -152,16 +116,16 @@ void splitDecigrams(float grams, char *intStr, size_t intCap, char *decStr,
   snprintf(decStr, decCap, "%d", decPart);
 }
 
-// ---------------------------------------------------------------------------
-// Generic centered single line of text -- used for BOOT ("Eureka") and TARE
-// ("T"). Both are entered via a mode change (which already triggers a full
-// screen clear at the call site), so a single shared "last drawn" cache is
-// safe -- it's always invalidated by `force` before either mode's first
-// frame is drawn.
-// ---------------------------------------------------------------------------
-
+/*
+ * Generic centered single line of text -- used for BOOT ("Eureka") and
+ * TARE ("T"). Both are entered via a mode change (which already
+ * triggers a full screen clear at the call site), so a single shared
+ * "last drawn" cache is safe -- it's always invalidated by `force`
+ * before either mode's first frame is drawn.
+ */
 struct { char text[16] = ""; uint8_t size = 0; uint16_t color = 0; } g_centered;
 
+/** Draws (or skips, if unchanged) BOOT/TARE's centered text line. */
 void drawCentered(const char *text, uint8_t size, uint16_t color, bool force) {
   if (!force && strncmp(text, g_centered.text, sizeof(g_centered.text)) == 0 &&
       size == g_centered.size && color == g_centered.color) {
@@ -182,11 +146,9 @@ void drawCentered(const char *text, uint8_t size, uint16_t color, bool force) {
   g_centered.color = color;
 }
 
-// ---------------------------------------------------------------------------
-// IDLE layout: big centered weight readout, dot anchored at x=60 (ported
-// from Display::displayIdleLayout).
-// ---------------------------------------------------------------------------
+// --- IDLE layout: big centered weight readout, dot anchored at x=60 --------
 
+/** Cache of IDLE's last-drawn weight text/layout, for dirty-rect diffing. */
 struct {
   char text[16] = "";
   int16_t intStartX = -1;
@@ -194,6 +156,7 @@ struct {
   bool wasMax = false;
 } g_idle;
 
+/** Draws (or skips, if unchanged) the IDLE screen's weight readout. */
 void drawIdleLayout(float currentGrams, uint16_t connColor, bool force) {
   if (force) {
     g_idle = {};
@@ -282,13 +245,11 @@ void drawIdleLayout(float currentGrams, uint16_t connColor, bool force) {
   drawConnectionIndicator(connColor);
 }
 
-// ---------------------------------------------------------------------------
-// GRINDING/TOPUP/STOPPING/FINALIZE layout: current weight (top), target
-// below, elapsed time at the bottom. Shared by every mode in this family --
-// they only differ in the color they're drawn with (ported from
-// Display::displayGrindingLayout).
-// ---------------------------------------------------------------------------
+// --- GRINDING/TOPUP/STOPPING/FINALIZE layout --------------------------------
+// Current weight (top), target below, elapsed time at the bottom. Shared by
+// every mode in this family -- they only differ in color.
 
+/** Cache of the grinding-family layout's last-drawn text/colors. */
 struct {
   char currentStr[16] = "";
   char targetStr[16] = "";
@@ -300,6 +261,7 @@ struct {
   int16_t layoutWidth = -1;
 } g_grind;
 
+/** Draws (or skips, per-field, if unchanged) the GRINDING-family layout. */
 void drawGrindingBlock(float currentGrams, float targetGrams, float seconds,
                        uint16_t currentColor, uint16_t targetColor,
                        uint16_t timeColor, uint16_t connColor, bool force) {
@@ -378,7 +340,7 @@ void drawGrindingBlock(float currentGrams, float targetGrams, float seconds,
     g_tft.print(decStr);
   }
 
-  // target, below current
+  // Target, below current.
   constexpr uint8_t targetSize = 2;
   int16_t x, y;
   uint16_t w, h;
@@ -393,7 +355,7 @@ void drawGrindingBlock(float currentGrams, float targetGrams, float seconds,
     g_tft.print(targetStr);
   }
 
-  // time, at the bottom
+  // Time, at the bottom.
   constexpr uint8_t timeSize = 2;
   g_tft.setTextSize(timeSize);
   g_tft.getTextBounds(timeStr, 0, 0, &x, &y, &w, &h);
@@ -419,8 +381,7 @@ void drawGrindingBlock(float currentGrams, float targetGrams, float seconds,
   drawConnectionIndicator(connColor);
 }
 
-// Old main.cpp's per-mode color scheme (§ file header) -- used whenever the
-// producer leaves a color field at 0 (unset).
+/** Old main.cpp's per-mode color scheme -- used when a producer color field is 0/unset. */
 void defaultColorsFor(DisplayMode mode, uint16_t *current, uint16_t *target,
                       uint16_t *time) {
   *target = ST7735_WHITE;
@@ -439,14 +400,13 @@ void defaultColorsFor(DisplayMode mode, uint16_t *current, uint16_t *target,
   }
 }
 
-// ---------------------------------------------------------------------------
-// CONFIRM layout: large target weight + "OK?" prompt. AR-018 fix: targeted
-// fillRect over just the two text regions instead of the old code's
+// --- CONFIRM layout: large target weight + "OK?" prompt --------------------
+// Targeted fillRect over just the two text regions instead of the old code's
 // full-screen fillScreen on every redraw.
-// ---------------------------------------------------------------------------
 
 struct { float targetGrams = -1.0f; } g_confirm;
 
+/** Draws (or skips, if unchanged) the CONFIRM screen's target weight + prompt. */
 void drawConfirmLayout(float targetGrams, bool force) {
   if (!force && g_confirm.targetGrams == targetGrams) {
     return;
@@ -503,10 +463,7 @@ void drawConfirmLayout(float targetGrams, bool force) {
   g_tft.print(title);
 }
 
-// ---------------------------------------------------------------------------
-// SCREENSAVER layout: H/M/S/centiseconds, each row independently diffed
-// (ported from Display::displayScreensaver).
-// ---------------------------------------------------------------------------
+// --- SCREENSAVER layout: H/M/S/centiseconds, each row independently diffed -
 
 struct {
   uint32_t h = 0xFFFFFFFF;
@@ -515,6 +472,7 @@ struct {
   uint32_t cs = 0xFFFFFFFF;
 } g_saver;
 
+/** Draws (or skips, per-row, if unchanged) the SCREENSAVER clock. */
 void drawScreensaver(uint32_t h, uint32_t m, uint32_t s, uint32_t ms, bool force) {
   if (force) {
     g_saver = {};
@@ -561,12 +519,11 @@ void drawScreensaver(uint32_t h, uint32_t m, uint32_t s, uint32_t ms, bool force
   }
 }
 
-// ---------------------------------------------------------------------------
-// DEBUG layout: IP address top row, raw ADC + stability flag bottom row.
-// ---------------------------------------------------------------------------
+// --- DEBUG layout: IP address top row, raw ADC + stability flag bottom row -
 
 struct { char ip[16] = ""; int32_t rawAdc = 0; bool stable = false; bool haveAny = false; } g_debug;
 
+/** Draws a top row and a bottom row, each right-aligned, clearing both on `force`. */
 void drawTwoRow(const char *top, const char *bottom, bool force) {
   int16_t x, y;
   uint16_t w, h;
@@ -591,6 +548,7 @@ void drawTwoRow(const char *top, const char *bottom, bool force) {
   g_tft.print(bottom);
 }
 
+/** Draws (or skips, if unchanged) the DEBUG screen's IP/ADC/stability rows. */
 void drawDebugLayout(const char *ip, int32_t rawAdc, bool stable, bool force) {
   char bottom[24];
   snprintf(bottom, sizeof(bottom), "%ld %s", static_cast<long>(rawAdc), stable ? "S" : "P");
@@ -612,12 +570,11 @@ void drawDebugLayout(const char *ip, int32_t rawAdc, bool stable, bool force) {
   g_debug.haveAny = true;
 }
 
-// ---------------------------------------------------------------------------
-// OTA_UPDATE layout: "UPDATE" top row, percent bottom row.
-// ---------------------------------------------------------------------------
+// --- OTA_UPDATE layout: "UPDATE" top row, percent bottom row ---------------
 
 struct { uint8_t percent = 0xFF; } g_ota;
 
+/** Draws (or skips, if unchanged) the OTA_UPDATE screen's progress percent. */
 void drawOtaLayout(uint8_t percent, bool force) {
   if (!force && percent == g_ota.percent) {
     return;
@@ -628,10 +585,7 @@ void drawOtaLayout(uint8_t percent, bool force) {
   g_ota.percent = percent;
 }
 
-// ---------------------------------------------------------------------------
-// Mode dispatch
-// ---------------------------------------------------------------------------
-
+/** Dispatches one DisplayCommand to its mode's layout function. */
 void renderMode(const DisplayCommand &cmd, bool force) {
   switch (cmd.mode) {
     case DisplayMode::BOOT:
@@ -678,21 +632,19 @@ void renderMode(const DisplayCommand &cmd, bool force) {
   }
 }
 
+/** Display task entry point: renders whatever DisplayCommand arrives, at ~30fps. */
 void displayTaskFn(void *) {
   panelBegin();
   xEventGroupSetBits(g_sys_events, kDisplayReadyBit);
 
-  // Dosing task's own BOOT state is transient and never reaches the mailbox
-  // (it transitions to IDLE and calls sendDisplayCommand() for the first
-  // time only after that -- see DosingTask.cpp), so this task owns showing
-  // something before the first real command arrives, mirroring the old
-  // setupDisplay()'s "Eureka" splash.
+  // Dosing task's BOOT state never reaches the mailbox, so this task
+  // shows its own splash before the first real command arrives.
   drawCentered("Eureka", 2, ST7735_WHITE, true);
 
   DisplayCommand last{};
   bool haveLast = false;
 
-  const TickType_t frameFloor = pdMS_TO_TICKS(33);  // §6.4
+  const TickType_t frameFloor = pdMS_TO_TICKS(33);  // ~30fps frame-rate floor.
   TickType_t lastFrame = xTaskGetTickCount();
 
   for (;;) {

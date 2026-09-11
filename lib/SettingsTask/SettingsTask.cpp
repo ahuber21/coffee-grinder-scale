@@ -13,27 +13,25 @@
 
 namespace {
 
-SettingsSnapshot g_settings;  // canonical copy -- only this task ever writes it
-TopupModelV1 g_topup_model;   // canonical cold copy -- ditto
+SettingsSnapshot g_settings;  ///< Canonical copy -- only this task ever writes it.
+TopupModelV1 g_topup_model;   ///< Canonical cold copy -- ditto.
 
-// --- NVS (§4) -------------------------------------------------------------
-//
-// Namespace + per-field keys for SettingsSnapshot. ESP32 NVS caps both
-// namespace and key names at 15 characters -- every key below is checked
-// against that limit. One `Preferences` handle, opened read-only or
-// read-write per call and closed immediately after (this task's polling
-// loop only touches NVS on an actual accepted settings change, so holding
-// the handle open permanently buys nothing).
+// ESP32 NVS caps namespace/key names at 15 characters -- every key
+// below stays under that. One `Preferences` handle, opened and closed
+// per call rather than held open, since this task only touches NVS on
+// an accepted settings change.
 Preferences g_prefs;
 
 constexpr const char *kNvsNamespace = "settings";
 
-// Bumped only if SettingsSnapshot's on-NVS shape changes in a way old data
-// can't be safely reinterpreted as (field added/removed/retyped). No
-// per-version upgrade function exists yet because this is the first real
-// persistence pass -- see rtos-architecture.md §4's versioned-migration
-// discipline for the intended shape if/when one is needed.
-constexpr uint32_t kSettingsSchemaVersion = 1;
+/*
+ * Bumped only when SettingsSnapshot's on-NVS shape changes in a way old
+ * data can't be safely reinterpreted as. History: 1->2 forced a stale
+ * NVS blob (written by an early migration pass that shipped without
+ * gain/speed/read_samples) to fall back to compiled-in defaults and
+ * reload correctly, once that gap was found and fixed.
+ */
+constexpr uint32_t kSettingsSchemaVersion = 2;
 
 constexpr const char *kKeySchemaVer = "schema_ver";
 constexpr const char *kKeyReadSamples = "read_samples";
@@ -60,44 +58,39 @@ constexpr const char *kKeyBtnHoldMs = "btn_hold_ms";
 constexpr const char *kKeyWifiReset = "wifi_reset";
 constexpr const char *kKeyWifiReboot = "wifi_reboot";
 
-// --- Field validators (§4, the AR-016 fix) --------------------------------
-//
-// Single source of truth per field. The live write path (applyWrite, below)
-// and the NVS load path both call these -- the NVS layer sits *behind* this
-// validation rather than duplicating or bypassing it: applyWrite validates
-// before a write ever lands in g_settings, saveSettingsToNvs only ever
-// persists that already-validated in-memory copy, and loadSettingsFromNvs
-// re-runs the same checks against whatever NVS actually contains (which may
-// predate a firmware change, or in principle have been corrupted) before
-// trusting it back into memory.
-//
-// Fields without a SettingsFieldId yet (no live write path in this skeleton
-// -- see Messages.h) still get a validator here, used only by the NVS loader,
-// so corrupt/out-of-range NVS content for those fields also falls back to
-// the compiled-in default instead of being trusted blindly.
+// Field validators: the single source of truth, shared by the live
+// write path and the NVS loader below.
 
+/** True unless a calibration factor of exactly 0.0f would zero the scale. */
 bool validCalibrationFactor(float v) { return std::isfinite(v) && v != 0.0f; }
+/** A plausible single/double target dose. */
 bool validDoseGrams(float v) { return std::isfinite(v) && v > 0.0f && v <= 100.0f; }
+/** A non-negative top-up margin. */
 bool validTopUpMargin(float v) { return std::isfinite(v) && v >= 0.0f; }
+/** A sane debounce window, in ms. */
 bool validButtonDebounceMs(uint32_t v) { return v > 0 && v <= 2000; }
-
-// read_samples feeds ADS1232::setRingBufferSize, capped at
-// lib/ADS1232/ADS1232.h's RING_BUFFER_MAX_SIZE (48).
+/** Feeds ADS1232::setRingBufferSize, capped at RING_BUFFER_MAX_SIZE (48). */
 bool validReadSamples(uint8_t v) { return v >= 1 && v <= 48; }
-// speed/gain feed ADS1232::setSpeed/setGain, which only accept these exact
-// hardware-defined values (lib/ADS1232/ADS1232.cpp).
+/** Feeds ADS1232::setSpeed, which only accepts these two hardware speeds. */
 bool validSpeedSps(uint8_t v) { return v == 10 || v == 80; }
+/** Feeds ADS1232::setGain, which only accepts these four hardware gains. */
 bool validGain(uint8_t v) { return v == 1 || v == 2 || v == 64 || v == 128; }
+/** A plausible minimum top-up pulse size. */
 bool validMinTopupGrams(float v) { return std::isfinite(v) && v >= 0.0f && v <= 5.0f; }
+/** A fraction in (0, 1]. */
 bool validRateCalcPct(float v) { return std::isfinite(v) && v > 0.0f && v <= 1.0f; }
-// Generic bound for the various ms-scale timeouts/wait windows: must be
-// positive (used as timing bounds, same divisor/UB-adjacent concern as
-// AR-016) and below a generous 10-minute ceiling.
+/** Generic positive bound for the various ms-scale timeouts, capped at 10 minutes. */
 bool validTimeoutMs(uint32_t v) { return v > 0 && v <= 600000UL; }
+/** A sane screensaver idle window, in seconds. */
 bool validScreensaverTimeoutS(uint32_t v) { return v > 0 && v <= 86400UL; }
 
-// --- NVS load/save (§4) ----------------------------------------------------
-
+/**
+ * Loads SettingsSnapshot from NVS. Returns false (leaving `out`
+ * untouched) if the namespace doesn't exist yet or its schema_ver
+ * doesn't match -- the caller falls back to compiled-in defaults either
+ * way. Each field is validated independently, so one corrupt value
+ * doesn't take the rest of a legitimate snapshot down with it.
+ */
 bool loadSettingsFromNvs(SettingsSnapshot &out) {
   if (!g_prefs.begin(kNvsNamespace, /*readOnly=*/true)) {
     Serial.println(
@@ -117,7 +110,7 @@ bool loadSettingsFromNvs(SettingsSnapshot &out) {
     return false;
   }
 
-  const SettingsSnapshot defaults{};  // per-field fallback values
+  const SettingsSnapshot defaults{};  // Per-field fallback values.
   out = defaults;
 
   uint8_t read_samples = g_prefs.getUChar(kKeyReadSamples, defaults.read_samples);
@@ -276,10 +269,12 @@ bool loadSettingsFromNvs(SettingsSnapshot &out) {
   return true;
 }
 
+/**
+ * Writes `snap` through to NVS. `snap` is always the already-validated
+ * g_settings here (applyWrite() validates before this is ever called) --
+ * this is a plain write-through, not a second validation gate.
+ */
 void saveSettingsToNvs(const SettingsSnapshot &snap) {
-  // snap is always g_settings here, i.e. already validated by applyWrite
-  // before this function is ever called (§4) -- this is a plain write-
-  // through, not a second validation gate.
   if (!g_prefs.begin(kNvsNamespace, /*readOnly=*/false)) {
     Serial.println("[Settings] NVS open for write failed -- settings not persisted");
     return;
@@ -313,25 +308,20 @@ void saveSettingsToNvs(const SettingsSnapshot &snap) {
   g_prefs.end();
 }
 
-// --- Topup model NVS -------------------------------------------------------
-//
-// Still stubbed -- out of scope for this pass (which covers SettingsSnapshot
-// persistence only, per the task brief). TopupModelV1 round-tripping to its
-// own NVS namespace is a separate, still-open follow-up (§5).
-
+/** TopupModelV1 NVS round-trip -- still stubbed, a separate follow-up. */
 bool loadTopupModelFromNvs(TopupModelV1 &out) {
   (void)out;
   Serial.println("[Settings] Topup model NVS load stubbed -- using cold-start priors");
   return false;
 }
 
+/** @see loadTopupModelFromNvs */
 void saveTopupModelToNvs(const TopupModelV1 &model) {
   (void)model;
   Serial.println("[Settings] Topup model NVS save stubbed (not persisted)");
 }
 
-// --- Distribution (§4) ---------------------------------------------------
-
+/** Overwrites every subscriber's mailbox with the current snapshot. */
 void broadcastSnapshot() {
   xQueueOverwrite(g_settings_mailbox_scale, &g_settings);
   xQueueOverwrite(g_settings_mailbox_dosing, &g_settings);
@@ -339,9 +329,11 @@ void broadcastSnapshot() {
   xQueueOverwrite(g_settings_mailbox_network, &g_settings);
 }
 
-// --- Write-path validation (§4, the AR-016 fix: settings task is the sole
-// authority on "is this legal", not the door it came in through) ---------
-
+/**
+ * Validates and applies one write request to g_settings -- this task is
+ * the sole authority on whether a value is legal. Returns false,
+ * leaving g_settings untouched, if the value fails its validator.
+ */
 bool applyWrite(const SettingsWriteRequest &req) {
   switch (req.field_id) {
     case SettingsFieldId::CALIBRATION_FACTOR:
@@ -378,9 +370,7 @@ bool applyWrite(const SettingsWriteRequest &req) {
   return false;
 }
 
-// Plausibility bounds mirroring topup-model.md §4.4's fallback checks --
-// same discipline as applyWrite() above, applied to the persisted model
-// blob instead of a scalar setting.
+/** Plausibility bounds for a persisted TopupModelV1 blob, same discipline as applyWrite(). */
 bool isPlausibleTopupModel(const TopupModelV1 &m) {
   if (!std::isfinite(m.rate_hat) || m.rate_hat < 0.3f || m.rate_hat > 2.5f) return false;
   if (!std::isfinite(m.topup_slope) || m.topup_slope < 0.05f || m.topup_slope > 5.0f)
@@ -394,8 +384,9 @@ bool isPlausibleTopupModel(const TopupModelV1 &m) {
   return true;
 }
 
+/** Settings task entry point: loads NVS, then serves the write/persist queues. */
 void settingsTaskFn(void *) {
-  g_settings = SettingsSnapshot{};  // compiled-in defaults (field initializers in Messages.h)
+  g_settings = SettingsSnapshot{};  // Compiled-in defaults (Messages.h).
   if (!loadSettingsFromNvs(g_settings)) {
     g_settings = SettingsSnapshot{};
   }
@@ -409,9 +400,8 @@ void settingsTaskFn(void *) {
   broadcastSnapshot();
   xQueueOverwrite(g_topup_model_mailbox, &g_topup_model);
 
-  // Every subscriber's first read is now guaranteed to be a valid, fully
-  // loaded snapshot -- never a default-constructed placeholder racing
-  // against setup() (§4/§8).
+  // Every subscriber's first read is now guaranteed to be a valid,
+  // fully loaded snapshot, never a default-constructed placeholder.
   xEventGroupSetBits(g_sys_events, kSettingsLoadedBit);
 
   for (;;) {

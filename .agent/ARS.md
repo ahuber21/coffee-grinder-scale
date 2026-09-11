@@ -864,3 +864,71 @@ Format per entry:
   until real hardware runs this firmware.
 - **Resolution**: partially — see Status. Fully closes once this firmware
   runs on the real device and the SPA is exercised against it.
+
+### AR-036 — A "read-only" API smoke test against the live device actually triggered a real grind
+- **Area**: process, firmware/network
+- **Status**: confirmed, lesson learned, not a code bug
+- **Found**: 2026-09-11, verifying the freshly OTA-deployed firmware.
+  `curl "http://192.168.0.118/api/getDosage?grams=18"` was run assuming
+  it was a harmless read-only check of the new HTTP route -- it isn't:
+  the endpoint enqueues a real `DoseRequest` to Dosing task, identical
+  to pressing a physical button. The device accepted it and the grinder
+  started running.
+- **Why it matters**: this is exactly the kind of action the project's
+  own safety rules exist to prevent, and it happened by not thinking
+  through a "test" request's real side effect before sending it to
+  live hardware. No harm resulted this time (motor power was
+  independently switched off shortly after by the owner as a backup
+  safety measure), but it's worth recording as a concrete example: any
+  request sent to the physical device that can reach Dosing task's
+  queues must be treated as a real action, not a diagnostic, regardless
+  of what it's named.
+- **Resolution**: no code change; verification going forward uses
+  genuinely passive checks (a WS connection's automatic settings
+  broadcast, GET requests with no side-effecting handler) instead of
+  assuming an endpoint is safe from its name/shape.
+
+### AR-037 — `calibration_factor`'s own compiled-in default silently zeroed the scale on first boot
+- **Area**: firmware/settings, firmware/scale
+- **Status**: fixed
+- **Found**: 2026-09-11, immediately after the first OTA deploy to the
+  physical device: the scale read exactly 0.0g regardless of load.
+  Root cause: `SettingsSnapshot::calibration_factor` defaulted to
+  `0.0f`, and `ScaleTask` forwards this straight into
+  `ADS1232::setCalFactor` (`units = raw * calFactor`) -- multiplying
+  every real reading by zero. The validator meant to police this field
+  already treated `0.0f` as invalid, but the schema's own default was
+  that same invalid value.
+- **Why it matters**: any device's first boot on this firmware (a fresh
+  NVS partition, or later a factory reset) would silently zero the
+  scale rather than failing visibly or falling back to something
+  merely uncalibrated.
+- **Resolution**: default changed to `1.0f`, matching the ADS1232
+  driver's own internal default -- a fresh/uncalibrated scale now reads
+  raw counts (visibly wrong, but a real number) instead of exactly zero.
+
+### AR-038 — First legacy-settings migration omitted gain/speed/read_samples, silently breaking the migrated calibration factor
+- **Area**: firmware/settings, firmware/scale
+- **Status**: fixed
+- **Found**: 2026-09-11, right after AR-037's fix was deployed: the
+  scale now updated with weight changes, but a real 126.6g weight
+  change read back as only about -1.0g. A one-time migration path was
+  added to fold the pre-rewrite firmware's still-present EEPROM-emulated
+  settings blob into the new NVS schema on first boot (that data
+  survives OTA/serial reflashing, since neither touches NVS). The first
+  version of that migration copied `calibration_factor` across but not
+  `gain`/`speed`/`read_samples` -- and `calibration_factor` is only
+  meaningful relative to the ADC gain it was measured under. The
+  device's real hardware config (gain 128) didn't match the new
+  firmware's compiled default (gain 1), a ~128x mismatch that lines up
+  almost exactly with the observed ~127x reading error.
+- **Why it matters**: a partial migration can be worse than none --
+  it looked successful (real, non-default, non-zero values came back)
+  while actually producing a badly wrong scale reading.
+- **Resolution**: fixed in the same migration pass (added gain/speed/
+  read_samples), and the schema version was bumped once more to force
+  a clean re-migration on the next boot after the fix shipped. The
+  migration code itself has since been removed as a completed one-off
+  (see DECISIONS.md) -- 128/10/12 are now the compiled-in defaults
+  directly, reflecting this device's actual, confirmed hardware
+  configuration.

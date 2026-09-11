@@ -85,10 +85,10 @@ function SessionDetail({ session }: { session: Session }) {
         {session.final_weight_g !== null && `, final ${session.final_weight_g}g`}
       </p>
       {error && <p style={{ color: "var(--red)" }}>{error}</p>}
-      {/* raw_samples is currently only populated once DosingTask starts
-          emitting RAW_SAMPLE telemetry (see AR-029/TelemetryTask report) --
-          the canvas renders an empty chart until then, which is honest
-          about current backend capability rather than a bug here. */}
+      {/* raw_samples is only populated once DosingTask starts emitting
+          RAW_SAMPLE telemetry -- the canvas renders an empty chart until
+          then, which is honest about current backend capability rather
+          than a bug here. */}
       <canvas ref={canvasRef} height={180} />
       {events && events.length > 0 && (
         <div className="table-scroll" style={{ marginTop: "1rem" }}>
@@ -153,10 +153,8 @@ export default function HistoryPage() {
 
   return (
     <>
-      {/* D13's own accuracy targets (80% within 0.05g, 95% within 0.2g),
-          computed live from whatever real sessions exist so far -- a
-          concrete, growing scoreboard rather than the design-time
-          estimates in topup-model.md. */}
+      {/* The project's accuracy targets (80% within 0.05g, 95% within 0.2g),
+          computed live from whatever real sessions exist so far. */}
       {stats && (
         <div className="panel">
           <h3>Accuracy (last {stats.n} completed sessions)</h3>

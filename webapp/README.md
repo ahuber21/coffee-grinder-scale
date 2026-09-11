@@ -1,15 +1,15 @@
 # Eureka SPA
 
-The web app served from the ESP32's LittleFS partition (D4). Replaces the
+The web app served from the ESP32's LittleFS partition. Replaces the
 old PROGMEM `/console` page and the local-only `dev/graph`/`dev/settings`
 mocks with one real app talking to the device's consolidated `/ws`
 channel (NetworkTask.cpp) and, for history/analytics, directly to
-PostgREST (D9) — never through the device.
+PostgREST — never through the device.
 
 React + TypeScript + Vite, no CSS framework (plain CSS matching the old
 mock pages' dark/monospace aesthetic — see `src/index.css`'s comment for
-why this stays dark-only rather than theme-aware). See `.agent/DECISIONS.md`
-D19 for the framework rationale.
+why this stays dark-only rather than theme-aware). See
+`.agent/DECISIONS.md` for the full framework rationale.
 
 ## Develop
 
@@ -51,6 +51,6 @@ flashing the physical device is the owner's call only (see `.agent/AGENTS.md`).
   yet because the firmware doesn't accept writes for them.
 - The Live page's chart is only as granular as the session-level telemetry
   events DosingTask currently emits (target/progress/topup_pulse/finalize/
-  complete) — `RAW_SAMPLE` telemetry isn't emitted yet (AR-029's sibling
-  gap), so there's no ~20Hz live curve yet, just the handful of points per
-  session that already exist.
+  complete) — `RAW_SAMPLE` telemetry isn't emitted yet, so there's no
+  ~20Hz live curve, just the handful of points per session that already
+  exist.

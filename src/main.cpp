@@ -1,11 +1,11 @@
-// FreeRTOS task/queue skeleton for the coffee-grinder-scale rewrite.
-// Replaces the old single-loop()/switch(state) firmware (see git history on
-// `main` for that version) with the 7-task architecture designed in
-// .agent/design/rtos-architecture.md. See that document for the full
-// rationale; this file is deliberately thin -- its only job is to create
-// the queues/mailboxes/event group (§3/§4/§8) and then start every task
-// with the priority/core/stack-size table from §1/§6.7. All real behavior
-// lives in each task's own lib/<Name>Task module.
+/**
+ * FreeRTOS task/queue skeleton for the coffee-grinder-scale rewrite.
+ * Replaces the old single-loop()/switch(state) firmware with 7
+ * independent tasks. This file is deliberately thin: its only job is
+ * to create the shared queues/mailboxes/event group and start every
+ * task. All real behavior lives in each task's own lib/<Name>Task
+ * module.
+ */
 
 #include <Arduino.h>
 
@@ -18,19 +18,19 @@
 #include "SettingsTask.h"
 #include "TelemetryTask.h"
 
+/** Arduino entry point: wires up shared state, then starts all 7 tasks. */
 void setup() {
   Serial.begin(115200);
   delay(100);
   Serial.println("\n[main] coffee-grinder-scale RTOS skeleton starting");
 
-  // Must run before any task that touches a queue/mailbox/event-group bit
-  // is created (§3/§4/§8).
+  // Must run before any task that touches a queue/mailbox/event-group
+  // bit is created.
   initQueuesAndEvents();
 
-  // Settings task first isn't required by construction (every task waits on
-  // the appropriate event-group bits before touching shared state), but
-  // starting it early means its NVS-load stub has a head start before
-  // anything blocks on SETTINGS_LOADED.
+  // Starting Settings task first isn't required (every task waits on
+  // its own readiness bits before touching shared state), but gives its
+  // NVS load a head start before anything blocks on it being ready.
   createSettingsTask();
   createScaleTask();
   createInputTask();
@@ -42,9 +42,9 @@ void setup() {
   Serial.println("[main] all 7 tasks created");
 }
 
+/** Unused: all work happens in the tasks setup() created. */
 void loop() {
-  // Everything happens in the tasks created above; Arduino's own loopTask
-  // (which called setup()/loop()) has no further work of its own. Delete it
-  // rather than spin an idle loop that never yields anything useful.
+  // Arduino's own loopTask (which called setup()/loop()) has no further
+  // work of its own -- delete it rather than spin an idle loop.
   vTaskDelete(nullptr);
 }

@@ -13,12 +13,11 @@
 
 namespace {
 
-// Dosing task's own session FSM. Reuses DisplayMode (§3.2) rather than a
-// second parallel enum -- see the comment on DisplayMode in Messages.h.
-// OTA_UPDATE is never assigned here (Dosing never drives that mode).
+/** Dosing task's own session FSM state -- reuses DisplayMode, since every FSM
+ *  state maps to exactly one display layout (OTA_UPDATE is never assigned here). */
 using DosingState = DisplayMode;
 
-// --- Session-scoped state (this task's alone -- single-writer rule) -------
+// Session-scoped state (this task's alone -- single-writer rule).
 
 DosingState g_state = DosingState::BOOT;
 uint32_t g_display_seq = 0;
@@ -34,16 +33,16 @@ bool g_have_sample = false;
 bool g_is_double = false;
 ButtonId g_pending_confirm_button = ButtonId::LEFT;
 
-float g_target_grams = 0.0f;            // full target, AR-004's one computation site
-float g_target_grams_corrected = 0.0f;  // target minus topup margin -- AR-011's *single*
-                                         // canonical stop-comparison value, used everywhere
-float g_grams_on_grind_start = 0.0f;    // software tare baseline for this session
+float g_target_grams = 0.0f;  ///< Full requested target.
+float g_target_grams_corrected = 0.0f;  ///< Target minus topup margin -- the actual stop threshold.
+float g_grams_on_grind_start = 0.0f;    ///< Software tare baseline for this session.
 uint32_t g_grinder_started_ms = 0;
 uint32_t g_grinder_stopped_ms = 0;
 float g_weight_at_relay_off = 0.0f;
 
 uint32_t g_state_entered_ms = 0;
 
+/** Sub-state within DosingState::TOPUP -- one pulse's decide/fire/settle cycle. */
 enum class TopupPhase { DECIDING, PULSING, SETTLING };
 TopupPhase g_topup_phase = TopupPhase::DECIDING;
 uint32_t g_topup_pulse_start_ms = 0;
@@ -52,21 +51,24 @@ float g_topup_weight_before_pulse = 0.0f;
 
 bool g_finalize_done = false;
 
-// --- lib/DosingModel integration (§5) --------------------------------------
-//
-// Hot, running model state lives here as plain task-local state, updated on
-// every ScaleSample this task already receives while GRINDING/TOPUP -- no
-// queue hop on the per-sample path. The persisted cold copy is loaded once
-// from Settings task's topup_model_mailbox before this task leaves BOOT, and
-// written back only at session boundaries (FINALIZE), per §5.
+/*
+ * lib/DosingModel integration: hot, running model state lives here as
+ * plain task-local state, updated on every ScaleSample this task
+ * already receives while GRINDING/TOPUP -- no queue hop on the
+ * per-sample path. The persisted cold copy is loaded once from
+ * Settings task before this task leaves BOOT, and written back only
+ * when a session finishes.
+ */
 
 TopupModelV1 g_persisted_model;
 MainGrindModel *g_main_grind_model = nullptr;
 TopupModel *g_topup_model = nullptr;
 CoastModel *g_coast_model = nullptr;
 
+/** Current time as seconds since epoch, for the models' recency decay. */
 int64_t nowEpochS() { return static_cast<int64_t>(time(nullptr)); }
 
+/** Sets/clears kDosingActiveBit -- true whenever a grind is in progress. */
 void setDosingActiveBit() {
   bool active = g_state != DosingState::IDLE && g_state != DosingState::SCREENSAVER &&
                 g_state != DosingState::BOOT;
@@ -77,14 +79,15 @@ void setDosingActiveBit() {
   }
 }
 
+/** Moves the FSM to `next`, resetting the state-entry timer and active bit. */
 void transitionTo(DosingState next) {
   g_state = next;
   g_state_entered_ms = millis();
   setDosingActiveBit();
 }
 
-// AR-004's fix: one function, used by both the button path and the API
-// (DoseRequest) path -- no second hardcoded correction constant.
+/** Applies the topup-margin correction to a requested dose -- one function for
+ *  both the button path and the API path, so there is no second correction constant. */
 void computeCorrectedTarget(float base_grams, bool is_double, float &target,
                              float &target_corrected) {
   float margin = is_double ? g_settings.top_up_margin_double
@@ -93,6 +96,7 @@ void computeCorrectedTarget(float base_grams, bool is_double, float &target,
   target_corrected = base_grams - margin;
 }
 
+/** Refreshes g_settings from the mailbox if Settings task published a new version. */
 void pollSettings() {
   SettingsSnapshot snap;
   if (xQueuePeek(g_settings_mailbox_dosing, &snap, 0) == pdTRUE &&
@@ -102,6 +106,7 @@ void pollSettings() {
   }
 }
 
+/** Publishes the current state/weight/target to Display task's mailbox. */
 void sendDisplayCommand() {
   DisplayCommand cmd{};
   cmd.seq = g_display_seq++;
@@ -116,6 +121,7 @@ void sendDisplayCommand() {
   xQueueOverwrite(g_display_mailbox, &cmd);
 }
 
+/** Pushes one TelemetryEvent of `type` to Telemetry task's queue. */
 void sendTelemetry(TelemetryType type, float grams = 0, float target = 0,
                     float delta = 0) {
   TelemetryEvent ev{};
@@ -127,19 +133,19 @@ void sendTelemetry(TelemetryType type, float grams = 0, float target = 0,
   ev.delta_grams = delta;
   ev.raw_adc = g_have_sample ? g_last_sample.raw_adc : 0;
   ev.stable = g_have_sample ? g_last_sample.stable : false;
-  // TARGET-only fields (see Messages.h) -- harmless to set unconditionally
-  // since only Telemetry task's TARGET handler reads them.
+  // TARGET-only fields; harmless to set unconditionally since only the
+  // TARGET handler on the receiving end reads them.
   ev.is_double = g_is_double;
   ev.target_grams_corrected = g_target_grams_corrected;
   // Zero-timeout send, drop-and-count on full -- Dosing never blocks on
-  // Telemetry (§3.4, principle #4).
+  // Telemetry.
   xQueueSend(g_telemetry_q, &ev, 0);
 }
 
+/** Energizes/de-energizes the grinder relay -- the sole writer of this pin. */
 void grinderRelay(bool on) { digitalWrite(GRINDER_RELAY_PIN, on ? HIGH : LOW); }
 
-// --- Per-sample GRINDING update -- the real lib/DosingModel integration ---
-
+/** Per-sample GRINDING update: feeds the rate/coast models and checks every stop condition. */
 void handleGrindingSample(const ScaleSample &s) {
   uint32_t runtime_ms = s.millis - g_grinder_started_ms;
   double delta_weight = s.grams - g_grams_on_grind_start;
@@ -150,9 +156,9 @@ void handleGrindingSample(const ScaleSample &s) {
   double predicted_stop_ms =
       g_main_grind_model->predictStopTimeMsWithCoast(target_delta, coast_estimate);
 
-  // AR-011's fix, concretely: primary (time-estimate) and fallback
-  // (raw-weight) stop checks compare against the *same* canonical value,
-  // target_grams_corrected -- there is no second variable to diverge from it.
+  // Primary (time-estimate) and fallback (raw-weight) stop checks both
+  // compare against the same canonical value, target_grams_corrected --
+  // there is no second variable either could diverge from.
   bool time_estimate_fired = runtime_ms >= predicted_stop_ms;
   bool raw_weight_fallback_fired = s.grams >= g_target_grams_corrected;
   bool safety_timeout_fired = runtime_ms >= g_settings.grinding_timeout_ms;
@@ -167,6 +173,7 @@ void handleGrindingSample(const ScaleSample &s) {
   }
 }
 
+/** Per-sample TOPUP update: drives the DECIDING/PULSING/SETTLING pulse cycle. */
 void handleTopupSample(const ScaleSample &s) {
   float gap = g_target_grams - s.grams;
 
@@ -177,12 +184,12 @@ void handleTopupSample(const ScaleSample &s) {
         transitionTo(DosingState::FINALIZE);
         return;
       }
-      double overshoot_budget = 0.3;  // D7's hard cap
+      double overshoot_budget = 0.3;  // Hard overshoot cap.
       TopupModel::Decision decision =
           g_topup_model->computeTopupDecision(gap, overshoot_budget);
       if (!decision.should_fire) {
-        // §4.5 step 1: accept the undershoot rather than gamble a pulse
-        // below the controllable floor.
+        // Accept the undershoot rather than gamble a pulse below the
+        // controllable floor.
         sendTelemetry(TelemetryType::FINALIZE, s.grams, g_target_grams);
         transitionTo(DosingState::FINALIZE);
         return;
@@ -222,24 +229,24 @@ void handleTopupSample(const ScaleSample &s) {
   }
 }
 
+/** Dosing task entry point: the session FSM's whole lifetime lives in this loop. */
 void dosingTaskFn(void *) {
   pinMode(GRINDER_RELAY_PIN, OUTPUT);
   grinderRelay(false);
 
-  // §8: wait for the full boot gate before leaving BOOT -- settings loaded,
-  // scale ready, display ready. Replaces today's implicit setup()-runs-first
-  // ordering with an explicit one.
+  // Wait for the full boot gate (settings loaded, scale ready, display
+  // ready) before leaving BOOT.
   xEventGroupWaitBits(g_sys_events, kBootGateBits, pdFALSE, pdTRUE,
                        portMAX_DELAY);
   pollSettings();
 
-  // Seed the in-RAM models from Settings task's cold snapshot, read exactly
-  // once here (§5) -- never read again mid-session.
+  // Seed the in-RAM models from Settings task's cold snapshot, read
+  // exactly once here -- never read again mid-session.
   if (xQueueReceive(g_topup_model_mailbox, &g_persisted_model, portMAX_DELAY) != pdTRUE) {
     g_persisted_model = makeDefaultTopupModel();
   }
-  // Put it back for anyone else that might peek it later (there is no other
-  // reader today, but this keeps the mailbox non-empty/consistent).
+  // Put it back for anyone else that might peek it later (there is no
+  // other reader today, but this keeps the mailbox non-empty).
   xQueueOverwrite(g_topup_model_mailbox, &g_persisted_model);
 
   g_main_grind_model = new MainGrindModel(g_persisted_model);
@@ -252,7 +259,7 @@ void dosingTaskFn(void *) {
   for (;;) {
     pollSettings();
 
-    // §3.1: drain every pending scale sample every tick, regardless of FSM
+    // Drain every pending scale sample every tick, regardless of FSM
     // state -- Dosing always has a current weight for every display mode.
     ScaleSample sample;
     bool got_sample = false;
@@ -268,7 +275,7 @@ void dosingTaskFn(void *) {
       }
     }
 
-    // §3.6: DoseRequest from the API path, only actionable while idle.
+    // A manual/API dose request, only actionable while idle.
     DoseRequest dose;
     while (xQueueReceive(g_dose_request_q, &dose, 0) == pdTRUE) {
       if (g_state == DosingState::IDLE && dose.requested_grams > 0.0f &&
@@ -280,10 +287,9 @@ void dosingTaskFn(void *) {
       }
     }
 
-    // §3.3: debounced button presses, interpreted according to Dosing's own
-    // current state -- this is where CONFIRM's same-button-confirms /
-    // different-button-cancels logic belongs (the design doc's stated home
-    // for state-dependent button interpretation).
+    // Debounced button presses, interpreted according to Dosing's own
+    // current state -- e.g. CONFIRM's same-button-confirms /
+    // different-button-cancels logic lives here.
     ButtonPress press;
     while (xQueueReceive(g_button_press_q, &press, 0) == pdTRUE) {
       switch (g_state) {
@@ -309,9 +315,8 @@ void dosingTaskFn(void *) {
         case DosingState::GRINDING:
         case DosingState::TOPUP:
           if (press.button == ButtonId::BACK) {
-            // Safety-relevant interrupt -- stop immediately regardless of
-            // sub-phase (§6.3: back-to-cancel during a grind must never
-            // queue up behind anything).
+            // Stop immediately regardless of sub-phase -- a cancel must
+            // never queue up behind anything.
             grinderRelay(false);
             transitionTo(DosingState::FINALIZE);
           }
@@ -347,9 +352,8 @@ void dosingTaskFn(void *) {
       }
       case DosingState::FINALIZE: {
         if (!g_finalize_done) {
-          // Session-boundary write-back (§5): fold the three models' latest
-          // state into one blob and hand it to Settings task -- never a
-          // per-sample write.
+          // Fold the three models' latest state into one blob and hand
+          // it to Settings task -- never a per-sample write.
           TopupModelV1 blob = g_persisted_model;
           blob = g_main_grind_model->dumpPersisted(blob);
           blob = g_topup_model->dumpPersisted(blob);
