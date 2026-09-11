@@ -97,6 +97,9 @@ TopupModelV1 makeDefaultTopupModel() {
   m.rate_n_effective = TopupPriors::kRateN0;
   m.topup_n_effective = TopupPriors::kTopupN0;
   m.last_updated = 0;
+  m.coast_weight_hat = TopupPriors::kCoastWeightHat;
+  m.coast_weight_precision =
+      1.0f / (TopupPriors::kCoastWeightSd * TopupPriors::kCoastWeightSd);
   return m;
 }
 
@@ -160,6 +163,11 @@ double MainGrindModel::predictStopTimeMs(double target_weight_g) const {
   double remaining_g = target_weight_g - m_last_weight_g;
   if (remaining_g <= 0.0) return m_last_runtime_ms;
   return m_last_runtime_ms + 1000.0 * remaining_g / rate;
+}
+
+double MainGrindModel::predictStopTimeMsWithCoast(double target_weight_g,
+                                                    double coast_weight_g) const {
+  return predictStopTimeMs(target_weight_g - coast_weight_g);
 }
 
 bool MainGrindModel::finalizeSession(int64_t now_epoch_s) {
@@ -385,6 +393,64 @@ TopupModelV1 TopupModel::dumpPersisted(const TopupModelV1 &base) const {
   double var = m_fit.residualVariance();
   out.topup_precision = var > 0.0 ? static_cast<float>(1.0 / var) : base.topup_precision;
   out.topup_n_effective = effectiveN();
+  out.last_updated = m_last_updated;
+  return out;
+}
+
+// ---------------------------------------------------------------------------
+// CoastModel
+// ---------------------------------------------------------------------------
+
+CoastModel::CoastModel(const TopupModelV1 &persisted)
+    : CoastModel(persisted, Config()) {}
+
+CoastModel::CoastModel(const TopupModelV1 &persisted, Config cfg)
+    : m_cfg(cfg),
+      m_coast_hat(persisted.coast_weight_hat),
+      m_coast_precision(persisted.coast_weight_precision),
+      m_last_updated(persisted.last_updated) {}
+
+CoastModel::RecordResult CoastModel::recordCoast(double observed_coast_g,
+                                                   int64_t now_epoch_s) {
+  RecordResult r;
+
+  // Plausibility bounds first, mirroring TopupModel's hard-bounds check
+  // (§1.3/§4.4): reject garbage (negative coast, or an absurdly large value)
+  // outright, before it can touch the persisted estimate at all.
+  if (observed_coast_g < m_cfg.min_plausible_coast_g ||
+      observed_coast_g > m_cfg.max_plausible_coast_g) {
+    r.rejected = true;
+    return r;
+  }
+
+  double decayed_precision = m_coast_precision;
+  if (m_last_updated != 0 && now_epoch_s > m_last_updated) {
+    double elapsed_days = (now_epoch_s - m_last_updated) / kSecondsPerDay;
+    double factor = std::exp(-elapsed_days / m_cfg.half_life_days);
+    decayed_precision *= factor;
+  }
+
+  // Bayesian normal-normal scalar blend: the new observation carries fixed
+  // precision 1/observation_sd^2 (there's no in-session fit to derive a
+  // per-observation precision from, unlike Model A's session_precision).
+  double obs_sd = m_cfg.observation_sd > 0.0 ? m_cfg.observation_sd
+                                              : TopupPriors::kCoastWeightSd;
+  double obs_precision = 1.0 / (obs_sd * obs_sd);
+  double total_precision = decayed_precision + obs_precision;
+
+  m_coast_hat = (decayed_precision * m_coast_hat + obs_precision * observed_coast_g) /
+                total_precision;
+  m_coast_precision = total_precision;
+  m_last_updated = now_epoch_s;
+
+  r.accepted = true;
+  return r;
+}
+
+TopupModelV1 CoastModel::dumpPersisted(const TopupModelV1 &base) const {
+  TopupModelV1 out = base;
+  out.coast_weight_hat = static_cast<float>(m_coast_hat);
+  out.coast_weight_precision = static_cast<float>(m_coast_precision);
   out.last_updated = m_last_updated;
   return out;
 }
