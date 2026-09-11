@@ -12,3 +12,4 @@ secrets.h
 *.pyc
 __pycache__/
 venv/
+.agent/secrets/
