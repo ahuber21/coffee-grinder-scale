@@ -41,22 +41,31 @@ resolved or non-blocking), design docs in `.agent/design/`.
   unit-tested (22/22 passing, independently re-verified). Not yet wired
   into any actual control loop — that happens once the FreeRTOS task
   implementation exists.
-
-**In progress:** PostgREST schema + deployment on `192.168.0.111`
-(explicitly approved by the owner, including the systemd service).
+- PostgREST deployment on `192.168.0.111` (`design/postgrest-deployment.md`,
+  `design/db-schema/001_sessions_schema.sql`). New `v2` schema
+  (sessions/events/raw_samples, session-linked, coast fields included)
+  applied additively; old tables/the still-running `coffee_grinder_api`
+  untouched. Running as systemd service `postgrest`, verified end-to-end
+  (POST/PATCH tested, test rows cleaned up, independently re-verified:
+  service active+enabled, LAN-reachable, `v2` tables empty, legacy row
+  counts unchanged). Nothing posts to it yet — that's the firmware's job,
+  not built yet.
 
 **Not yet started:** web SPA, FreeRTOS task implementation
-(scale/display/network/settings), integration of the dosing model into an
-actual control loop.
+(scale/display/network/settings), wiring the dosing model + PostgREST
+posting into an actual control loop, decommissioning `coffee_grinder_api`
+(waits until the new pipeline is verified in real use).
 
 ## Infrastructure on hand
 
 - Read-only Postgres role `claude_agent` on `192.168.0.111`
   (`.agent/secrets/pg_agent.env`, gitignored) — used for all the analysis
-  above. A separate INSERT-only role will be needed for the PostgREST
-  ingestion path (not created yet).
-- `coffee_grinder_api` (Python trampoline on `192.168.0.112`) confirmed
-  in scope for retirement in favor of direct-to-PostgREST posting (D8).
+  above, scoped to old tables only, no access to the new `v2` schema.
+- PostgREST live at `http://192.168.0.111:3000` (see `AGENTS.md`), with
+  its own scoped `postgrest_anon`/`postgrest_authenticator` roles.
+- `coffee_grinder_api` (Python trampoline on `192.168.0.112`) still
+  running unchanged — retirement (D8) waits until firmware actually posts
+  to PostgREST and the new pipeline is verified in real use.
 
 ## Standing constraints (full detail in `AGENTS.md`)
 

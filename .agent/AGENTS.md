@@ -89,7 +89,22 @@ transliterate blindly. Log anything questionable in `ARS.md`.
 - Postgres host: `192.168.0.111` (SSH as root via `~/.ssh/id_proxmox`,
   granted for read/admin setup only — see rule below).
 - Old trampoline host: `192.168.0.112` (`coffee_grinder_api`, to be
-  decommissioned after PostgREST cutover is verified).
+  decommissioned after PostgREST cutover is verified — still running
+  unchanged, do not touch it until then).
+- **PostgREST is deployed and running**: `http://192.168.0.111:3000`,
+  systemd service `postgrest` (active, enabled). Serves the new `v2`
+  schema (`sessions`/`events`/`raw_samples`) in the `coffee_grinder`
+  database — see `.agent/design/db-schema/001_sessions_schema.sql` and
+  `.agent/design/postgrest-deployment.md` for the full shape, the
+  `postgrest_anon`/`postgrest_authenticator` role setup, and the
+  column-scoped update permissions (a session's `target_weight_g` etc.
+  can't be rewritten after creation, only "finalize" fields like
+  `final_weight_g`/`outcome`). Old `public.topup`/`public.progress`/
+  `coffee_grinder_raw.public.raw_data` are untouched and still hold all
+  historical data — nothing currently writes to the new schema yet
+  (firmware doesn't exist to post to it; `coffee_grinder_api` still writes
+  to the old tables). Note: PostgREST is pinned to v13.0.8, not latest —
+  this Postgres instance runs 12.20, and PostgREST 16+ requires PG14+.
 - **Database credentials**: see `.agent/secrets/pg_agent.env`
   (gitignored, not committed — read-only `claude_agent` Postgres role,
   SELECT-only on `coffee_grinder` and `coffee_grinder_raw`). **Only use
