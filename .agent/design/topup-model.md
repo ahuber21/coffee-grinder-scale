@@ -558,3 +558,57 @@ run into by hand.
 is fixed per D1): the owner floated modifying the grinder itself to
 reduce clumping (e.g. a chute/funnel geometry change) as a future
 hypothesis. Not pursued here — noted in `.agent/ideas.md` for later.
+
+---
+
+## 8. Addendum: "coast" — a third, larger effect (2026-09-11, resolves AR-025 / D14)
+
+The owner separately asked whether the delay between relay-off and the
+scale settling — coffee still landing after the motor stops — is
+measurable and worth modeling. Full investigation in
+`.agent/design/coast-effect.md` (analysis script:
+`.agent/design/analysis-scripts/coast_analysis.py`). Short version:
+
+**Main-grind coast is real, solidly measured, and bigger than anything
+else in this document's error budget**: median **0.49g** added over
+**~1.4s** after `grinderOff()`, from n=282 sessions spanning the full
+history (a stricter 27-event exact-match subsample agrees closely: 0.47g).
+Moderately correlated with flow-rate-at-cutoff (r=0.50), essentially
+uncorrelated with dose size (r=0.07) — physically consistent with a
+roughly fixed "how much coffee is already airborne in the chute" effect,
+not something that scales with how long the grind ran. For scale: this is
+2.5-3x the ~0.14-0.2g topup-pulse noise floor §5 identified as *the*
+accuracy bottleneck, and firmware today anticipates none of it —
+`loopRunning()`'s stop check fires on raw `grams > target_grams` with no
+coast offset, so every main grind currently overshoots its own intended
+stop point by about this much before topup ever gets involved.
+
+**Topup-pulse coast is separately confirmed to be ~zero** (median -0.02g)
+— a short pulse's ~300ms dead time is mostly spent re-priming the chute,
+leaving little sustained "in-flight" mass to coast on. No change needed to
+Model B; its regression already implicitly absorbs this negligible effect.
+
+**Design addition — Model C, a third small persisted scalar**, alongside
+Models A/B: `coast_weight_hat` (prior: flat 0.49g fleet median; a
+rate-scaled version is a natural v2 if the flat version's residual error
+still shows rate-dependence in practice) and `coast_weight_precision`,
+updated the same recency-weighted way once each session's true post-coast
+settled weight is known. Used as: fire `grinderOff()` when `grams >=
+target_grams - coast_weight_hat` — mirrors the existing
+`target_grams_corrected` pattern, slots into the structure §4 already
+proposes rather than adding a new mechanism. This directly attacks §5's
+own stated bottleneck (fewer/smaller topup corrections needed because the
+main grind lands closer on its own) and is one of the more promising
+concrete levers found so far for the 80%/Δ0.05g target (D13) specifically,
+since it's a main-grind-side fix, not a topup-pulse-side one.
+
+**Schema addition**: log `relay_off_at_ms`/`relay_on_at_ms` (the
+`grinder_stopped_millis`/`grinder_started_millis` values already computed
+locally in `main.cpp`'s `grinderOn()`/`grinderOff()` today, just never
+persisted) and `stable_at_ms` per pulse — turns coast into a direct
+lookup instead of the curve-matching heuristic
+`.agent/design/coast-effect.md` §1(b) had to use. Also: raw sample
+persistence should stop being gated on a websocket client being connected
+(today's `RawDataWebSocket` only reaches Postgres opportunistically) —
+this should fall out naturally once ingestion moves to direct
+PostgREST posting (D8) rather than needing special-casing.

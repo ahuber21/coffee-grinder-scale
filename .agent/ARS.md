@@ -601,3 +601,32 @@ Format per entry:
   an OTA flash (rejects `ArduinoOTA`'s begin) while Dosing task is outside
   `IDLE`/`SCREENSAVER`, rather than aborting a grind already in progress.
   See `DECISIONS.md` D12.
+
+### AR-025 — Main-grind stop calculation doesn't anticipate "coast" weight (coffee still landing after relay-off), and it's a bigger effect than the topup-pulse noise floor
+- **Area**: firmware/dosing
+- **Status**: confirmed, design addition made (not yet implemented in code)
+- **Found**: 2026-09-11, `.agent/design/coast-effect.md` (owner-prompted
+  investigation), analyzing 282 reconstructed main-grind sessions spanning
+  the full ~1-year history via `raw_data`.
+- **What**: after `grinderOff()`, the scale reading continues climbing for
+  a median of ~1.4s before settling — median **0.49g** added during that
+  window (IQR 0.38-0.60g), correlated with flow-rate-at-cutoff (r=0.50),
+  not with dose size (r=0.07). `loopRunning()`'s stop check
+  (`src/main.cpp:608-609`) has no anticipation of this at all — it fires
+  purely on raw `grams > target_grams` or a calculated stop time.
+- **Why it matters**: this is **2.5-3x bigger** than the ~0.14-0.2g
+  topup-pulse noise floor that `.agent/design/topup-model.md` §5 already
+  identified as the actual accuracy bottleneck. Every main grind today
+  overshoots its own intended stop point by about this much before topup
+  ever gets involved — directly relevant to both the overshoot cap (D7)
+  and the 80%/Δ0.05g target (D13), and one of the more promising concrete
+  levers found for the latter, since it's a main-grind-side fix rather
+  than a topup-pulse-side one (which is capped by clumping per D13,
+  unlike this).
+- **Resolution**: design addition made — a third small persisted model
+  ("Model C", `coast_weight_hat`) alongside the two from
+  `topup-model.md` §4, subtracting a predicted coast offset from the
+  effective stop threshold. See `topup-model.md` §8 for the full design.
+  Not yet implemented in code — the in-progress `DosingModel` library
+  implementation covers Models A/B only; Model C is a follow-up addition
+  to that same module.

@@ -130,3 +130,19 @@ consistent with, and validating, `topup-model.md` §4.2's proposal to fit a
 continuous regression over the post-dead-time plateau rather than a single
 division. No change to the 95%/Δ0.2g or ≤0.3g overshoot-cap targets either
 — both were already assessed as achievable.
+
+**D14 — Add a third small model ("Model C") anticipating post-relay-off
+"coast" weight in the main-grind stop calculation.** Raised by the owner
+independently of D13's discussion (AR-025): does coffee still land after
+the relay switches off, and is it measurable? Investigation found yes,
+solidly — median 0.49g over ~1.4s per main grind, 2.5-3x bigger than the
+topup-pulse noise floor that was the previously-identified bottleneck, and
+currently completely unanticipated by the firmware's stop check. Design:
+a third persisted scalar (prior: flat fleet median 0.49g, recency-weighted
+online update like Models A/B), subtracted from the effective stop
+threshold so the relay cuts power in anticipation of what's still coming.
+Purely additive to `topup-model.md` §4's design, not a redesign — see
+§8 there. This is one of the more promising concrete levers for D13's
+80%/Δ0.05g target specifically, since — unlike topup-pulse precision — it
+isn't capped by the clumping mechanism D13 identified as a hard physical
+ceiling.

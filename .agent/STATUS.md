@@ -1,129 +1,70 @@
 # Status
 
-*Last updated: 2026-09-11 — audit pass complete, topup data analysis in
-progress, implementation not yet started.*
+*Last updated: 2026-09-11 — design phase complete, implementation started.*
 
 ## Where things stand
 
-Planning is complete (`AGENTS.md` for standing rules, `DECISIONS.md` D1-D11
-for the reasoning). Nothing has been implemented yet — this is still design/
-audit phase. The new branch `rewrite/rtos-fork` exists with the old codebase
-plus this `.agent/` directory.
+Planning and design are done; implementation has begun. Branch
+`rewrite/rtos-fork`. Standing rules in `AGENTS.md`, full decision log in
+`DECISIONS.md` (D1-D14), all findings in `ARS.md` (AR-001-025, all
+resolved or non-blocking), design docs in `.agent/design/`.
 
-**Audit pass done.** A full read-only review of the existing firmware
-(`src/`, `lib/`, `include/`, `platformio.ini`) is complete, cross-checked
-against commit history. 20 findings logged in `ARS.md` (AR-001 through
-AR-020 — 6 from initial planning-time reading, 14 from the dedicated audit
-pass). Most consequential:
-- **AR-009**: the settings struct (calibration, timing constants, the
-  topup lookup table) is read from ISR context and written from the
-  web-server task with zero synchronization — a second shared-state race
-  beyond the one already known (AR-001).
-- **AR-011**: the weight-based fallback stop check compares against the
-  *full* target rather than the margin-reduced one, meaning if the primary
-  time-estimate never engages, the grinder can pour straight to full
-  target in one continuous run — bypassing the topup-margin strategy the
-  whole overshoot-avoidance goal (D7) depends on. Needs to be addressed
-  deliberately in the new dosing design, not just ported forward.
-- **AR-013/014**: none of the five WebSocket endpoints ever call
-  `cleanupClients()`, and their connection caps are inconsistent (1/3/
-  unlimited) — a real slow heap leak over long uptime. The new consolidated
-  single-channel design (D4) should get this right from the start.
+**Design work completed:**
+- **Audit** of the existing firmware (20 findings, `ARS.md`). Nothing
+  contradicts "mostly bug-free day-to-day" — latent/edge-case issues, not
+  live misbehavior. Most consequential: a second ISR/task shared-state
+  race (AR-009), a fallback stop path that silently bypasses the
+  topup-margin strategy (AR-011), a WebSocket client-cleanup gap
+  (AR-013/014).
+- **Topup/dosing model** (`design/topup-model.md`), built from live
+  queries against real historical data. Replaces the static lookup table
+  and single-point rate estimate with small recursive-least-squares
+  models. Found and fixed in design: a firmware bug corrupting ~28% of
+  historical topup logs (AR-021), a quantified real overshoot problem in
+  the *current* system (~21% of shortest pulses breach the 0.3g cap,
+  AR-023), and — the largest single finding — a ~0.49g "coast" effect
+  (coffee still landing for ~1.4s after relay-off, 2.5-3x bigger than the
+  topup-pulse noise floor) that the firmware currently doesn't anticipate
+  at all (AR-025/D14, `design/coast-effect.md`). D13: the 80%/Δ0.05g
+  accuracy target stands unchanged — owner confirmed the physical
+  mechanism (clumping within the relay's minimum on-time) and the path to
+  it is a better main-grind stop estimate (Models A + C), not a more
+  precise topup pulse (capped by clumping).
+- **FreeRTOS task architecture** (`design/rtos-architecture.md`): 7 tasks,
+  strict single-writer state ownership, queues vs. overwrite-mailboxes
+  chosen per link. Closes 15 audit findings by construction. D12: OTA is
+  refused outright during a grind, not aborted.
 
-None of these are surprising given the project's organic-growth history,
-and none contradict "mostly bug-free in day-to-day use" — they're latent/
-edge-case issues, not things misbehaving right now. Full detail in
-`ARS.md`.
+**Implementation in progress:**
+- `lib/DosingModel/` — Models A + B (main-grind rate, topup pulse
+  response) from `topup-model.md` §4, natively unit-tested. Model C
+  (coast, §8/D14) is a queued follow-up to the same module.
 
-**Topup/dosing model designed.** Full analysis and proposal in
-`.agent/design/topup-model.md`, built from live queries against the real
-historical data (5,525 genuine topup pulses, 1,460 reconstructed
-main-grind sessions, 209,848 raw sensor rows). Headline results:
-- Sensor noise floor (~0.02g) is not the bottleneck for anything.
-- The 95%/Δ0.2g and overshoot-≤0.3g targets from D7 both look achievable
-  with the proposed design (two tiny recursive-least-squares linear
-  models — main-grind rate, topup pulse response — persisted to NVS,
-  replacing the single-point rate estimate and the static lookup table).
-- Found a real, quantified problem with the *current* live system: the
-  shortest lookup-table topup pulse already exceeds the 0.3g overshoot cap
-  ~21% of the time, on its own (AR-023) — matches the owner's stated pain
-  point directly.
-- Found and traced a firmware bug that corrupted ~28% of the historical
-  topup log (main-grind tail misreported as a topup event — AR-021),
-  harmless to live behavior but worth fixing.
-- **Resolved (AR-022/D13)**: 80%/Δ0.05g stands unchanged. Owner confirmed
-  the mechanism (relay min on-time ~0.3-0.4s, unpredictable clumping
-  within that window) and chose to chase the target via a better
-  main-grind stop estimate rather than relaxing the number. Model design
-  is now locked in for implementation.
+**Not yet started:** PostgREST/`sessions` schema plan, web SPA, FreeRTOS
+task implementation (scale/display/network/settings), integration of the
+dosing model into an actual control loop.
 
-**FreeRTOS task architecture designed.** Full proposal in
-`.agent/design/rtos-architecture.md`: 7 tasks (Scale, Dosing/Session
-Control, Input, Display, Settings/NVS, Network, Telemetry), strict
-single-writer ownership per piece of state, two message primitives chosen
-per link (queues where every item matters, length-1 overwrite mailboxes
-where only the latest value matters). Closes 15 of the audit's findings by
-construction (full traceability table in the doc §9) — most notably both
-shared-state races (AR-001, AR-009), the button-handling asymmetry
-(AR-007/008), and AR-011's overshoot-margin bug. Surfaced one new minor
-open question (**AR-024**, low urgency): should an OTA update mid-grind
-abort the grind, or should OTA be refused while a grind is in progress?
-Has a stated safe default (abort-and-stop), not blocking.
+## Infrastructure on hand
 
-Infrastructure groundwork done during planning:
-- Read-only Postgres role (`claude_agent`) created on `192.168.0.111` for
-  exploring the historical topup/progress/raw-data tables (credentials in
-  `.agent/secrets/pg_agent.env`, gitignored).
-- Historical data confirmed usable: 7,647 `topup` rows, 121,847 `progress`
-  rows, 209,848 `raw_data` rows — enough to fit a real dosing model without
-  needing the missing target-weight linkage (see `DECISIONS.md` D7).
-- Discovered and scoped in a whole extra component: `coffee_grinder_api`,
-  a Python service on `192.168.0.112` that will be retired in favor of the
-  device posting directly to PostgREST (D8).
+- Read-only Postgres role `claude_agent` on `192.168.0.111`
+  (`.agent/secrets/pg_agent.env`, gitignored) — used for all the analysis
+  above. A separate INSERT-only role will be needed for the PostgREST
+  ingestion path (not created yet).
+- `coffee_grinder_api` (Python trampoline on `192.168.0.112`) confirmed
+  in scope for retirement in favor of direct-to-PostgREST posting (D8).
 
-## What's next (in rough order)
-
-1. ~~Audit pass over the existing firmware~~ — done, see above.
-2. ~~Topup/dosing model design~~ — done, see below and
-   `.agent/design/topup-model.md`. **One open question for the owner.**
-3. ~~FreeRTOS task architecture~~ — done, see below and
-   `.agent/design/rtos-architecture.md`.
-4. **PostgREST deployment plan** — schema for the new `sessions` table,
-   INSERT-only role, systemd unit — as a concrete plan before touching the
-   live Proxmox host.
-5. **Web SPA** — framework choice, LittleFS build pipeline, page/tab
-   layout replacing the three old served pages. Should account for
-   AR-012/013/014 (display indicator bug, WebSocket cleanup/connection-cap
-   inconsistency) by construction rather than porting them forward.
-6. Implementation, in whatever order the above design work suggests makes
-   sense — almost certainly scale + dosing core first (the part with real
-   behavioral stakes), display and web app after.
-
-## Standing constraints (see `AGENTS.md` for full detail)
+## Standing constraints (full detail in `AGENTS.md`)
 
 - **No OTA deploy to the physical device without the owner's explicit
-  go-ahead, every time.** Building and compiling freely is fine and
-  expected.
+  go-ahead, every time.** Building/testing freely is fine and expected.
 - Hardware is fixed — firmware/software rewrite only.
 - Cheapest model suitable for each task.
 
 ## Open questions for the owner
 
-None right now. AR-022 resolved: D7's targets stand unchanged (D13) — the
-path to 80%/Δ0.05g is a better main-grind stop estimate, not a more
-precise topup pulse (physically capped by clumping at ~0.15-0.2g, per the
-owner's own explanation of the relay/clumping mechanism). AR-024 resolved:
-OTA is refused outright while a grind is in progress (D12). Design phase
-for the dosing model and task architecture is now fully unblocked.
+None right now.
 
-A hardware idea (reducing topup-pulse clumping via a chute/funnel
-modification) came up during this discussion — explicitly parked for
-later, not in scope now. See `.agent/ideas.md`.
+## Parked ideas (out of scope for this rewrite)
 
-## Decisions made
-
-See `DECISIONS.md` for the full log (D1–D11 so far, covering hardware
-scope, RTOS approach, display ambition, web app architecture, OTA identity,
-the ADS1232 driver, the topup model approach, the `coffee_grinder_api`
-retirement, the browser-direct analytics query pattern, the audit-as-you-go
-process, and the no-autonomous-deploy rule).
+See `.agent/ideas.md` — currently: a possible future grinder/chute
+modification to reduce topup-pulse clumping.
