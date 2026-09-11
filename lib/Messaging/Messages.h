@@ -115,6 +115,16 @@ struct TelemetryEvent {
   int32_t raw_adc;
   bool stable;
   char log_line[96];  // LOG_LINE only
+  // TARGET only -- carried so Telemetry task can populate PostgREST
+  // v2.sessions' mode/target_weight_g columns (db-schema/001_sessions_schema.sql)
+  // without needing its own SettingsSnapshot subscription or a second
+  // message hop back to Dosing task. is_double mirrors Dosing task's
+  // g_is_double; target_grams_corrected mirrors g_target_grams_corrected
+  // (the coast/margin-corrected stop target -- target_grams above stays the
+  // *requested*, uncorrected value, matching topup-model.md §6's requested-
+  // vs-target distinction).
+  bool is_double;
+  float target_grams_corrected;
 };
 
 // ---------------------------------------------------------------------------
