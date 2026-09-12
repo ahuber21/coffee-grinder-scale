@@ -1,6 +1,7 @@
 #include "DosingTask.h"
 
 #include <Arduino.h>
+#include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <freertos/FreeRTOS.h>
@@ -40,6 +41,7 @@ float g_target_grams_corrected = 0.0f;  ///< Target minus topup margin -- the ac
 float g_grams_on_grind_start = 0.0f;    ///< Software tare baseline for this session.
 uint32_t g_grinder_started_ms = 0;
 uint32_t g_grinder_stopped_ms = 0;
+uint32_t g_frozen_elapsed_ms = 0;  ///< Elapsed time at FINALIZE entry -- the timer stops here.
 float g_weight_at_relay_off = 0.0f;
 
 uint32_t g_state_entered_ms = 0;
@@ -52,6 +54,9 @@ uint32_t g_topup_pulse_duration_ms = 0;
 float g_topup_weight_before_pulse = 0.0f;
 
 bool g_finalize_done = false;
+
+uint32_t g_last_activity_ms = 0;  ///< Last button press or IDLE entry -- drives the SCREENSAVER timer.
+uint32_t g_last_coffee_ms = 0;    ///< When the last session completed; 0 == none yet this boot.
 
 /*
  * lib/DosingModel integration: hot, running model state lives here as
@@ -123,8 +128,16 @@ void transitionTo(DosingState next) {
               dosingStateName(next));
     sendLog(line);
   }
+  if (next == DosingState::FINALIZE) {
+    // Freezes the displayed elapsed time once dispensing is actually
+    // done -- only the weight readout should keep moving on this screen.
+    g_frozen_elapsed_ms = g_grinder_started_ms ? millis() - g_grinder_started_ms : 0;
+  }
   g_state = next;
   g_state_entered_ms = millis();
+  if (next == DosingState::IDLE) {
+    g_last_activity_ms = g_state_entered_ms;
+  }
   setDosingActiveBit();
 }
 
@@ -155,11 +168,27 @@ void sendDisplayCommand() {
   cmd.mode = g_state;
   cmd.current_grams = g_have_sample ? g_last_sample.grams : 0.0f;
   cmd.target_grams = g_target_grams;
-  cmd.elapsed_s = g_grinder_started_ms
-                      ? (millis() - g_grinder_started_ms) / 1000.0f
-                      : 0.0f;
+  cmd.elapsed_s = g_state == DosingState::FINALIZE
+                      ? g_frozen_elapsed_ms / 1000.0f
+                      : (g_grinder_started_ms ? (millis() - g_grinder_started_ms) / 1000.0f : 0.0f);
   cmd.debug_raw_adc = g_have_sample ? g_last_sample.raw_adc : 0;
   cmd.debug_stable = g_have_sample ? g_last_sample.stable : false;
+  if (g_state == DosingState::SCREENSAVER) {
+    // Shows time since the last completed coffee once there's been one
+    // this boot; falls back to plain uptime before that.
+    uint32_t elapsed_ms;
+    if (g_last_coffee_ms != 0) {
+      cmd.idle_is_uptime = false;
+      elapsed_ms = millis() - g_last_coffee_ms;
+    } else {
+      cmd.idle_is_uptime = true;
+      elapsed_ms = millis();
+    }
+    cmd.idle_h = elapsed_ms / 3600000UL;
+    cmd.idle_m = (elapsed_ms / 60000UL) % 60;
+    cmd.idle_s = (elapsed_ms / 1000UL) % 60;
+    cmd.idle_ms = elapsed_ms % 1000UL;
+  }
   xQueueOverwrite(g_display_mailbox, &cmd);
 }
 
@@ -181,6 +210,28 @@ void sendTelemetry(TelemetryType type, float grams = 0, float target = 0,
   ev.target_grams_corrected = g_target_grams_corrected;
   // Zero-timeout send, drop-and-count on full -- Dosing never blocks on
   // Telemetry.
+  xQueueSend(g_telemetry_q, &ev, 0);
+}
+
+/** Converts a precision (inverse variance) to a standard deviation, 0 if unset. */
+float sdFromPrecision(float precision) {
+  return precision > 0.0f ? 1.0f / sqrtf(precision) : 0.0f;
+}
+
+/** Sends the current persisted model's parameters, for the SPA's algorithm view. */
+void sendModelStateTelemetry(const TopupModelV1 &model) {
+  TelemetryEvent ev{};
+  ev.type = TelemetryType::MODEL_STATE;
+  ev.session_id = g_session_id;
+  ev.rate_hat_g_s = model.rate_hat;
+  ev.rate_sd_g_s = sdFromPrecision(model.rate_precision);
+  ev.topup_slope_g_s = model.topup_slope;
+  ev.topup_deadtime_ms = model.topup_deadtime_ms;
+  ev.topup_residual_sd_g = sdFromPrecision(model.topup_precision);
+  ev.coast_weight_g = model.coast_weight_hat;
+  ev.coast_weight_sd_g = sdFromPrecision(model.coast_weight_precision);
+  ev.rate_n_effective = model.rate_n_effective;
+  ev.topup_n_effective = model.topup_n_effective;
   xQueueSend(g_telemetry_q, &ev, 0);
 }
 
@@ -294,6 +345,7 @@ void dosingTaskFn(void *) {
   g_main_grind_model = new MainGrindModel(g_persisted_model);
   g_topup_model = new TopupModel(g_persisted_model);
   g_coast_model = new CoastModel(g_persisted_model);
+  sendModelStateTelemetry(g_persisted_model);
 
   transitionTo(DosingState::IDLE);
   sendDisplayCommand();
@@ -334,6 +386,7 @@ void dosingTaskFn(void *) {
     // different-button-cancels logic lives here.
     ButtonPress press;
     while (xQueueReceive(g_button_press_q, &press, 0) == pdTRUE) {
+      g_last_activity_ms = millis();
       {
         char line[96];
         snprintf(line, sizeof(line), "button %d received in state %s",
@@ -353,6 +406,9 @@ void dosingTaskFn(void *) {
             computeCorrectedTarget(base, g_is_double, g_target_grams,
                                    g_target_grams_corrected);
             transitionTo(DosingState::CONFIRM);
+          } else if (g_state == DosingState::SCREENSAVER) {
+            // Any other button just dismisses the screensaver.
+            transitionTo(DosingState::IDLE);
           }
           break;
         case DosingState::CONFIRM:
@@ -382,6 +438,13 @@ void dosingTaskFn(void *) {
 
     // Non-sample-driven state transitions.
     switch (g_state) {
+      case DosingState::IDLE: {
+        uint32_t timeout_ms = g_settings.screensaver_timeout_s * 1000UL;
+        if (millis() - g_last_activity_ms >= timeout_ms) {
+          transitionTo(DosingState::SCREENSAVER);
+        }
+        break;
+      }
       case DosingState::CONFIRM: {
         // Lapses back to IDLE if nobody confirms or cancels in time,
         // rather than waiting forever.
@@ -421,12 +484,14 @@ void dosingTaskFn(void *) {
           blob = g_topup_model->dumpPersisted(blob);
           blob = g_coast_model->dumpPersisted(blob);
           g_persisted_model = blob;
+          sendModelStateTelemetry(g_persisted_model);
 
           PersistRequest req{PersistBlobId::TOPUP_MODEL_V1, blob, g_session_id};
           xQueueSend(g_persist_request_q, &req, 0);
 
           sendTelemetry(TelemetryType::COMPLETE, g_have_sample ? g_last_sample.grams : 0,
                         g_target_grams);
+          g_last_coffee_ms = millis();
           g_finalize_done = true;
         }
         if (millis() - g_state_entered_ms >= g_settings.finalize_timeout_ms) {

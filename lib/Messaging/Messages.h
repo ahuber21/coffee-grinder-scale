@@ -89,6 +89,7 @@ enum class TelemetryType : uint8_t {
   FINALIZE,
   COMPLETE,
   LOG_LINE,
+  MODEL_STATE,
 };
 
 /**
@@ -116,6 +117,22 @@ struct TelemetryEvent {
    */
   bool is_double;
   float target_grams_corrected;
+
+  /*
+   * MODEL_STATE only -- lib/DosingModel's current persisted parameters
+   * (standard deviations, not raw precisions, since that's what a
+   * reader actually wants), sent once at boot and again after every
+   * completed session. Powers the SPA's "how does this work" view.
+   */
+  float rate_hat_g_s;
+  float rate_sd_g_s;
+  float topup_slope_g_s;
+  float topup_deadtime_ms;
+  float topup_residual_sd_g;
+  float coast_weight_g;
+  float coast_weight_sd_g;
+  uint32_t rate_n_effective;
+  uint32_t topup_n_effective;
 };
 
 /** A manual/API dose request, sent from Network task to Dosing task. */

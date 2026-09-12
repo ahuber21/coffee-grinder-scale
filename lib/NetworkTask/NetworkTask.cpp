@@ -45,6 +45,12 @@ AsyncWebSocket g_ws("/ws");
 
 uint32_t g_next_dose_request_id = 1;
 
+// Cached so a newly-connecting client can be caught up immediately --
+// MODEL_STATE only broadcasts on boot/session-complete, unlike settings,
+// which every connect already gets replayed from its own mailbox.
+bool g_have_model_state = false;
+TelemetryEvent g_last_model_state{};
+
 /*
  * One multiplexed WS channel, not several separate sockets: every
  * message is {"type": <discriminator>, ...fields}. Each TelemetryType
@@ -70,6 +76,8 @@ const char *telemetryTypeToString(TelemetryType t) {
       return "complete";
     case TelemetryType::LOG_LINE:
       return "log";
+    case TelemetryType::MODEL_STATE:
+      return "model_state";
   }
   return "unknown";
 }
@@ -100,6 +108,17 @@ String buildTelemetryJson(const TelemetryEvent &ev) {
     case TelemetryType::COMPLETE:
       doc["grams"] = ev.grams;
       doc["target_grams"] = ev.target_grams;
+      break;
+    case TelemetryType::MODEL_STATE:
+      doc["rate_hat_g_s"] = ev.rate_hat_g_s;
+      doc["rate_sd_g_s"] = ev.rate_sd_g_s;
+      doc["rate_n_effective"] = ev.rate_n_effective;
+      doc["topup_slope_g_s"] = ev.topup_slope_g_s;
+      doc["topup_deadtime_ms"] = ev.topup_deadtime_ms;
+      doc["topup_residual_sd_g"] = ev.topup_residual_sd_g;
+      doc["topup_n_effective"] = ev.topup_n_effective;
+      doc["coast_weight_g"] = ev.coast_weight_g;
+      doc["coast_weight_sd_g"] = ev.coast_weight_sd_g;
       break;
   }
   String out;
@@ -330,6 +349,12 @@ void onWsEvent(AsyncWebSocket *server, AsyncWebSocketClient *client, AwsEventTyp
       SettingsSnapshot snap;
       if (xQueuePeek(g_settings_mailbox_network, &snap, 0) == pdTRUE) {
         client->text(buildSettingsJson(snap));
+      }
+      // Model state only broadcasts on boot/session-complete, so a
+      // client connecting between those moments would otherwise see
+      // nothing for a possibly very long time -- replay the last one.
+      if (g_have_model_state) {
+        client->text(buildTelemetryJson(g_last_model_state));
       }
       break;
     }
@@ -572,6 +597,10 @@ void networkTaskFn(void *) {
     // to every connected client.
     TelemetryEvent ev;
     while (xQueueReceive(g_ws_broadcast_q, &ev, 0) == pdTRUE) {
+      if (ev.type == TelemetryType::MODEL_STATE) {
+        g_last_model_state = ev;
+        g_have_model_state = true;
+      }
       g_ws.textAll(buildTelemetryJson(ev));
     }
 

@@ -16,9 +16,13 @@ ADS1232 g_ads(ADC_PDWN_PIN, ADC_SCLK_PIN, ADC_DOUT_PIN, ADC_SPEED_PIN,
               ADC_GAIN1_PIN, ADC_GAIN0_PIN);
 
 // Re-tares automatically whenever idle and stable, rate-limited only to
-// avoid calling tare() on every single sample.
+// avoid calling tare() on every single sample. Right after a dose
+// finishes, a longer grace period applies instead, so the final weight
+// stays on screen instead of being auto-zeroed the moment IDLE begins.
 constexpr uint32_t kAutoTareMinIntervalMs = 1000;
-uint32_t g_last_auto_tare_ms = 0;
+constexpr uint32_t kAutoTareIdleReturnCooldownMs = 10000;
+uint32_t g_next_auto_tare_allowed_ms = 0;
+bool g_prev_dosing_active = false;
 
 /** Version of SettingsSnapshot last applied to the ADS1232 driver. */
 uint32_t g_applied_settings_version = 0;
@@ -84,10 +88,14 @@ void scaleTaskFn(void *) {
     };
 
     bool dosing_active = (xEventGroupGetBits(g_sys_events) & kDosingActiveBit) != 0;
-    if (!dosing_active && stable &&
-        sample.millis - g_last_auto_tare_ms >= kAutoTareMinIntervalMs) {
+    if (g_prev_dosing_active && !dosing_active) {
+      g_next_auto_tare_allowed_ms = sample.millis + kAutoTareIdleReturnCooldownMs;
+    }
+    g_prev_dosing_active = dosing_active;
+
+    if (!dosing_active && stable && sample.millis >= g_next_auto_tare_allowed_ms) {
       g_ads.tare();
-      g_last_auto_tare_ms = sample.millis;
+      g_next_auto_tare_allowed_ms = sample.millis + kAutoTareMinIntervalMs;
     }
 
     // Zero-timeout send; on a full queue (Dosing task stalled), drop the

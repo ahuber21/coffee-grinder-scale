@@ -505,63 +505,13 @@ void drawConfirmLayout(float targetGrams, bool force) {
   g_tft.fillRoundRect(titleX, titleY + h + 4, w, 2, 1, kColorAccentBlue);
 }
 
-// --- SCREENSAVER layout: H/M/S/centiseconds, each row independently diffed -
-
-struct {
-  uint32_t h = 0xFFFFFFFF;
-  uint32_t m = 0xFFFFFFFF;
-  uint32_t s = 0xFFFFFFFF;
-  uint32_t cs = 0xFFFFFFFF;
-} g_saver;
-
-/** Draws (or skips, per-row, if unchanged) the SCREENSAVER clock. */
-void drawScreensaver(uint32_t h, uint32_t m, uint32_t s, uint32_t ms, bool force) {
-  if (force) {
-    g_saver = {};
-  }
-
-  constexpr int16_t startY = 12;
-  constexpr int16_t rowHeight = 40;
-  // Dimmer than the active-state screens -- an idle clock should recede,
-  // not compete for attention (same intent as an always-on watch face).
-  g_tft.setTextColor(kColorSecondary, ST7735_BLACK);
-
-  auto drawRow = [&](uint32_t value, uint32_t &last, int16_t rowIndex,
-                     const char *fmt, uint8_t size, int16_t rowH) {
-    if (value == last) return;
-    char buf[10];
-    snprintf(buf, sizeof(buf), fmt, static_cast<unsigned long>(value));
-    g_tft.setTextSize(size);
-    int16_t x, y;
-    uint16_t w, hgt;
-    g_tft.getTextBounds(buf, 0, 0, &x, &y, &w, &hgt);
-    int16_t drawX = kW - w;
-    int16_t drawY = startY + rowHeight * rowIndex;
-    g_tft.fillRect(0, drawY, kW, rowH, ST7735_BLACK);
-    g_tft.setCursor(drawX, drawY);
-    g_tft.print(buf);
-    last = value;
-  };
-
-  drawRow(h, g_saver.h, 0, "%02lu", 4, 32);
-  drawRow(m, g_saver.m, 1, "%02lu", 4, 32);
-  drawRow(s, g_saver.s, 2, "%02lu", 4, 32);
-
-  uint32_t cs = ms / 10;
-  if (cs != g_saver.cs) {
-    char buf[10];
-    snprintf(buf, sizeof(buf), ".%02lu", static_cast<unsigned long>(cs));
-    g_tft.setTextSize(2);
-    int16_t x, y;
-    uint16_t w, hgt;
-    g_tft.getTextBounds(buf, 0, 0, &x, &y, &w, &hgt);
-    int16_t drawY = startY + rowHeight * 3;
-    g_tft.fillRect(0, drawY, kW, 16, ST7735_BLACK);
-    g_tft.setCursor(kW - w, drawY);
-    g_tft.print(buf);
-    g_saver.cs = cs;
-  }
-}
+// --- SCREENSAVER: backlight off, screen left black ---------------------
+//
+// The point is reducing panel wear/burn-in during long idle stretches,
+// not giving the idle time somewhere else to display -- an always-on
+// clock would just move the static-content problem rather than solve
+// it. displayTaskFn() cuts the backlight on entry and restores it on
+// exit; there is nothing to draw here.
 
 // --- DEBUG layout: IP address top row, raw ADC + stability flag bottom row -
 
@@ -674,7 +624,9 @@ void renderMode(const DisplayCommand &cmd, bool force) {
     }
 
     case DisplayMode::SCREENSAVER:
-      drawScreensaver(cmd.idle_h, cmd.idle_m, cmd.idle_s, cmd.idle_ms, force);
+      // Backlight is cut/restored by displayTaskFn() on mode entry/exit;
+      // the screen itself is just left at the black the mode-change
+      // clear already produced.
       break;
 
     case DisplayMode::DEBUG:
@@ -713,6 +665,11 @@ void displayTaskFn(void *) {
       if (modeChanged) {
         g_tft.fillScreen(ST7735_BLACK);
         g_lastConnColor = 0;  // a freshly-cleared screen has no indicator yet
+        if (cmd.mode == DisplayMode::SCREENSAVER) {
+          backlightPercent(0);
+        } else if (last.mode == DisplayMode::SCREENSAVER) {
+          backlightPercent(100);
+        }
       }
       renderMode(cmd, modeChanged);
       last = cmd;
