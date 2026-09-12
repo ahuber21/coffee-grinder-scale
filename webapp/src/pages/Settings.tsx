@@ -302,6 +302,13 @@ export default function SettingsPage() {
               unit=" s"
             />
             <NumberSettingRow
+              field="screensaver_wake_weight_delta_g"
+              label="Screensaver wake weight delta"
+              currentValue={settings?.screensaver_wake_weight_delta_g ?? null}
+              step="0.1"
+              unit=" g"
+            />
+            <NumberSettingRow
               field="button_min_hold_ms"
               label="Button min hold"
               currentValue={settings?.button_min_hold_ms ?? null}

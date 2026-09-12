@@ -79,6 +79,7 @@ export interface SettingsMessage {
   min_topup_grams: number;
   button_debounce_ms: number;
   screensaver_timeout_s: number;
+  screensaver_wake_weight_delta_g: number;
   read_samples: number;
   speed: number;
   gain: number;
@@ -129,6 +130,7 @@ export type WritableSettingsField =
   | "min_topup_runtime_ms"
   | "min_topup_interval_ms"
   | "screensaver_timeout_s"
+  | "screensaver_wake_weight_delta_g"
   | "button_min_hold_ms";
 
 export interface SettingsWriteOutbound {

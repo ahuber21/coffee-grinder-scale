@@ -11,6 +11,8 @@ const AIM_FRACTION = 0.9;
 const OVERSHOOT_K_SIGMA = 1.5;
 const OVERSHOOT_BUDGET_G = 0.3;
 const MIN_CONTROLLABLE_GAP_G = 0.18;
+const HYGIENE_MIN_DURATION_MS = 350;
+const HYGIENE_MAX_DURATION_MS = 5000;
 
 function Formula({ children }: { children: string }) {
   return <div className="formula">{children}</div>;
@@ -52,6 +54,7 @@ export default function ModelPage() {
     exampleTarget > 0
       ? model.topup_deadtime_ms + (1000 * exampleTarget) / model.topup_slope_g_s
       : 0;
+  const exampleFires = exampleTarget > 0 && exampleDurationMs > HYGIENE_MIN_DURATION_MS;
 
   return (
     <>
@@ -69,8 +72,9 @@ export default function ModelPage() {
         <h3>Main grind rate</h3>
         <p className="muted">
           How fast coffee falls once the grinder has been running long enough for the chute to
-          be primed (~0.9s). Fitted per-session with a recency-weighted average, so it adapts as
-          the grinder wears or gets recalibrated -- older sessions count for less.
+          be primed (~0.9s). Fitted per-session as a running average -- every session counts
+          equally, with no recency weighting, since this grinder's mechanical behavior doesn't
+          drift with age.
         </p>
         <div className="big-number" style={{ fontSize: "1.8rem" }}>
           {fmt(model.rate_hat_g_s, 3)} <span className="muted" style={{ fontSize: "0.55em" }}>g/s</span>
@@ -117,16 +121,22 @@ export default function ModelPage() {
         <Formula>{`safe_weight = ${OVERSHOOT_BUDGET_G}g − ${OVERSHOOT_K_SIGMA} × pulse_noise  (shrink to stay inside the overshoot budget)`}</Formula>
         <Formula>{"pulse_duration = dead_time + 1000 × min(target_weight, safe_weight) / slope"}</Formula>
         <p className="muted" style={{ fontSize: "0.85em" }}>
-          If the gap is below {MIN_CONTROLLABLE_GAP_G}g, or the shrunk target weight is ≤ 0, or
-          the computed duration is outside a plausible 0-5s pulse, no pulse fires at all -- the
-          remaining gap is accepted as undershoot rather than risk an overshoot. Right now that
-          shrink allows up to <strong>{fmt(safeWeight, 3)}g</strong> per pulse.
+          If the gap is below {MIN_CONTROLLABLE_GAP_G}g, or the shrunk target weight is ≤ 0, no
+          pulse fires -- the remaining gap is accepted as undershoot rather than risk an
+          overshoot. Right now that shrink allows up to <strong>{fmt(safeWeight, 3)}g</strong>{" "}
+          per pulse. The duration is also clamped to {HYGIENE_MIN_DURATION_MS}-
+          {HYGIENE_MAX_DURATION_MS}ms: the relay is a physical, clicky switch, not
+          solid-state -- below ~{HYGIENE_MIN_DURATION_MS}ms it just stalls the motor and produces
+          zero output rather than a smaller pulse, so a duration that short is refused rather
+          than wasted.
         </p>
         <p className="muted" style={{ fontSize: "0.85em" }}>
           Worked example with today's fitted values, a {exampleGap}g gap:{" "}
-          {exampleTarget > 0
+          {exampleFires
             ? `aim for ${fmt(exampleTarget, 3)}g → a ${fmt(exampleDurationMs, 0)}ms pulse.`
-            : "the shrink reduces the target to 0 -- no pulse would fire, undershoot accepted."}
+            : exampleTarget > 0
+              ? `aim for ${fmt(exampleTarget, 3)}g → a ${fmt(exampleDurationMs, 0)}ms pulse, but that's below the ${HYGIENE_MIN_DURATION_MS}ms relay floor -- no pulse fires, undershoot accepted.`
+              : "the shrink reduces the target to 0 -- no pulse would fire, undershoot accepted."}
         </p>
       </div>
     </>
