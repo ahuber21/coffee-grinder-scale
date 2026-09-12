@@ -1446,3 +1446,23 @@ Format per entry:
   local only -- a page reload or device reboot starts the chart over,
   since nothing is persisted for this beyond the single latest state
   already cached in NetworkTask.cpp.
+
+### AR-062 — History tab had no per-target-dose accuracy distribution
+- **Area**: web
+- **Status**: fixed
+- **Found**: 2026-09-12, owner request: two histograms of final-minus-
+  target delta, one per fixed target dose (single/double), x axis
+  fixed to +/-0.5g, each fit with a Gaussian.
+- **Resolution**: `History.tsx` fetches completed sessions per mode
+  from PostgREST and renders a Chart.js bar+line histogram per mode
+  (blue for single, orange for double), with a Gaussian curve computed
+  from the sample mean/sd overlaid. Verifying this against the real
+  device's data (`fetchCompletedDosesForMode`) turned up something
+  worth flagging on its own: several `completed` sessions from before
+  today's hardware fixes (AR-041/042/043) recorded final weights wildly
+  off target (0g, negative, 100g+) -- real rows, not a bug, but not
+  representative of current dosing accuracy either. The Gaussian fit is
+  computed only from deltas inside the displayed +/-0.5g window (the
+  chart couldn't show the rest anyway); the caption discloses how many
+  points were excluded so the fit's provenance stays honest rather than
+  silently dropping outliers.

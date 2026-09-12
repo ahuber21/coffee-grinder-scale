@@ -1,14 +1,170 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Chart, LineController, LineElement, PointElement, LinearScale, Tooltip } from "chart.js";
+import {
+  Chart,
+  LineController,
+  LineElement,
+  PointElement,
+  BarController,
+  BarElement,
+  LinearScale,
+  Tooltip,
+} from "chart.js";
 import {
   fetchRecentSessions,
   fetchSessionEvents,
   fetchSessionRawSamples,
+  fetchCompletedDosesForMode,
   type Session,
   type SessionEvent,
 } from "../lib/postgrest";
 
-Chart.register(LineController, LineElement, PointElement, LinearScale, Tooltip);
+Chart.register(LineController, LineElement, PointElement, BarController, BarElement, LinearScale, Tooltip);
+
+const HISTOGRAM_RANGE_G = 0.5;
+const HISTOGRAM_BIN_WIDTH_G = 0.05;
+
+function fmt(n: number, digits = 3): string {
+  return n.toFixed(digits);
+}
+
+// Delta-from-target histogram with a fitted Gaussian overlay, x axis fixed
+// to +/-HISTOGRAM_RANGE_G regardless of what the data actually spans -- so
+// the single/double panels stay visually comparable to each other.
+function DeltaHistogram({
+  label,
+  deltas,
+  color,
+}: {
+  label: string;
+  deltas: number[];
+  color: string;
+}) {
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const chartRef = useRef<Chart | null>(null);
+
+  // Fit only over the displayed +/-HISTOGRAM_RANGE_G window: a handful of
+  // sessions predate hardware fixes (AR-041/042/043) and have final weights
+  // wildly off target (0g, negative, 100g+) -- real numbers, but not
+  // representative of current dosing accuracy, and the chart can't show
+  // them anyway. Folding them into mean/sd would silently distort a stat
+  // that's supposed to describe how well the scale doses today.
+  const fit = useMemo(() => {
+    const inRange = deltas.filter((d) => d >= -HISTOGRAM_RANGE_G && d < HISTOGRAM_RANGE_G);
+    const n = inRange.length;
+    if (n === 0) return null;
+    const mean = inRange.reduce((a, b) => a + b, 0) / n;
+    const variance =
+      n > 1 ? inRange.reduce((a, b) => a + (b - mean) ** 2, 0) / (n - 1) : 0;
+    const sd = Math.sqrt(variance);
+    return { n, mean, sd, excluded: deltas.length - n };
+  }, [deltas]);
+
+  useEffect(() => {
+    if (!canvasRef.current) return;
+
+    const binCount = Math.round((2 * HISTOGRAM_RANGE_G) / HISTOGRAM_BIN_WIDTH_G);
+    const bins = Array.from({ length: binCount }, (_, i) => ({
+      center: -HISTOGRAM_RANGE_G + (i + 0.5) * HISTOGRAM_BIN_WIDTH_G,
+      count: 0,
+    }));
+    for (const d of deltas) {
+      if (d < -HISTOGRAM_RANGE_G || d >= HISTOGRAM_RANGE_G) continue;
+      const idx = Math.min(
+        binCount - 1,
+        Math.floor((d + HISTOGRAM_RANGE_G) / HISTOGRAM_BIN_WIDTH_G)
+      );
+      bins[idx].count++;
+    }
+
+    const curve: { x: number; y: number }[] = [];
+    if (fit && fit.sd > 0) {
+      const steps = 120;
+      for (let i = 0; i <= steps; i++) {
+        const x = -HISTOGRAM_RANGE_G + (i / steps) * 2 * HISTOGRAM_RANGE_G;
+        const z = (x - fit.mean) / fit.sd;
+        const density = Math.exp(-0.5 * z * z) / (fit.sd * Math.sqrt(2 * Math.PI));
+        curve.push({ x, y: fit.n * HISTOGRAM_BIN_WIDTH_G * density });
+      }
+    }
+
+    chartRef.current?.destroy();
+    chartRef.current = new Chart(canvasRef.current, {
+      data: {
+        datasets: [
+          {
+            type: "bar",
+            label: `${label} (n=${fit?.n ?? 0})`,
+            data: bins.map((b) => ({ x: b.center, y: b.count })),
+            backgroundColor: `${color}55`,
+            borderColor: color,
+            borderWidth: 1,
+            parsing: false,
+          },
+          ...(curve.length > 0
+            ? [
+                {
+                  type: "line" as const,
+                  label: "Gaussian fit",
+                  data: curve,
+                  borderColor: color,
+                  borderWidth: 2,
+                  pointRadius: 0,
+                  fill: false,
+                  tension: 0.25,
+                  parsing: false as const,
+                },
+              ]
+            : []),
+        ],
+      },
+      options: {
+        responsive: true,
+        animation: false,
+        scales: {
+          x: {
+            type: "linear",
+            min: -HISTOGRAM_RANGE_G,
+            max: HISTOGRAM_RANGE_G,
+            title: { display: true, text: "Δ from target (g)", color: "rgba(235, 235, 245, 0.6)" },
+            ticks: { color: "rgba(235, 235, 245, 0.6)" },
+            grid: { color: "rgba(84, 84, 88, 0.3)" },
+          },
+          y: {
+            type: "linear",
+            beginAtZero: true,
+            title: { display: true, text: "Count", color: "rgba(235, 235, 245, 0.6)" },
+            ticks: { color: "rgba(235, 235, 245, 0.6)" },
+            grid: { color: "rgba(84, 84, 88, 0.3)" },
+          },
+        },
+        plugins: {
+          legend: { labels: { color: "#ffffff" } },
+        },
+      },
+    });
+    return () => chartRef.current?.destroy();
+  }, [deltas, fit, label, color]);
+
+  return (
+    <div>
+      <h4 style={{ margin: "0 0 0.5rem" }}>{label}</h4>
+      {deltas.length === 0 ? (
+        <p className="muted">No completed sessions yet.</p>
+      ) : (
+        <>
+          <canvas ref={canvasRef} height={200} />
+          {fit && (
+            <p className="muted" style={{ fontSize: "0.85em" }}>
+              μ = {fmt(fit.mean)}g, σ = {fmt(fit.sd)}g, n = {fit.n}
+              {fit.excluded > 0 &&
+                ` (${fit.excluded} outside ±${HISTOGRAM_RANGE_G}g excluded from the fit)`}
+            </p>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
 
 function formatTimestamp(iso: string): string {
   return new Date(iso).toLocaleString();
@@ -131,11 +287,22 @@ export default function HistoryPage() {
   const [sessions, setSessions] = useState<Session[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [selected, setSelected] = useState<Session | null>(null);
+  const [singleDeltas, setSingleDeltas] = useState<number[] | null>(null);
+  const [doubleDeltas, setDoubleDeltas] = useState<number[] | null>(null);
 
   useEffect(() => {
     fetchRecentSessions(50)
       .then(setSessions)
       .catch((e) => setError(String(e)));
+  }, []);
+
+  useEffect(() => {
+    fetchCompletedDosesForMode("single")
+      .then((doses) => setSingleDeltas(doses.map((d) => d.final_weight_g - d.target_weight_g)))
+      .catch(() => setSingleDeltas([]));
+    fetchCompletedDosesForMode("double")
+      .then((doses) => setDoubleDeltas(doses.map((d) => d.final_weight_g - d.target_weight_g)))
+      .catch(() => setDoubleDeltas([]));
   }, []);
 
   const stats = useMemo(() => {
@@ -165,6 +332,24 @@ export default function HistoryPage() {
           </p>
         </div>
       )}
+
+      <div className="panel">
+        <h3>Dose accuracy by target</h3>
+        <p className="muted" style={{ fontSize: "0.85em" }}>
+          Final weight minus target, one histogram per fixed target dose (single/double), fit
+          with a Gaussian. A narrower, more centered curve means tighter, less biased dosing.
+        </p>
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))",
+            gap: "1.5rem",
+          }}
+        >
+          <DeltaHistogram label="Single dose" deltas={singleDeltas ?? []} color="#0a84ff" />
+          <DeltaHistogram label="Double dose" deltas={doubleDeltas ?? []} color="#ff9f0a" />
+        </div>
+      </div>
 
       <div className="panel">
         <h3>Recent sessions</h3>

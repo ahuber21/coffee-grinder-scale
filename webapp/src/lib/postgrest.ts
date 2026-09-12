@@ -55,6 +55,24 @@ export function fetchRecentSessions(limit = 50): Promise<Session[]> {
   );
 }
 
+export interface DoseOutcome {
+  target_weight_g: number;
+  final_weight_g: number;
+}
+
+// Only completed sessions with a recorded final weight -- everything this
+// histogram needs, for a given fixed target-dose mode (single/double), and
+// a much larger sample than the "recent sessions" table needs to show.
+export function fetchCompletedDosesForMode(
+  mode: "single" | "double",
+  limit = 500
+): Promise<DoseOutcome[]> {
+  return get<DoseOutcome[]>(
+    `/sessions?mode=eq.${mode}&outcome=eq.completed&final_weight_g=not.is.null` +
+      `&order=started_at.desc&limit=${limit}&select=target_weight_g,final_weight_g`
+  );
+}
+
 export function fetchSessionEvents(sessionId: string): Promise<SessionEvent[]> {
   return get<SessionEvent[]>(
     `/events?session_id=eq.${sessionId}&order=pulse_index.asc`

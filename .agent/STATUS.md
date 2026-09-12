@@ -14,14 +14,18 @@ self-tuning per-gap-bucket lookup table (AR-059/D23), a real
 architecture reversal of D7. A live 18g grind test confirmed the LUT
 redesign works as intended; two small follow-ups from that same test
 raised the ADS1232 ring buffer to 96 samples (AR-060) and added a
-historical per-bucket duration chart to the Model tab (AR-061). See
-also `two_paragraph_breakdown.md` for a short, always-current summary.*
+historical per-bucket duration chart to the Model tab (AR-061). The
+History tab now also shows a per-target-dose (single/double) Gaussian-
+fit delta histogram, which incidentally surfaced that most of today's
+early `completed` sessions predate the hardware fixes and have garbage
+final weights (AR-062). See also `two_paragraph_breakdown.md` for a
+short, always-current summary.*
 
 ## Where things stand
 
 Planning and design are done; implementation is underway. Branch
 `rewrite/rtos-fork`. Standing rules in `AGENTS.md`, full decision log in
-`DECISIONS.md` (D1-D23), all findings in `ARS.md` (AR-001-061, all
+`DECISIONS.md` (D1-D23), all findings in `ARS.md` (AR-001-062, all
 resolved or non-blocking), design docs in `.agent/design/`.
 
 **First real first-use session (2026-09-12):** the owner used the
@@ -106,6 +110,21 @@ series chart of the topup LUT's 10 bucket durations to the Model tab
 (AR-061) so a bucket settling in after real pulses land in it is
 visible at a glance, not just its current value. Both built, tested,
 and OTA-deployed.
+
+**Per-target-dose accuracy histograms (2026-09-12, same day):** the
+History tab now shows two Gaussian-fit histograms of final-minus-target
+delta, one for single-dose sessions (blue) and one for double-dose
+sessions (orange), x axis fixed to +/-0.5g so the two are visually
+comparable (AR-062). Checking this against the real device turned up
+that most `completed` sessions from earlier today are from before the
+button/load-cell/gain fixes (AR-041/042/043) and have garbage final
+weights (0g, negative, 100g+) -- real data, not a display bug, but not
+representative of current accuracy. The Gaussian fit is computed only
+from deltas inside the displayed window, with the excluded count shown
+in the caption rather than silently dropped. As of this deploy there is
+only 1 in-range completed sample for each of single/double -- the
+histograms are correctly built and will fill in with real distributions
+as more clean doses accumulate.
 
 **Live debugging session (2026-09-11, after the first OTA deploy):**
 diagnosed and fixed, in order, using WS `"log"`-channel diagnostics
