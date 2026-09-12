@@ -54,7 +54,6 @@ Adafruit_ST7735 g_tft(&g_spi, DISPLAY_CS_PIN, DISPLAY_DC_PIN, DISPLAY_RESET_PIN)
 
 // --- Accent palette (RGB565), matched to iOS system colors ------------------
 
-constexpr uint16_t kColorPrimary = ST7735_WHITE;  ///< Main readouts: calm, neutral.
 constexpr uint16_t kColorSecondary = 0x9CD3;      ///< #98989D -- supporting text.
 constexpr uint16_t kColorTrack = 0x39C7;          ///< #3A3A3C -- progress bar track.
 constexpr uint16_t kColorAccentBlue = 0x0C3F;     ///< #0A84FF -- active/primary action.
@@ -86,6 +85,52 @@ void drawProgressBar(float frac, uint16_t color, bool force) {
   }
   g_progress.lastWidth = width;
   g_progress.lastColor = color;
+}
+
+/** Cache of the grind screen's bottom-up fill boundary, in rows filled from the bottom. */
+struct { int16_t lastFilled = -1; } g_grindFill;
+
+/**
+ * Fills the grind screen's background from the bottom up as `frac` (0..1,
+ * clamped) of the dose completes -- solid white below the rising boundary,
+ * solid black above it. Only the newly (un)filled band is repainted, same
+ * style as `drawProgressBar`. Returns true if the boundary actually moved
+ * (or `force` was set): that band was just painted straight over whatever
+ * was drawn there before, so callers must force any text sitting in it to
+ * redraw this frame.
+ */
+bool drawGrindFill(float frac, bool force) {
+  if (frac < 0.0f) frac = 0.0f;
+  if (frac > 1.0f) frac = 1.0f;
+  int16_t filled = static_cast<int16_t>(frac * kH + 0.5f);
+
+  if (!force && filled == g_grindFill.lastFilled) {
+    return false;
+  }
+
+  int16_t prevFilled = force ? 0 : g_grindFill.lastFilled;
+  if (prevFilled < 0) prevFilled = 0;
+
+  if (filled > prevFilled) {
+    g_tft.fillRect(0, kH - filled, kW, filled - prevFilled, ST7735_WHITE);
+  } else if (filled < prevFilled) {
+    g_tft.fillRect(0, kH - prevFilled, kW, prevFilled - filled, ST7735_BLACK);
+  }
+  g_grindFill.lastFilled = filled;
+  return true;
+}
+
+/**
+ * Repaints rows [y, y+h) split at the current grind-fill boundary -- black
+ * above it, white below -- so a redrawn text field's own background stays
+ * consistent with the fill instead of punching an opaque black box through it.
+ */
+void fillGrindBackground(int16_t y, int16_t h) {
+  int16_t whiteTopY = kH - g_grindFill.lastFilled;
+  int16_t blackEnd = whiteTopY < y ? y : (whiteTopY > y + h ? y + h : whiteTopY);
+  int16_t blackH = blackEnd - y;
+  if (blackH > 0) g_tft.fillRect(0, y, kW, blackH, ST7735_BLACK);
+  if (h - blackH > 0) g_tft.fillRect(0, y + blackH, kW, h - blackH, ST7735_WHITE);
 }
 
 // --- Panel bring-up ----------------------------------------------------------
@@ -293,8 +338,6 @@ struct {
   uint16_t currentColor = 0xFFFF;
   uint16_t targetColor = 0xFFFF;
   uint16_t timeColor = 0xFFFF;
-  int16_t layoutX = -1;
-  int16_t layoutWidth = -1;
 } g_grind;
 
 /** Draws (or skips, per-field, if unchanged) the GRINDING-family layout. */
@@ -306,6 +349,12 @@ void drawGrindingBlock(float currentGrams, float targetGrams, float seconds,
   }
 
   float displayGrams = cleanZero(currentGrams);
+  float frac = targetGrams > 0.0f ? displayGrams / targetGrams : 0.0f;
+
+  // A moved fill boundary just painted over whatever text pixels were
+  // sitting in its band, so every field must redraw this frame even if its
+  // string value didn't change.
+  const bool bgChanged = drawGrindFill(frac, force);
 
   char currentStr[16];
   char targetStr[16];
@@ -314,11 +363,11 @@ void drawGrindingBlock(float currentGrams, float targetGrams, float seconds,
   snprintf(targetStr, sizeof(targetStr), "/%4.1f", targetGrams);
   snprintf(timeStr, sizeof(timeStr), "%4.1fs", seconds);
 
-  const bool sameCurrent = strcmp(currentStr, g_grind.currentStr) == 0 &&
+  const bool sameCurrent = !bgChanged && strcmp(currentStr, g_grind.currentStr) == 0 &&
                            currentColor == g_grind.currentColor;
-  const bool sameTarget = strcmp(targetStr, g_grind.targetStr) == 0 &&
+  const bool sameTarget = !bgChanged && strcmp(targetStr, g_grind.targetStr) == 0 &&
                           targetColor == g_grind.targetColor;
-  const bool sameTime = strcmp(timeStr, g_grind.timeStr) == 0 &&
+  const bool sameTime = !bgChanged && strcmp(timeStr, g_grind.timeStr) == 0 &&
                         timeColor == g_grind.timeColor;
 
   if (!force && sameCurrent && sameTarget && sameTime) {
@@ -346,13 +395,9 @@ void drawGrindingBlock(float currentGrams, float targetGrams, float seconds,
     int16_t totalWidth = minusWidth + intWidth + dotWidth + decWidth;
     int16_t currentX = (kW - totalWidth) / 2;
 
-    if (currentX != g_grind.layoutX || totalWidth != g_grind.layoutWidth) {
-      g_tft.fillRect(0, currentY, kW, 32, ST7735_BLACK);
-    }
-    g_grind.layoutX = currentX;
-    g_grind.layoutWidth = totalWidth;
+    fillGrindBackground(currentY, 32);
 
-    g_tft.setTextColor(currentColor, ST7735_BLACK);
+    g_tft.setTextColor(currentColor);
 
     if (isNegative) {
       g_tft.setCursor(currentX, currentY + 8);
@@ -385,9 +430,9 @@ void drawGrindingBlock(float currentGrams, float targetGrams, float seconds,
   const int16_t targetY = currentY + 32 + 10;
 
   if (!sameTarget) {
-    g_tft.fillRect(0, targetY, kW, h, ST7735_BLACK);
+    fillGrindBackground(targetY, h);
     g_tft.setCursor((kW - w) / 2, targetY);
-    g_tft.setTextColor(targetColor, ST7735_BLACK);
+    g_tft.setTextColor(targetColor);
     g_tft.print(targetStr);
   }
 
@@ -398,9 +443,9 @@ void drawGrindingBlock(float currentGrams, float targetGrams, float seconds,
   const int16_t timeY = targetY + h + 20;
 
   if (!sameTime) {
-    g_tft.fillRect(0, timeY, kW, h, ST7735_BLACK);
+    fillGrindBackground(timeY, h);
     g_tft.setCursor((kW - w) / 2, timeY);
-    g_tft.setTextColor(timeColor, ST7735_BLACK);
+    g_tft.setTextColor(timeColor);
     g_tft.print(timeStr);
   }
 
@@ -414,7 +459,6 @@ void drawGrindingBlock(float currentGrams, float targetGrams, float seconds,
   g_grind.targetColor = targetColor;
   g_grind.timeColor = timeColor;
 
-  float frac = targetGrams > 0.0f ? displayGrams / targetGrams : 0.0f;
   drawProgressBar(frac, currentColor, force);
   drawConnectionIndicator(connColor);
 }
@@ -433,7 +477,7 @@ void defaultColorsFor(DisplayMode mode, uint16_t *current, uint16_t *target,
       *current = kColorAccentGreen;
       break;
     default:
-      *current = kColorPrimary;
+      *current = kColorSecondary;
       break;
   }
 }
