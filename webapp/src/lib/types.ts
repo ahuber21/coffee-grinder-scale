@@ -51,12 +51,12 @@ export interface TelemetryModelState extends TelemetryBase {
   rate_hat_g_s: number;
   rate_sd_g_s: number;
   rate_n_effective: number;
-  topup_slope_g_s: number;
-  topup_deadtime_ms: number;
-  topup_residual_sd_g: number;
-  topup_n_effective: number;
   coast_weight_g: number;
   coast_weight_sd_g: number;
+  // Per-gap-bucket tuned pulse duration/observation count: index i covers
+  // gap in (i*0.1g, (i+1)*0.1g], e.g. index 0 = (0, 0.1g], index 9 = (0.9, 1.0g].
+  topup_lut_duration_ms: number[];
+  topup_lut_n: number[];
 }
 
 export type TelemetryMessage =

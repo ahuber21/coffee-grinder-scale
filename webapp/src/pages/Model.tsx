@@ -2,17 +2,15 @@ import { useMemo } from "react";
 import { useDeviceSocket } from "../lib/DeviceSocketContext";
 import type { TelemetryModelState } from "../lib/types";
 
-// The topup decision constants below (aim fraction, k-sigma, overshoot
-// budget, min controllable gap) live in lib/DosingModel/DosingModel.h's
-// TopupModel::Config and lib/DosingTask/DosingTask.cpp, not in
-// SettingsSnapshot -- there's no live channel for them, so they're
+// These live in lib/DosingModel/DosingModel.h's TopupModel::Config, not
+// in SettingsSnapshot -- there's no live channel for them, so they're
 // hardcoded here for the explanation. Keep in sync by hand if they change.
-const AIM_FRACTION = 0.9;
-const OVERSHOOT_K_SIGMA = 1.5;
-const OVERSHOOT_BUDGET_G = 0.3;
-const MIN_CONTROLLABLE_GAP_G = 0.18;
+const AIM_FRACTION = 0.85;
+const LEARN_RATE_UNDERSHOOT = 0.3;
+const LEARN_RATE_OVERSHOOT = 0.6;
 const HYGIENE_MIN_DURATION_MS = 350;
 const HYGIENE_MAX_DURATION_MS = 5000;
+const BUCKET_WIDTH_G = 0.1;
 
 function Formula({ children }: { children: string }) {
   return <div className="formula">{children}</div>;
@@ -44,27 +42,17 @@ export default function ModelPage() {
     );
   }
 
-  const safeWeight = Math.max(
-    0,
-    OVERSHOOT_BUDGET_G - OVERSHOOT_K_SIGMA * model.topup_residual_sd_g
-  );
-  const exampleGap = 1.0;
-  const exampleTarget = Math.min(AIM_FRACTION * exampleGap, safeWeight);
-  const exampleDurationMs =
-    exampleTarget > 0
-      ? model.topup_deadtime_ms + (1000 * exampleTarget) / model.topup_slope_g_s
-      : 0;
-  const exampleFires = exampleTarget > 0 && exampleDurationMs > HYGIENE_MIN_DURATION_MS;
-
   return (
     <>
       <div className="panel">
         <h3>What this page is</h3>
         <p>
-          The dosing logic doesn't use a fixed lookup table -- it fits two small statistical
-          models from real sessions and uses them to decide when to stop the main grind and how
-          long to run each top-up pulse. This page shows the models' current fitted values and
-          the formulas that use them.
+          The main grind stop time is predicted from a small statistical model fitted from real
+          sessions. The final top-up, by contrast, is a self-tuning lookup table -- a table of
+          pulse durations, one per remaining-gap size, each nudged toward whatever has actually
+          worked from real pulses -- because short relay pulses turned out to be too clumpy and
+          inconsistent for a single formula to predict reliably. This page shows both models'
+          current values and the logic that uses them.
         </p>
       </div>
 
@@ -108,36 +96,51 @@ export default function ModelPage() {
         <h3>Top-up pulses</h3>
         <p className="muted">
           Once the main grind stops (deliberately a little short of target), short relay pulses
-          close the remaining gap. Each pulse re-runs this decision from scratch against the
-          weight actually measured after the previous pulse settled.
+          close the remaining gap. Which duration to fire is looked up by the current gap's
+          bucket, not computed from a formula -- each bucket covers a {fmt(BUCKET_WIDTH_G, 1)}g
+          range and is independently self-tuning.
         </p>
-        <p>
-          Slope <strong>{fmt(model.topup_slope_g_s, 3)} g/s</strong> · dead time{" "}
-          <strong>{fmt(model.topup_deadtime_ms, 0)} ms</strong> · pulse noise{" "}
-          <strong>±{fmt(model.topup_residual_sd_g, 3)} g</strong> ·{" "}
-          {model.topup_n_effective} effective pulses
-        </p>
-        <Formula>{`target_weight = ${AIM_FRACTION} × gap  (aim for 90% of what's left)`}</Formula>
-        <Formula>{`safe_weight = ${OVERSHOOT_BUDGET_G}g − ${OVERSHOOT_K_SIGMA} × pulse_noise  (shrink to stay inside the overshoot budget)`}</Formula>
-        <Formula>{"pulse_duration = dead_time + 1000 × min(target_weight, safe_weight) / slope"}</Formula>
+        <Formula>{`bucket = ceil(gap / ${fmt(BUCKET_WIDTH_G, 1)}g)  -- e.g. a 0.45g gap uses bucket 5's duration`}</Formula>
+        <Formula>{`aim_weight = ${AIM_FRACTION} × bucket_upper_bound  (leaves slack for the remainder to land in a smaller bucket)`}</Formula>
+        <Formula>{`error = aim_weight − weight_this_pulse_added
+duration += (error > 0 ? ${LEARN_RATE_UNDERSHOOT} : ${LEARN_RATE_OVERSHOOT}) × error × 1000 / slope`}</Formula>
         <p className="muted" style={{ fontSize: "0.85em" }}>
-          If the gap is below {MIN_CONTROLLABLE_GAP_G}g, or the shrunk target weight is ≤ 0, no
-          pulse fires -- the remaining gap is accepted as undershoot rather than risk an
-          overshoot. Right now that shrink allows up to <strong>{fmt(safeWeight, 3)}g</strong>{" "}
-          per pulse. The duration is also clamped to {HYGIENE_MIN_DURATION_MS}-
-          {HYGIENE_MAX_DURATION_MS}ms: the relay is a physical, clicky switch, not
+          Overshoot is corrected faster ({LEARN_RATE_OVERSHOOT}) than undershoot is grown (
+          {LEARN_RATE_UNDERSHOOT}) after every real pulse -- overshoot is the worse outcome, so
+          the table is quicker to back off than to push a duration back up. Every duration is
+          also clamped to {HYGIENE_MIN_DURATION_MS}-{HYGIENE_MAX_DURATION_MS}ms regardless of
+          what the update rule alone would produce: the relay is a physical, clicky switch, not
           solid-state -- below ~{HYGIENE_MIN_DURATION_MS}ms it just stalls the motor and produces
-          zero output rather than a smaller pulse, so a duration that short is refused rather
-          than wasted.
+          zero output rather than a smaller pulse.
         </p>
-        <p className="muted" style={{ fontSize: "0.85em" }}>
-          Worked example with today's fitted values, a {exampleGap}g gap:{" "}
-          {exampleFires
-            ? `aim for ${fmt(exampleTarget, 3)}g → a ${fmt(exampleDurationMs, 0)}ms pulse.`
-            : exampleTarget > 0
-              ? `aim for ${fmt(exampleTarget, 3)}g → a ${fmt(exampleDurationMs, 0)}ms pulse, but that's below the ${HYGIENE_MIN_DURATION_MS}ms relay floor -- no pulse fires, undershoot accepted.`
-              : "the shrink reduces the target to 0 -- no pulse would fire, undershoot accepted."}
-        </p>
+        <div className="table-scroll">
+          <table>
+            <thead>
+              <tr>
+                <th>Gap bucket</th>
+                <th>Duration</th>
+                <th>Aim weight</th>
+                <th>Pulses seen</th>
+              </tr>
+            </thead>
+            <tbody>
+              {model.topup_lut_duration_ms.map((duration, i) => {
+                const bucketUpper = (i + 1) * BUCKET_WIDTH_G;
+                const bucketLower = i * BUCKET_WIDTH_G;
+                return (
+                  <tr key={i}>
+                    <td>
+                      ({fmt(bucketLower, 1)}, {fmt(bucketUpper, 1)}]g
+                    </td>
+                    <td>{fmt(duration, 0)}ms</td>
+                    <td>{fmt(AIM_FRACTION * bucketUpper, 3)}g</td>
+                    <td>{model.topup_lut_n[i]}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
       </div>
     </>
   );

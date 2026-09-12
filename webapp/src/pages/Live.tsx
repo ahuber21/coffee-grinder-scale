@@ -173,7 +173,7 @@ export default function LivePage() {
             type="number"
             step="0.1"
             min="0.1"
-            max="40"
+            max="50"
             value={doseInput}
             onChange={(e) => setDoseInput(e.target.value)}
           />
