@@ -1308,3 +1308,62 @@ Format per entry:
   weight. The HA-integration half of that decision (tie backlight to
   the actual coffee machine's power state) remains a separate, not yet
   started follow-up.
+
+### AR-056 — Owner correction: MainGrindModel/CoastModel shouldn't decay with recency
+- **Area**: lib/DosingModel
+- **Status**: fixed
+- **Found**: 2026-09-12, owner feedback on the Model tab's explanation:
+  "No need to have older sessions count less. The grinder is really
+  really stable over time. It's 7 years old at this point and still
+  performs as on day one." `MainGrindModel`/`CoastModel` both defaulted
+  to a 45-day recency half-life; `TopupModel` already had decay
+  disabled (`half_life_days = 0.0`) on the same reasoning ("no
+  measurable drift... over 17 months"), just never extended to the
+  other two models.
+- **Resolution**: both now default to `half_life_days = 0.0` (disabled),
+  matching `TopupModel`. Required also adding the `<= 0.0` disable guard
+  to `MainGrindModel::finalizeSession` and `CoastModel::recordCoast`'s
+  decay application (previously only `TopupModel::applyDecay` had it;
+  the other two would have divided by zero / produced NaN with a literal
+  0.0 half-life otherwise). The decay mechanism itself is untouched and
+  still exercised by its own tests via an explicit non-default `Config`
+  -- only the default changed.
+
+### AR-057 — No hard floor for the physical relay's minimum actuation time
+- **Area**: lib/DosingModel
+- **Status**: fixed
+- **Found**: 2026-09-12, owner feedback: "pulse_duration, does it
+  consider the fact that it's a physical clicky re[lay], not an SSD
+  one? It's minimum on duration is about 0.3s, everything below will
+  just stall the motor and nothing will happen." `TopupModel::Config`'s
+  `hygiene_min_duration_ms` (meant to reject implausibly short pulses)
+  defaulted to `0.0` -- a no-op -- relying entirely on the *learned*
+  `topup_deadtime_ms` (persisted default ~310ms) happening to already
+  sit above the real stall threshold, with no explicit, hardware-derived
+  floor of its own. `TopupModel::isPlausible()` has no lower bound on
+  deadtime either, so nothing would have caught it drifting below 300ms
+  over time.
+- **Why it matters**: a commanded pulse below the real actuation floor
+  doesn't produce a smaller dose -- it produces *zero* output while the
+  model believes a real pulse happened, silently wasting a decision
+  cycle at best.
+- **Resolution**: `hygiene_min_duration_ms` now defaults to `350.0`
+  (a real margin above the owner's stated ~300ms floor), independent of
+  whatever `deadtimeMs()` is currently fitted to. Verified the existing
+  fitted values (~310ms deadtime, current 0.075g cold-start example
+  pulse -> ~381ms) still clear it; the SPA's Model tab now explains and
+  checks this floor in its worked example too.
+
+### AR-058 — SCREENSAVER only woke on a button press, not on physical presence
+- **Area**: firmware/dosing, firmware/settings, web
+- **Status**: fixed
+- **Found**: 2026-09-12, owner request: a large weight change while
+  SCREENSAVER is active (placing/removing a cup, dosing manually)
+  should wake the display, not just an explicit button press.
+- **Resolution**: new setting `screensaver_wake_weight_delta_g`
+  (default 2.0g, validated/exposed the same as every other field since
+  AR-048), plumbed end to end. `DosingTask` captures the scale reading
+  at SCREENSAVER entry (`g_screensaver_baseline_grams`) and, on every
+  sample while SCREENSAVER is active, wakes to IDLE if the reading has
+  moved past that baseline by more than the configured delta -- the
+  same per-sample drain loop that already special-cases GRINDING/TOPUP.

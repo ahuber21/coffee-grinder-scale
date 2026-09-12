@@ -14,7 +14,7 @@ algorithm's live fitted parameters and formulas. See also
 
 Planning and design are done; implementation is underway. Branch
 `rewrite/rtos-fork`. Standing rules in `AGENTS.md`, full decision log in
-`DECISIONS.md` (D1-D22), all findings in `ARS.md` (AR-001-055, all
+`DECISIONS.md` (D1-D22), all findings in `ARS.md` (AR-001-058, all
 resolved or non-blocking), design docs in `.agent/design/`.
 
 **First real first-use session (2026-09-12):** the owner used the
@@ -41,7 +41,17 @@ to the owner, that became a real feature: a new `MODEL_STATE` telemetry
 event and a new SPA "Model" tab (`webapp/src/pages/Model.tsx`) show the
 grind-rate/coast/topup models' current fitted values next to the exact
 stop-time and topup-decision formulas, with today's numbers substituted
-in.
+in. Reviewing that explanation, the owner caught two more real issues:
+the rate/coast models decayed with a 45-day recency half-life for no
+good reason (this specific grinder has run unchanged for 7+ years --
+AR-056, now disabled, matching `TopupModel`'s existing no-decay
+default), and the topup-pulse duration had no hard floor tied to the
+physical relay's real minimum actuation time (~300ms, below which it
+just stalls and produces zero output rather than a smaller dose --
+AR-057, now a real 350ms floor independent of whatever the model
+happens to have learned). Also added, per a follow-up request: SCREENSAVER
+now wakes on a large weight change (configurable, default 2g), not just
+a button press (AR-058).
 
 **Live debugging session (2026-09-11, after the first OTA deploy):**
 diagnosed and fixed, in order, using WS `"log"`-channel diagnostics
