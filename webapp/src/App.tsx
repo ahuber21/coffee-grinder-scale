@@ -3,14 +3,15 @@ import { useDeviceSocket } from "./lib/DeviceSocketContext";
 import LivePage from "./pages/Live";
 import SettingsPage from "./pages/Settings";
 import HistoryPage from "./pages/History";
+import ModelPage from "./pages/Model";
 
-// Three tabs, one flat hash router -- no react-router dependency needed
+// Four tabs, one flat hash router -- no react-router dependency needed
 // for something this small.
-type Tab = "live" | "settings" | "history";
+type Tab = "live" | "settings" | "history" | "model";
 
 function tabFromHash(hash: string): Tab {
   const clean = hash.replace(/^#\/?/, "");
-  if (clean === "settings" || clean === "history") return clean;
+  if (clean === "settings" || clean === "history" || clean === "model") return clean;
   return "live";
 }
 
@@ -40,10 +41,14 @@ export default function App() {
         <a href="#/history" className={tab === "history" ? "active" : ""}>
           History
         </a>
+        <a href="#/model" className={tab === "model" ? "active" : ""}>
+          Model
+        </a>
       </nav>
       {tab === "live" && <LivePage />}
       {tab === "settings" && <SettingsPage />}
       {tab === "history" && <HistoryPage />}
+      {tab === "model" && <ModelPage />}
     </div>
   );
 }

@@ -12,7 +12,8 @@ export type TelemetryType =
   | "topup_pulse"
   | "finalize"
   | "complete"
-  | "log";
+  | "log"
+  | "model_state";
 
 interface TelemetryBase {
   type: TelemetryType;
@@ -45,11 +46,25 @@ export interface TelemetryLog extends TelemetryBase {
   line: string;
 }
 
+export interface TelemetryModelState extends TelemetryBase {
+  type: "model_state";
+  rate_hat_g_s: number;
+  rate_sd_g_s: number;
+  rate_n_effective: number;
+  topup_slope_g_s: number;
+  topup_deadtime_ms: number;
+  topup_residual_sd_g: number;
+  topup_n_effective: number;
+  coast_weight_g: number;
+  coast_weight_sd_g: number;
+}
+
 export type TelemetryMessage =
   | TelemetryGrams
   | TelemetryTopupPulse
   | TelemetryRawSample
-  | TelemetryLog;
+  | TelemetryLog
+  | TelemetryModelState;
 
 // Mirrors buildSettingsJson's field list, which now covers every
 // SettingsSnapshot field except the two write-only WiFi action flags.
