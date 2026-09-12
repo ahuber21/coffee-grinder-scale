@@ -178,7 +178,7 @@ bool MainGrindModel::finalizeSession(int64_t now_epoch_s) {
   double decayed_precision = m_rate_precision;
   double decayed_n = static_cast<double>(m_rate_n_effective);
 
-  if (m_last_updated != 0 && now_epoch_s > m_last_updated) {
+  if (m_cfg.half_life_days > 0.0 && m_last_updated != 0 && now_epoch_s > m_last_updated) {
     double elapsed_days = (now_epoch_s - m_last_updated) / kSecondsPerDay;
     double factor = std::exp(-elapsed_days / m_cfg.half_life_days);
     decayed_precision *= factor;
@@ -439,7 +439,7 @@ CoastModel::RecordResult CoastModel::recordCoast(double observed_coast_g,
   }
 
   double decayed_precision = m_coast_precision;
-  if (m_last_updated != 0 && now_epoch_s > m_last_updated) {
+  if (m_cfg.half_life_days > 0.0 && m_last_updated != 0 && now_epoch_s > m_last_updated) {
     double elapsed_days = (now_epoch_s - m_last_updated) / kSecondsPerDay;
     double factor = std::exp(-elapsed_days / m_cfg.half_life_days);
     decayed_precision *= factor;

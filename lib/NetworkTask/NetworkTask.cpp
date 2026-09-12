@@ -139,6 +139,7 @@ String buildSettingsJson(const SettingsSnapshot &s) {
   doc["min_topup_grams"] = s.min_topup_grams;
   doc["button_debounce_ms"] = s.button_debounce_ms;
   doc["screensaver_timeout_s"] = s.screensaver_timeout_s;
+  doc["screensaver_wake_weight_delta_g"] = s.screensaver_wake_weight_delta_g;
   doc["read_samples"] = s.read_samples;
   doc["speed"] = s.speed;
   doc["gain"] = s.gain;
@@ -258,6 +259,10 @@ bool settingsFieldFromName(const char *name, SettingsFieldId &out) {
     out = SettingsFieldId::SCREENSAVER_TIMEOUT_S;
     return true;
   }
+  if (strcmp(name, "screensaver_wake_weight_delta_g") == 0) {
+    out = SettingsFieldId::SCREENSAVER_WAKE_WEIGHT_DELTA_G;
+    return true;
+  }
   if (strcmp(name, "button_min_hold_ms") == 0) {
     out = SettingsFieldId::BUTTON_MIN_HOLD_MS;
     return true;
@@ -301,7 +306,8 @@ void handleWsMessage(AsyncWebSocketClient *client, const uint8_t *data, size_t l
                fieldId == SettingsFieldId::TOP_UP_MARGIN_SINGLE ||
                fieldId == SettingsFieldId::TOP_UP_MARGIN_DOUBLE ||
                fieldId == SettingsFieldId::MIN_TOPUP_GRAMS ||
-               fieldId == SettingsFieldId::RATE_CALCULATION_PERCENTAGE) {
+               fieldId == SettingsFieldId::RATE_CALCULATION_PERCENTAGE ||
+               fieldId == SettingsFieldId::SCREENSAVER_WAKE_WEIGHT_DELTA_G) {
       req.value.f = doc["value"] | NAN;
     } else {
       // Every remaining field (button/ADC/timeout settings) is uint32_t.

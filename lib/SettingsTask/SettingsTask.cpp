@@ -53,6 +53,7 @@ constexpr const char *kKeyStabMaxMs = "stab_max_ms";
 constexpr const char *kKeyMinTopupRt = "min_topup_rt";
 constexpr const char *kKeyTopupIntMs = "topup_int_ms";
 constexpr const char *kKeySsTimeoutS = "ss_timeout_s";
+constexpr const char *kKeySsWakeDeltaG = "ss_wake_delta";
 constexpr const char *kKeyBtnDebounce = "btn_debounce";
 constexpr const char *kKeyBtnHoldMs = "btn_hold_ms";
 constexpr const char *kKeyWifiReset = "wifi_reset";
@@ -87,6 +88,8 @@ bool validRateCalcPct(float v) { return std::isfinite(v) && v > 0.0f && v <= 1.0
 bool validTimeoutMs(uint32_t v) { return v > 0 && v <= 600000UL; }
 /** A sane screensaver idle window, in seconds. */
 bool validScreensaverTimeoutS(uint32_t v) { return v > 0 && v <= 86400UL; }
+/** A wake-on-weight-change threshold plausible for a kitchen scale. */
+bool validScreensaverWakeWeightDeltaG(float v) { return std::isfinite(v) && v > 0.0f && v <= 500.0f; }
 
 /**
  * Loads SettingsSnapshot from NVS. Returns false (leaving `out`
@@ -251,6 +254,14 @@ bool loadSettingsFromNvs(SettingsSnapshot &out) {
     Serial.println("[Settings] NVS screensaver_timeout_s invalid -- using default");
   }
 
+  float ss_wake_delta_g =
+      g_prefs.getFloat(kKeySsWakeDeltaG, defaults.screensaver_wake_weight_delta_g);
+  if (validScreensaverWakeWeightDeltaG(ss_wake_delta_g)) {
+    out.screensaver_wake_weight_delta_g = ss_wake_delta_g;
+  } else {
+    Serial.println("[Settings] NVS screensaver_wake_weight_delta_g invalid -- using default");
+  }
+
   uint32_t btn_debounce_ms = g_prefs.getUInt(kKeyBtnDebounce, defaults.button_debounce_ms);
   if (validButtonDebounceMs(btn_debounce_ms)) {
     out.button_debounce_ms = btn_debounce_ms;
@@ -304,6 +315,7 @@ void saveSettingsToNvs(const SettingsSnapshot &snap) {
   g_prefs.putUInt(kKeyMinTopupRt, snap.min_topup_runtime_ms);
   g_prefs.putUInt(kKeyTopupIntMs, snap.min_topup_interval_ms);
   g_prefs.putUInt(kKeySsTimeoutS, snap.screensaver_timeout_s);
+  g_prefs.putFloat(kKeySsWakeDeltaG, snap.screensaver_wake_weight_delta_g);
   g_prefs.putUInt(kKeyBtnDebounce, snap.button_debounce_ms);
   g_prefs.putUInt(kKeyBtnHoldMs, snap.button_min_hold_ms);
   g_prefs.putBool(kKeyWifiReset, snap.wifi_reset_flag);
@@ -454,6 +466,10 @@ bool applyWrite(const SettingsWriteRequest &req) {
     case SettingsFieldId::SCREENSAVER_TIMEOUT_S:
       if (!validScreensaverTimeoutS(req.value.u)) return false;
       g_settings.screensaver_timeout_s = req.value.u;
+      return true;
+    case SettingsFieldId::SCREENSAVER_WAKE_WEIGHT_DELTA_G:
+      if (!validScreensaverWakeWeightDeltaG(req.value.f)) return false;
+      g_settings.screensaver_wake_weight_delta_g = req.value.f;
       return true;
     case SettingsFieldId::BUTTON_MIN_HOLD_MS:
       if (!validTimeoutMs(req.value.u)) return false;

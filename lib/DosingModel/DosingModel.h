@@ -158,8 +158,12 @@ class MainGrindModel {
     // isn't primed yet, so early samples aren't on the plateau line
     // and would bias the slope.
     double deadtime_ms = 900.0;
-    /** Recency half-life for the persisted rate. */
-    double half_life_days = 45.0;
+    // <= 0 disables decay: this grinder's mechanical behavior doesn't
+    // drift with age (the owner's own unit has run 7+ years with no
+    // change in feel), so an old session shouldn't count for less than
+    // a recent one. A half-life would only serve to make the estimate
+    // needlessly jumpy against ordinary session-to-session noise.
+    double half_life_days = 0.0;
     /** Minimum in-session points before the session fit is trusted at all. */
     int min_session_points = 3;
     // A folded-in rate outside this physically plausible range is
@@ -293,7 +297,15 @@ class TopupModel {
     // and re-fires every cycle, so a single pulse doesn't need to carry
     // the whole overshoot guarantee alone.
     double overshoot_k_sigma = 1.5;
-    double hygiene_min_duration_ms = 0.0;
+    // The relay is a physical, clicky (not solid-state) switch driving
+    // a motor with real static friction/cogging to overcome -- below
+    // ~300ms it just stalls and produces zero output rather than a
+    // proportionally smaller pulse. This is a hard hardware floor, kept
+    // independent of whatever `deadtimeMs()` gets fitted to (which has
+    // no lower bound of its own -- see TopupModel::isPlausible): even
+    // if the learned deadtime ever drifted below the stall point, this
+    // still refuses to command a pulse the relay can't actually act on.
+    double hygiene_min_duration_ms = 350.0;
     double hygiene_max_duration_ms = 5000.0;  ///< Beyond this, a duration isn't a real dose.
   };
 
@@ -374,11 +386,10 @@ class CoastModel {
  public:
   /** Tunable bounds for coast-observation acceptance. */
   struct Config {
-    // Recency half-life for the persisted coast estimate. Reuses Model
-    // A's half-life rather than inventing a new number: coast is tied
-    // to the same main-grind/burr-wear physics Model A's rate is, and
-    // no separate measurement of coast drift over time exists.
-    double half_life_days = 45.0;
+    // <= 0 disables decay, matching Model A's rate: coast is tied to
+    // the same mechanical behavior, which doesn't drift with this
+    // grinder's age (see MainGrindModel::Config::half_life_days).
+    double half_life_days = 0.0;
     // Plausibility bounds on a raw observation, checked before it's
     // folded in at all: coast physically cannot be negative (chute
     // inventory doesn't un-fall), and 3g is a tighter, still-generous

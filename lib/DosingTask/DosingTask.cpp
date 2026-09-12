@@ -56,6 +56,7 @@ float g_topup_weight_before_pulse = 0.0f;
 bool g_finalize_done = false;
 
 uint32_t g_last_activity_ms = 0;  ///< Last button press or IDLE entry -- drives the SCREENSAVER timer.
+float g_screensaver_baseline_grams = 0.0f;  ///< Weight at SCREENSAVER entry, for the wake check.
 uint32_t g_last_coffee_ms = 0;    ///< When the last session completed; 0 == none yet this boot.
 
 /*
@@ -132,6 +133,10 @@ void transitionTo(DosingState next) {
     // Freezes the displayed elapsed time once dispensing is actually
     // done -- only the weight readout should keep moving on this screen.
     g_frozen_elapsed_ms = g_grinder_started_ms ? millis() - g_grinder_started_ms : 0;
+  }
+  if (next == DosingState::SCREENSAVER) {
+    // Reference point for the wake-on-weight-change check below.
+    g_screensaver_baseline_grams = g_have_sample ? g_last_sample.grams : 0.0f;
   }
   g_state = next;
   g_state_entered_ms = millis();
@@ -366,6 +371,14 @@ void dosingTaskFn(void *) {
         handleGrindingSample(sample);
       } else if (g_state == DosingState::TOPUP) {
         handleTopupSample(sample);
+      } else if (g_state == DosingState::SCREENSAVER) {
+        // Someone approaching/using the machine (placing or removing a
+        // cup, dosing manually) shouldn't have to press a button first
+        // to wake the display.
+        float delta = fabsf(sample.grams - g_screensaver_baseline_grams);
+        if (delta > g_settings.screensaver_wake_weight_delta_g) {
+          transitionTo(DosingState::IDLE);
+        }
       }
     }
 

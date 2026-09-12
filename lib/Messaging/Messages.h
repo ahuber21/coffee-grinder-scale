@@ -181,6 +181,9 @@ struct SettingsSnapshot {
   uint32_t min_topup_runtime_ms = 500;
   uint32_t min_topup_interval_ms = 1000;
   uint32_t screensaver_timeout_s = 60;
+  /// A weight change past this, while SCREENSAVER is active, wakes the display --
+  /// someone approaching/using the machine shouldn't have to press a button first.
+  float screensaver_wake_weight_delta_g = 2.0f;
 
   // Input task's slice.
   uint32_t button_debounce_ms = 150;
@@ -220,6 +223,7 @@ enum class SettingsFieldId : uint16_t {
   MIN_TOPUP_RUNTIME_MS,
   MIN_TOPUP_INTERVAL_MS,
   SCREENSAVER_TIMEOUT_S,
+  SCREENSAVER_WAKE_WEIGHT_DELTA_G,
   BUTTON_MIN_HOLD_MS,
 };
 
