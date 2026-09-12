@@ -685,7 +685,7 @@ Format per entry:
 
 ### AR-028 — `TopupModelV1` NVS persistence still stubbed after the SettingsTask NVS pass
 - **Area**: firmware/settings, firmware/dosing
-- **Status**: open
+- **Status**: fixed
 - **Found**: 2026-09-11, implementing real `SettingsSnapshot` NVS
   read/write in `lib/SettingsTask/SettingsTask.cpp` (`design/topup-model.md`
   §5 calls for persisting the recency-weighted model state across reboots).
@@ -698,8 +698,17 @@ Format per entry:
   cold-start values documented in `topup-model.md` §4 — functionally
   correct (the model degrades gracefully to its prior) but throws away
   real learning between power cycles, which matters for D13's accuracy
-  target given how few sessions a home device runs per day.
-- **Resolution**: —
+  target given how few sessions a home device runs per day. It also
+  meant AR-052's cold-start deadlock recurred on literally every boot,
+  with no way for real pulse data to ever accumulate past it.
+- **Resolution**: `loadTopupModelFromNvs`/`saveTopupModelToNvs` now do a
+  real round-trip -- the whole `TopupModelV1` POD struct as one raw-bytes
+  NVS blob (`Preferences::putBytes`/`getBytes`), guarded by the struct's
+  own `version` field (mismatch or wrong byte count falls back to
+  cold-start priors, same discipline as `SettingsSnapshot`'s
+  `schema_ver`) and by the existing `isPlausibleTopupModel` bounds
+  check. Saved once per completed session, right where `DosingTask`
+  already builds the merged blob for the persist-request queue.
 
 ### AR-029 — TelemetryTask approximates TOPUP pulse relay-on/off timestamps with one shared value
 - **Area**: firmware/telemetry, data-infra
@@ -1196,3 +1205,106 @@ Format per entry:
   through the exact same `renderMode()` dispatch every other screen
   uses, removing the special-cased direct draw and the `haveLast` flag
   it existed for.
+
+### AR-052 — TOPUP can structurally never fire a pulse at the cold-start prior
+- **Area**: lib/DosingModel, firmware/dosing
+- **Status**: fixed
+- **Found**: 2026-09-12, live: a session stopped GRINDING at 17.0g
+  (correctly, target_grams_corrected for an 18g double dose with
+  top_up_margin_double=1.0), then sat in TOPUP with zero pulses fired
+  before the safety cutoff forced FINALIZE. Reproduced and confirmed
+  with a standalone probe of `TopupModel::computeTopupDecision` against
+  a fresh `makeDefaultTopupModel()`: `should_fire` is `false` for every
+  gap tried from 0.2g to 3.0g.
+- **Why it matters**: `computeTopupDecision`'s overshoot-safety shrink
+  (`safe_weight = overshoot_budget_g - overshoot_k_sigma * residual_sd`)
+  is gap-independent -- once `overshoot_k_sigma * residual_sd` alone
+  reaches `overshoot_budget_g`, `safe_weight <= 0` and every gap clamps
+  to "don't fire," permanently, regardless of how large the gap is.
+  With the documented cold-start prior (`residual_sd = 0.15`,
+  `overshoot_k_sigma = 2.0`) and the value `DosingTask.cpp` actually
+  passes as the budget (`0.3`), `2 * 0.15` exactly equals `0.3` --
+  zero margin, and the comparison is strict (`>`), so any positive
+  pulse fails it. `TopupModelV1` NVS persistence is also still stubbed
+  (older finding, see STATUS.md's AR-028 reference), so every boot
+  restarts at exactly this prior -- the model can never accumulate the
+  real pulse data (`recordPulse` only runs after a pulse fires) that
+  might eventually shift `residual_sd`.
+- **Partially fixed**: `TopupModel::seedFromPersisted`'s 4-pseudo-
+  observation reconstruction was itself inflating the reconstructed
+  `residualStdDev()` by ~6% above the documented prior (0.159 measured
+  vs. 0.15 intended) -- `residualVariance()`'s `n-2` degrees-of-freedom
+  correction was never accounted for when choosing the synthetic
+  spread. Fixed by scaling the spread by `sqrt((n0-2)/n0)` so the
+  reconstruction reproduces the persisted value exactly. Genuine
+  correctness fix, kept regardless of the item below -- but insufficient
+  alone, since even the *correct* 0.15 leaves exactly zero margin against
+  the 0.3g budget at k_sigma=2.0.
+- **Resolution**: owner chose to lower `overshoot_k_sigma` (2.0 -> 1.5,
+  ~95% -> ~93% one-sided confidence per pulse) rather than raise the
+  0.3g overshoot budget or special-case the zero-margin boundary --
+  `2*0.15=0.3` was consuming the entire budget with the pulse's own
+  target weight getting none of it; `1.5*0.15=0.225` leaves 0.075g of
+  real margin. Accepted on the reasoning that the topup loop
+  re-evaluates and re-fires every cycle, so a single pulse doesn't need
+  to carry the whole overshoot guarantee alone. New native test
+  `test_decision_fires_at_cold_start_with_production_budget` locks in
+  the exact production scenario (`computeTopupDecision(1.0, 0.3)` on a
+  fresh model) that every prior test's choice of budget/gap had missed.
+  Also: `TopupModelV1` NVS persistence (AR-028) now actually lands, so
+  once real pulse data accumulates, `residual_sd` is no longer frozen
+  at this exact boundary forever. And: the owner asked for the model's
+  live parameters to be visible with an explanation of the formulas
+  ("I'm not following what happens and what the parameters do") -- see
+  the new `TelemetryType::MODEL_STATE` event (sent at boot and after
+  every completed session, replayed to newly-connecting WS clients same
+  as `settings`) and the SPA's new Model tab
+  (`webapp/src/pages/Model.tsx`), which shows the fitted rate/coast/
+  topup values alongside the actual stop-time and topup-decision
+  formulas with today's numbers substituted in.
+
+### AR-053 — FINALIZE's elapsed-time readout kept counting instead of freezing
+- **Area**: firmware/dosing, firmware/display
+- **Status**: fixed
+- **Found**: 2026-09-12, owner feedback: after a dose finished, the
+  displayed timer kept running instead of stopping, while the weight
+  readout correctly kept updating live.
+- **Resolution**: `transitionTo()` now captures elapsed time into
+  `g_frozen_elapsed_ms` the instant FINALIZE is entered;
+  `sendDisplayCommand()` reports that frozen value for `elapsed_s`
+  while in FINALIZE instead of the live `millis() - grinder_started_ms`
+  calculation every other state uses. The weight readout is unaffected.
+
+### AR-054 — Auto-tare fired almost immediately on returning to IDLE after a dose
+- **Area**: firmware/scale
+- **Status**: fixed
+- **Found**: 2026-09-12, owner feedback: wanted time to see the final
+  weight before it gets auto-zeroed.
+- **Resolution**: `ScaleTask` now detects the falling edge of
+  `kDosingActiveBit` (dosing active -> idle) and applies a 10s cooldown
+  before auto-tare resumes, instead of the normal 1s inter-tare rate
+  limit applying immediately.
+
+### AR-055 — SCREENSAVER was fully implemented but never actually reachable
+- **Area**: firmware/dosing, firmware/display
+- **Status**: fixed
+- **Found**: 2026-09-12, codebase review: `screensaver_timeout_s` had a
+  real validator and was exposed in the Settings UI, and `DisplayTask`
+  had a complete SCREENSAVER render path, but nothing in `DosingTask`
+  ever actually transitioned `g_state` to `SCREENSAVER` -- there was no
+  idle timer anywhere. The setting did nothing.
+- **Why it matters**: directly relevant to the owner's TFT-burn-in
+  concern (screensaver was explicitly one of the two proposed
+  mitigations, "blank now, HA later").
+- **Resolution**: `DosingTask` now tracks `g_last_activity_ms` (reset on
+  every button press and on entering IDLE) and transitions IDLE ->
+  SCREENSAVER once `screensaver_timeout_s` has elapsed with none; any
+  button press from SCREENSAVER dismisses it back to IDLE. Per the
+  owner's earlier decision, SCREENSAVER blanks the panel (backlight off
+  via the existing PWM channel) rather than showing an idle clock --
+  an always-on clock would just relocate the static-content problem,
+  not solve it -- so the previously-implemented digit-clock render path
+  (`drawScreensaver`) was removed rather than kept as unreachable
+  weight. The HA-integration half of that decision (tie backlight to
+  the actual coffee machine's power state) remains a separate, not yet
+  started follow-up.

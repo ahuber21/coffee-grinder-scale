@@ -1,19 +1,47 @@
 # Status
 
-*Last updated: 2026-09-11 — after the live-debugging session below, the
-owner handed off with open-ended direction: drop the dynamic-ADC-speed
-feature (repeatedly oscillated live, three attempts), fix a display
-boot-screen bug, and give both the TFT and the SPA a real visual
-redesign ("should look like an Apple product"). All of that is done and
-deployed; see the second half of this section for specifics. See also
+*Last updated: 2026-09-12 — first real first-use session on the
+physical device after the handoff/redesign work: found and fixed a
+structural bug that made the topup mechanism permanently unable to
+fire (AR-052), added the NVS persistence it needed (AR-028), froze the
+FINALIZE timer and lengthened the post-dose auto-tare grace period
+(AR-053/054), wired up a real SCREENSAVER idle timer that blanks the
+panel (AR-055), and added a Model tab to the SPA showing the dosing
+algorithm's live fitted parameters and formulas. See also
 `two_paragraph_breakdown.md` for a short, always-current summary.*
 
 ## Where things stand
 
 Planning and design are done; implementation is underway. Branch
 `rewrite/rtos-fork`. Standing rules in `AGENTS.md`, full decision log in
-`DECISIONS.md` (D1-D22), all findings in `ARS.md` (AR-001-051, all
+`DECISIONS.md` (D1-D22), all findings in `ARS.md` (AR-001-055, all
 resolved or non-blocking), design docs in `.agent/design/`.
+
+**First real first-use session (2026-09-12):** the owner used the
+device for actual dosing for the first time since the redesign work and
+reported three issues, all fixed: (1) a session stopped GRINDING
+correctly short of target but then never actually topped up, going
+straight to FINALIZE after a delay -- traced to `computeTopupDecision`
+structurally never being able to fire a pulse at the cold-start prior
+(`2 x residual_sd` exactly consumed the entire 0.3g overshoot budget,
+leaving zero margin for any pulse, permanently, since `TopupModelV1`
+never persisted across reboots either) -- see AR-052/AR-028 for the
+full root-cause and fix (a genuine reconstruction-accuracy bug plus a
+deliberate, owner-approved margin change, `overshoot_k_sigma` 2.0 ->
+1.5). (2) FINALIZE's displayed timer kept counting instead of freezing
+-- AR-053. (3) Auto-tare fired almost immediately on returning to
+IDLE -- AR-054, now a 10s grace period. Also, reviewing the codebase
+turned up that `SCREENSAVER` was fully implemented in `DisplayTask` and
+its timeout setting fully validated/exposed, but nothing ever actually
+triggered the transition -- fixed with a real idle timer, and per the
+owner's earlier "blank now" decision, it now cuts the backlight rather
+than showing a clock (AR-055). Finally, since the topup-model
+investigation required actually inspecting the algorithm to explain it
+to the owner, that became a real feature: a new `MODEL_STATE` telemetry
+event and a new SPA "Model" tab (`webapp/src/pages/Model.tsx`) show the
+grind-rate/coast/topup models' current fitted values next to the exact
+stop-time and topup-decision formulas, with today's numbers substituted
+in.
 
 **Live debugging session (2026-09-11, after the first OTA deploy):**
 diagnosed and fixed, in order, using WS `"log"`-channel diagnostics
@@ -325,14 +353,12 @@ deployed and verified on the physical device.
 
 ## Open questions for the owner
 
-- **TFT burn-in / lifetime**: the display already shows some burn-in
-  from running 24/7. Owner raised two possible mitigations: (1) the
-  screensaver's idle timer currently only changes what's shown, not the
-  panel's power state -- extend it to actually blank/sleep the panel
-  after some idle time; (2) tie the panel's power to the actual
-  grinder/coffee-machine's on/off state, either pulled from the owner's
-  Home Assistant instance or by having the ESP32 poll the machine's
-  state directly. Needs a design decision before implementation.
+- **TFT burn-in / lifetime, part 2**: part 1 (a working idle timer that
+  blanks the panel via the backlight after `screensaver_timeout_s`, see
+  AR-055) is done. Part 2 -- tying the panel's power to the actual
+  coffee machine's on/off state, either pulled from the owner's Home
+  Assistant instance or by having the ESP32 poll the machine directly
+  -- is a deliberate follow-up, not started ("blank now, HA later").
 
 ## Parked ideas (out of scope for this rewrite)
 
