@@ -11,14 +11,17 @@ algorithm's live fitted parameters and formulas. Continued live testing
 then surfaced that the topup fitted-line model itself doesn't hold at
 short pulse durations (noisy, clumpy real behavior) -- replaced with a
 self-tuning per-gap-bucket lookup table (AR-059/D23), a real
-architecture reversal of D7. See also `two_paragraph_breakdown.md` for
-a short, always-current summary.*
+architecture reversal of D7. A live 18g grind test confirmed the LUT
+redesign works as intended; two small follow-ups from that same test
+raised the ADS1232 ring buffer to 96 samples (AR-060) and added a
+historical per-bucket duration chart to the Model tab (AR-061). See
+also `two_paragraph_breakdown.md` for a short, always-current summary.*
 
 ## Where things stand
 
 Planning and design are done; implementation is underway. Branch
 `rewrite/rtos-fork`. Standing rules in `AGENTS.md`, full decision log in
-`DECISIONS.md` (D1-D23), all findings in `ARS.md` (AR-001-059, all
+`DECISIONS.md` (D1-D23), all findings in `ARS.md` (AR-001-061, all
 resolved or non-blocking), design docs in `.agent/design/`.
 
 **First real first-use session (2026-09-12):** the owner used the
@@ -88,6 +91,21 @@ since the relay physically stalls below ~300ms (AR-057). SPA's Model
 tab now renders the live LUT as a table instead of slope/deadtime/noise
 scalars. 21/21 native tests pass (rewritten for the new API); firmware
 and SPA deployed and confirmed live.
+
+**18g grind test and two follow-ups (2026-09-12, same day):** the owner
+ran a full 18g grind live while watching WS telemetry; the LUT-based
+topup behaved as designed (learning-rate updates moved the fired
+bucket's duration in the expected direction, overshoot corrected faster
+than undershoot grows), landing +0.21g over target. Satisfied with the
+result, the owner asked for two small changes: raise the ADS1232 ring
+buffer's max size from 48 to 96 samples for more configurable smoothing
+headroom (AR-060 -- the `speed`/SPS setting itself is unchanged, still
+a static, settings-driven value defaulting to 10 with no dynamic
+switching, per AR-050's earlier revert), and add a historical time-
+series chart of the topup LUT's 10 bucket durations to the Model tab
+(AR-061) so a bucket settling in after real pulses land in it is
+visible at a glance, not just its current value. Both built, tested,
+and OTA-deployed.
 
 **Live debugging session (2026-09-11, after the first OTA deploy):**
 diagnosed and fixed, in order, using WS `"log"`-channel diagnostics

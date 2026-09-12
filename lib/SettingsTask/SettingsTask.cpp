@@ -74,8 +74,8 @@ bool validDoseGrams(float v) { return std::isfinite(v) && v > 0.0f && v <= 100.0
 bool validTopUpMargin(float v) { return std::isfinite(v) && v >= 0.0f; }
 /** A sane debounce window, in ms. */
 bool validButtonDebounceMs(uint32_t v) { return v > 0 && v <= 2000; }
-/** Feeds ADS1232::setRingBufferSize, capped at RING_BUFFER_MAX_SIZE (48). */
-bool validReadSamples(uint8_t v) { return v >= 1 && v <= 48; }
+/** Feeds ADS1232::setRingBufferSize, capped at RING_BUFFER_MAX_SIZE (96). */
+bool validReadSamples(uint8_t v) { return v >= 1 && v <= 96; }
 /** Feeds ADS1232::setSpeed, which only accepts these two hardware speeds. */
 bool validSpeedSps(uint8_t v) { return v == 10 || v == 80; }
 /** Feeds ADS1232::setGain, which only accepts these four hardware gains. */

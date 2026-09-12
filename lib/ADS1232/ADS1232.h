@@ -41,7 +41,7 @@
   __asm__ __volatile__("nop");
 #endif
 
-#define RING_BUFFER_MAX_SIZE 48
+#define RING_BUFFER_MAX_SIZE 96
 class ADS1232 {
  public:
   ADS1232(uint8_t pdwn, uint8_t sclk, uint8_t dout, uint8_t spd,

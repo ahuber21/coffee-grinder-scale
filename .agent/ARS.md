@@ -1421,3 +1421,28 @@ Format per entry:
   duration, aim weight, pulses seen) instead of slope/deadtime/noise
   scalars. See ARS.md AR-052 (superseded for the topup-specific parts)
   and DECISIONS.md D23.
+
+### AR-060 — Ring buffer max size raised 48 -> 96
+- **Area**: lib/ADS1232, firmware/settings
+- **Status**: fixed
+- **Found**: 2026-09-12, owner request after watching the 18g grind
+  test: the `speed` setting (default 10 SPS) stays exactly as-is with
+  no dynamic switching (already settled by AR-050's revert), but
+  `read_samples`' usable range was capped by `RING_BUFFER_MAX_SIZE`,
+  which was smaller than the owner wanted room to configure.
+- **Resolution**: `ADS1232.h`'s `RING_BUFFER_MAX_SIZE` raised 48 -> 96;
+  `SettingsTask.cpp`'s `validReadSamples` upper bound raised to match.
+
+### AR-061 — Model tab had no way to see a bucket's duration change over time
+- **Area**: web
+- **Status**: fixed
+- **Found**: 2026-09-12, owner request after the 18g grind test: "Can
+  we historyically plot the 10 bucket sizes in a time series in the
+  model tab? That would be very nice to see."
+- **Resolution**: Model.tsx now keeps every `model_state` telemetry
+  event received since the page connected (not just the latest) and
+  renders all 10 buckets' durations as a Chart.js line chart, one
+  series per bucket, alongside the existing live LUT table. Session-
+  local only -- a page reload or device reboot starts the chart over,
+  since nothing is persisted for this beyond the single latest state
+  already cached in NetworkTask.cpp.

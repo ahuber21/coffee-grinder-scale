@@ -1,6 +1,18 @@
-import { useMemo } from "react";
+import { useEffect, useMemo, useRef } from "react";
+import {
+  Chart,
+  LineController,
+  LineElement,
+  PointElement,
+  LinearScale,
+  Tooltip,
+  Legend,
+  type ChartDataset,
+} from "chart.js";
 import { useDeviceSocket } from "../lib/DeviceSocketContext";
 import type { TelemetryModelState } from "../lib/types";
+
+Chart.register(LineController, LineElement, PointElement, LinearScale, Tooltip, Legend);
 
 // These live in lib/DosingModel/DosingModel.h's TopupModel::Config, not
 // in SettingsSnapshot -- there's no live channel for them, so they're
@@ -20,8 +32,16 @@ function fmt(n: number, digits = 3): string {
   return n.toFixed(digits);
 }
 
+// One distinct hue per bucket, evenly spaced -- readable at a glance without
+// hand-picking 10 colors.
+function bucketColor(i: number): string {
+  return `hsl(${Math.round((i * 360) / 10)}, 70%, 60%)`;
+}
+
 export default function ModelPage() {
   const { telemetryHistory } = useDeviceSocket();
+  const lutCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const lutChartRef = useRef<Chart | null>(null);
 
   const model = useMemo<TelemetryModelState | null>(() => {
     for (let i = telemetryHistory.length - 1; i >= 0; i--) {
@@ -30,6 +50,66 @@ export default function ModelPage() {
     }
     return null;
   }, [telemetryHistory]);
+
+  // Every model_state seen since this page connected -- sent once at boot
+  // and again after every completed session -- not just the latest, so the
+  // chart below can show how each bucket's duration has moved over time.
+  const modelHistory = useMemo<TelemetryModelState[]>(
+    () => telemetryHistory.filter((m): m is TelemetryModelState => m.type === "model_state"),
+    [telemetryHistory]
+  );
+
+  useEffect(() => {
+    if (!lutCanvasRef.current) return;
+    const datasets: ChartDataset<"line">[] = Array.from({ length: 10 }, (_, i) => ({
+      label: `(${fmt(i * BUCKET_WIDTH_G, 1)}, ${fmt((i + 1) * BUCKET_WIDTH_G, 1)}]g`,
+      data: [],
+      borderColor: bucketColor(i),
+      backgroundColor: bucketColor(i),
+      borderWidth: 2,
+      pointRadius: 2,
+      fill: false,
+      parsing: false,
+    }));
+    lutChartRef.current = new Chart(lutCanvasRef.current, {
+      type: "line",
+      data: { datasets },
+      options: {
+        responsive: true,
+        animation: false,
+        scales: {
+          x: {
+            type: "linear",
+            title: { display: true, text: "Reading # (this session)", color: "rgba(235, 235, 245, 0.6)" },
+            ticks: { color: "rgba(235, 235, 245, 0.6)", stepSize: 1 },
+            grid: { color: "rgba(84, 84, 88, 0.3)" },
+          },
+          y: {
+            type: "linear",
+            title: { display: true, text: "Duration (ms)", color: "rgba(235, 235, 245, 0.6)" },
+            ticks: { color: "rgba(235, 235, 245, 0.6)" },
+            grid: { color: "rgba(84, 84, 88, 0.3)" },
+          },
+        },
+        plugins: {
+          legend: { labels: { color: "#ffffff", boxWidth: 12, font: { size: 10 } } },
+        },
+      },
+    });
+    return () => lutChartRef.current?.destroy();
+  }, []);
+
+  useEffect(() => {
+    const chart = lutChartRef.current;
+    if (!chart) return;
+    for (let bucket = 0; bucket < 10; bucket++) {
+      chart.data.datasets[bucket].data = modelHistory.map((m, i) => ({
+        x: i,
+        y: m.topup_lut_duration_ms[bucket],
+      }));
+    }
+    chart.update();
+  }, [modelHistory]);
 
   if (!model) {
     return (
@@ -141,6 +221,17 @@ duration += (error > 0 ? ${LEARN_RATE_UNDERSHOOT} : ${LEARN_RATE_OVERSHOOT}) × 
             </tbody>
           </table>
         </div>
+      </div>
+
+      <div className="panel">
+        <h3>Top-up duration history</h3>
+        <p className="muted" style={{ fontSize: "0.85em" }}>
+          Every bucket's tuned duration, once per reading (boot, then after every completed
+          session) seen since this page connected -- not a persisted log, so reloading the page
+          or a device reboot starts a fresh chart. Useful for watching a bucket settle in after a
+          few real doses land in it.
+        </p>
+        <canvas ref={lutCanvasRef} height={220} />
       </div>
     </>
   );
