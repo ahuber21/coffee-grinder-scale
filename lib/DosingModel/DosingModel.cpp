@@ -251,21 +251,31 @@ void TopupModel::seedFromPersisted(const TopupModelV1 &persisted) {
    * persisted summary via four symmetric pseudo-observations at two
    * x-locations (spanning the ~400-1300ms linear region the fit covers).
    * Cluster means sit exactly on the persisted line, so the weighted
-   * regression through them reproduces `slope`/`deadtime` exactly; the
-   * +-residual_sd spread within each cluster reproduces the persisted
-   * residual variance. Total weight equals n0, so this carries forward
-   * the model's confidence, not just its point estimate.
+   * regression through them reproduces `slope`/`deadtime` exactly. Total
+   * weight equals n0, so this carries forward the model's confidence,
+   * not just its point estimate.
+   *
+   * The +-spread within each cluster is chosen so that, after
+   * residualVariance()'s own `n - 2` degrees-of-freedom correction is
+   * applied on top, the reconstructed residualStdDev() reproduces
+   * `residual_sd` exactly -- using `residual_sd` itself as the spread
+   * would silently inflate it (~6% at n0=18: sqrt(18/16)), since the
+   * dof correction is designed for real varied samples, not 4 synthetic
+   * points built to hit an exact target variance.
    */
+  double dof = std::max(n0 - 2.0, 1.0);
+  double spread = residual_sd * std::sqrt(dof / n0);
+
   double x1 = deadtime_s + 0.2;
   double x2 = deadtime_s + 0.9;
   double y1 = slope * (x1 - deadtime_s);
   double y2 = slope * (x2 - deadtime_s);
   double w = n0 / 4.0;
 
-  m_fit.addObservation(x1, y1 + residual_sd, w);
-  m_fit.addObservation(x1, y1 - residual_sd, w);
-  m_fit.addObservation(x2, y2 + residual_sd, w);
-  m_fit.addObservation(x2, y2 - residual_sd, w);
+  m_fit.addObservation(x1, y1 + spread, w);
+  m_fit.addObservation(x1, y1 - spread, w);
+  m_fit.addObservation(x2, y2 + spread, w);
+  m_fit.addObservation(x2, y2 - spread, w);
 }
 
 double TopupModel::predictedWeight(double runtime_ms) const {

@@ -490,8 +490,8 @@ void test_decision_shrinks_duration_for_overshoot_budget(void) {
 
   // safe_weight = overshoot_budget - k_sigma*residual_sd; derive the
   // expected sd from the model itself (the seeded fit's dof-corrected
-  // residual sd is close to, but not bit-identical to, the nominal prior).
-  double safe_weight = 0.5 - 2.0 * model.residualStdDev();
+  // residual sd now reproduces the nominal prior exactly, see AR-052).
+  double safe_weight = 0.5 - 1.5 * model.residualStdDev();
   double expected_ms = model.deadtimeMs() + 1000.0 * safe_weight / model.slope();
   TEST_ASSERT_UINT32_WITHIN(1, static_cast<uint32_t>(expected_ms + 0.5), shrunk.duration_ms);
 }
@@ -504,6 +504,21 @@ void test_decision_respects_hygiene_clamp(void) {
   // (mirrors the legacy `top_up_seconds > 5.0f` check).
   TopupModel::Decision d = model.computeTopupDecision(10.0, 20.0);
   TEST_ASSERT_FALSE(d.should_fire);
+}
+
+void test_decision_fires_at_cold_start_with_production_budget(void) {
+  // AR-052: a fresh (never-persisted) model with DosingTask.cpp's actual
+  // 0.3g overshoot budget must be able to fire at all -- this exact
+  // combination previously deadlocked permanently (0.3 - 2.0*0.15 == 0,
+  // clamping every gap's target weight to zero) and was only reachable
+  // in production, since every existing test before this one used either
+  // a much larger budget or a gap below min_controllable_gap_g.
+  TopupModelV1 persisted = makeDefaultTopupModel();
+  TopupModel model(persisted);
+
+  TopupModel::Decision d = model.computeTopupDecision(1.0, 0.3);
+  TEST_ASSERT_TRUE(d.should_fire);
+  TEST_ASSERT_TRUE(d.predicted_weight_g > 0.0);
 }
 
 int main(int argc, char **argv) {
@@ -544,6 +559,7 @@ int main(int argc, char **argv) {
   RUN_TEST(test_decision_aims_at_ninety_percent_of_gap);
   RUN_TEST(test_decision_shrinks_duration_for_overshoot_budget);
   RUN_TEST(test_decision_respects_hygiene_clamp);
+  RUN_TEST(test_decision_fires_at_cold_start_with_production_budget);
 
   return UNITY_END();
 }

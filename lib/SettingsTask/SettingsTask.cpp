@@ -57,6 +57,10 @@ constexpr const char *kKeyBtnDebounce = "btn_debounce";
 constexpr const char *kKeyBtnHoldMs = "btn_hold_ms";
 constexpr const char *kKeyWifiReset = "wifi_reset";
 constexpr const char *kKeyWifiReboot = "wifi_reboot";
+constexpr const char *kKeyTopupModel = "topup_model";
+
+/** @see isPlausibleTopupModel */
+bool isPlausibleTopupModel(const TopupModelV1 &m);
 
 // Field validators: the single source of truth, shared by the live
 // write path and the NVS loader below.
@@ -308,17 +312,46 @@ void saveSettingsToNvs(const SettingsSnapshot &snap) {
   g_prefs.end();
 }
 
-/** TopupModelV1 NVS round-trip -- still stubbed, a separate follow-up. */
+/**
+ * TopupModelV1 NVS round-trip: the whole POD struct as one raw-bytes
+ * blob (it's trivially copyable/standard-layout by construction, see
+ * DosingModel.h's static_asserts) rather than one key per field --
+ * unlike SettingsSnapshot, nothing here is meant to be hand-edited
+ * field-by-field, so there's no reason to decompose it.
+ */
 bool loadTopupModelFromNvs(TopupModelV1 &out) {
-  (void)out;
-  Serial.println("[Settings] Topup model NVS load stubbed -- using cold-start priors");
-  return false;
+  if (!g_prefs.begin(kNvsNamespace, /*readOnly=*/true)) {
+    Serial.println("[Settings] NVS namespace not found -- topup model uses cold-start priors");
+    return false;
+  }
+  TopupModelV1 loaded{};
+  size_t got = g_prefs.getBytes(kKeyTopupModel, &loaded, sizeof(loaded));
+  g_prefs.end();
+
+  // A version mismatch means either nothing was ever saved (got == 0)
+  // or a firmware update changed the struct's shape -- either way, the
+  // safe move is the same as SettingsSnapshot's schema_ver guard: fall
+  // back to cold-start priors rather than reinterpret stale bytes.
+  if (got != sizeof(loaded) || loaded.version != kTopupModelVersion) {
+    Serial.println("[Settings] Topup model NVS blob missing/stale -- using cold-start priors");
+    return false;
+  }
+  if (!isPlausibleTopupModel(loaded)) {
+    Serial.println("[Settings] Topup model NVS blob implausible -- using cold-start priors");
+    return false;
+  }
+  out = loaded;
+  return true;
 }
 
 /** @see loadTopupModelFromNvs */
 void saveTopupModelToNvs(const TopupModelV1 &model) {
-  (void)model;
-  Serial.println("[Settings] Topup model NVS save stubbed (not persisted)");
+  if (!g_prefs.begin(kNvsNamespace, /*readOnly=*/false)) {
+    Serial.println("[Settings] NVS open for write failed -- topup model not persisted");
+    return;
+  }
+  g_prefs.putBytes(kKeyTopupModel, &model, sizeof(model));
+  g_prefs.end();
 }
 
 /** Overwrites every subscriber's mailbox with the current snapshot. */

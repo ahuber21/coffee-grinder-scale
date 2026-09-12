@@ -285,7 +285,14 @@ class TopupModel {
     /** Topup decision logic. */
     double min_controllable_gap_g = 0.18;
     double aim_fraction = 0.9;
-    double overshoot_k_sigma = 2.0;
+    // At 2.0 (~95% one-sided confidence) this exactly consumed the
+    // entire 0.3g overshoot budget against the cold-start residual_sd
+    // prior (0.15g), leaving zero margin for the pulse's own target
+    // weight and so never firing at all -- see ARS.md AR-052. 1.5
+    // (~93%) leaves 0.075g of real margin; the topup loop re-evaluates
+    // and re-fires every cycle, so a single pulse doesn't need to carry
+    // the whole overshoot guarantee alone.
+    double overshoot_k_sigma = 1.5;
     double hygiene_min_duration_ms = 0.0;
     double hygiene_max_duration_ms = 5000.0;  ///< Beyond this, a duration isn't a real dose.
   };
