@@ -482,11 +482,11 @@ bool applyWrite(const SettingsWriteRequest &req) {
 /** Plausibility bounds for a persisted TopupModelV1 blob, same discipline as applyWrite(). */
 bool isPlausibleTopupModel(const TopupModelV1 &m) {
   if (!std::isfinite(m.rate_hat) || m.rate_hat < 0.3f || m.rate_hat > 2.5f) return false;
-  if (!std::isfinite(m.topup_slope) || m.topup_slope < 0.05f || m.topup_slope > 5.0f)
-    return false;
-  if (!std::isfinite(m.topup_deadtime_ms) || m.topup_deadtime_ms < 0.0f ||
-      m.topup_deadtime_ms > 1000.0f)
-    return false;
+  for (int i = 0; i < kTopupLutBuckets; ++i) {
+    if (!std::isfinite(m.topup_lut_duration_ms[i]) || m.topup_lut_duration_ms[i] < 0.0f ||
+        m.topup_lut_duration_ms[i] > 5000.0f)
+      return false;
+  }
   if (!std::isfinite(m.coast_weight_hat) || m.coast_weight_hat < 0.0f ||
       m.coast_weight_hat > 3.0f)
     return false;

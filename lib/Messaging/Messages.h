@@ -126,13 +126,13 @@ struct TelemetryEvent {
    */
   float rate_hat_g_s;
   float rate_sd_g_s;
-  float topup_slope_g_s;
-  float topup_deadtime_ms;
-  float topup_residual_sd_g;
   float coast_weight_g;
   float coast_weight_sd_g;
   uint32_t rate_n_effective;
-  uint32_t topup_n_effective;
+  /// Per-gap-bucket tuned pulse duration/observation count -- see
+  /// kTopupLutBuckets/kTopupLutBucketWidthG in DosingModel.h.
+  float topup_lut_duration_ms[kTopupLutBuckets];
+  uint32_t topup_lut_n[kTopupLutBuckets];
 };
 
 /** A manual/API dose request, sent from Network task to Dosing task. */

@@ -52,6 +52,7 @@ TopupPhase g_topup_phase = TopupPhase::DECIDING;
 uint32_t g_topup_pulse_start_ms = 0;
 uint32_t g_topup_pulse_duration_ms = 0;
 float g_topup_weight_before_pulse = 0.0f;
+float g_topup_gap_at_fire = 0.0f;  ///< Gap at DECIDING time, for recordPulse's bucket lookup.
 
 bool g_finalize_done = false;
 
@@ -230,13 +231,13 @@ void sendModelStateTelemetry(const TopupModelV1 &model) {
   ev.session_id = g_session_id;
   ev.rate_hat_g_s = model.rate_hat;
   ev.rate_sd_g_s = sdFromPrecision(model.rate_precision);
-  ev.topup_slope_g_s = model.topup_slope;
-  ev.topup_deadtime_ms = model.topup_deadtime_ms;
-  ev.topup_residual_sd_g = sdFromPrecision(model.topup_precision);
   ev.coast_weight_g = model.coast_weight_hat;
   ev.coast_weight_sd_g = sdFromPrecision(model.coast_weight_precision);
   ev.rate_n_effective = model.rate_n_effective;
-  ev.topup_n_effective = model.topup_n_effective;
+  for (int i = 0; i < kTopupLutBuckets; ++i) {
+    ev.topup_lut_duration_ms[i] = model.topup_lut_duration_ms[i];
+    ev.topup_lut_n[i] = model.topup_lut_n[i];
+  }
   xQueueSend(g_telemetry_q, &ev, 0);
 }
 
@@ -282,16 +283,15 @@ void handleTopupSample(const ScaleSample &s) {
         transitionTo(DosingState::FINALIZE);
         return;
       }
-      double overshoot_budget = 0.3;  // Hard overshoot cap.
-      TopupModel::Decision decision =
-          g_topup_model->computeTopupDecision(gap, overshoot_budget);
+      TopupModel::Decision decision = g_topup_model->computeTopupDecision(gap);
       if (!decision.should_fire) {
-        // Accept the undershoot rather than gamble a pulse below the
-        // controllable floor.
+        // Shouldn't normally happen (every bucket always has a clamped,
+        // in-bounds duration) -- a safety net, not the everyday path.
         sendTelemetry(TelemetryType::FINALIZE, s.grams, g_target_grams);
         transitionTo(DosingState::FINALIZE);
         return;
       }
+      g_topup_gap_at_fire = gap;
       g_topup_weight_before_pulse = s.grams;
       g_topup_pulse_start_ms = s.millis;
       g_topup_pulse_duration_ms = decision.duration_ms;
@@ -309,9 +309,8 @@ void handleTopupSample(const ScaleSample &s) {
     }
     case TopupPhase::SETTLING: {
       if (s.millis - g_state_entered_ms >= g_settings.stability_min_wait_ms) {
-        double actual_duration_ms = s.millis - g_topup_pulse_start_ms;
         double weight_added = s.grams - g_topup_weight_before_pulse;
-        g_topup_model->recordPulse(actual_duration_ms, weight_added, nowEpochS());
+        g_topup_model->recordPulse(g_topup_gap_at_fire, weight_added);
         sendTelemetry(TelemetryType::TOPUP_PULSE, s.grams, g_target_grams,
                       static_cast<float>(weight_added));
         g_topup_phase = TopupPhase::DECIDING;
@@ -386,7 +385,7 @@ void dosingTaskFn(void *) {
     DoseRequest dose;
     while (xQueueReceive(g_dose_request_q, &dose, 0) == pdTRUE) {
       if (g_state == DosingState::IDLE && dose.requested_grams > 0.0f &&
-          dose.requested_grams <= 40.0f) {
+          dose.requested_grams <= 50.0f) {
         g_is_double = false;
         computeCorrectedTarget(dose.requested_grams, g_is_double, g_target_grams,
                                g_target_grams_corrected);

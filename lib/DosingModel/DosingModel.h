@@ -71,6 +71,10 @@ class WeightedLinearFit {
   double denom() const { return m_sw * m_swxx - m_swx * m_swx; }
 };
 
+/** Number of 0.1g-wide gap buckets the topup LUT covers (0.0-1.0g). */
+constexpr int kTopupLutBuckets = 10;
+constexpr double kTopupLutBucketWidthG = 0.1;
+
 /**
  * Persistable model state for all three models below. Deliberately
  * POD: no pointers, no non-trivial members, so it round-trips through
@@ -88,22 +92,35 @@ class WeightedLinearFit {
  *       should always be bumped when its shape changes -- cheap now,
  *       and avoids ever needing to guess whether an on-flash blob
  *       predates a field.
+ *   v3: replaced the topup response's single fitted (slope, deadtime,
+ *       precision) line with a per-gap-bucket lookup table of tuned
+ *       pulse durations (topup_lut_duration_ms/topup_lut_n). Live
+ *       testing showed the real pulse-to-pulse noise (~0.23g) is large
+ *       enough that a single statistical model shrinking pulse
+ *       duration toward the gap size drove every pulse into the same
+ *       unreliable near-stall-threshold regime -- see ARS.md AR-052
+ *       and AR-059. A directly-tuned-per-bucket table, closer to the
+ *       pre-rewrite firmware's hand-tuned lookup table but updated from
+ *       real data instead of by hand, avoids that failure mode by
+ *       construction: each bucket's duration is whatever has actually
+ *       worked for gaps that size, not a value extrapolated from a
+ *       model that doesn't hold at short durations.
  */
-constexpr uint8_t kTopupModelVersion = 2;
+constexpr uint8_t kTopupModelVersion = 3;
 
 /** @see kTopupModelVersion */
 struct TopupModelV1 {
   uint8_t version;
-  float rate_hat;                ///< Main-grind plateau rate, g/s.
-  float rate_precision;          ///< Inverse-variance of rate_hat itself.
-  float topup_slope;             ///< g/s.
-  float topup_deadtime_ms;
-  float topup_precision;         ///< Inverse-variance of a single topup residual.
-  uint32_t rate_n_effective;     ///< Decayed effective sample count.
-  uint32_t topup_n_effective;
-  int64_t last_updated;          ///< Seconds since epoch; 0 == never updated.
-  float coast_weight_hat;        ///< Main-grind post-relay-off "coast", grams.
-  float coast_weight_precision;  ///< Inverse-variance of coast_weight_hat itself.
+  float rate_hat;        ///< Main-grind plateau rate, g/s.
+  float rate_precision;  ///< Inverse-variance of rate_hat itself.
+  /// Per-bucket pulse duration (ms): bucket i covers gap in
+  /// ((i)*0.1g, (i+1)*0.1g], e.g. bucket 0 = (0, 0.1g], bucket 9 = (0.9, 1.0g].
+  float topup_lut_duration_ms[kTopupLutBuckets];
+  uint32_t topup_lut_n[kTopupLutBuckets];  ///< Observation count per bucket.
+  uint32_t rate_n_effective;               ///< Decayed effective sample count.
+  int64_t last_updated;                    ///< Seconds since epoch; 0 == never updated.
+  float coast_weight_hat;                  ///< Main-grind post-relay-off "coast", grams.
+  float coast_weight_precision;            ///< Inverse-variance of coast_weight_hat itself.
 };
 
 static_assert(std::is_trivially_copyable<TopupModelV1>::value,
@@ -113,25 +130,25 @@ static_assert(std::is_standard_layout<TopupModelV1>::value,
 
 /**
  * Cold-start priors, fitted from real historical grind/topup/coast data
- * rather than guessed: rate_hat/topup_slope/topup_deadtime_ms match the
- * historical regression fit; rate_precision derives from the measured
- * session-to-session spread (~0.09 g/s sd); topup_precision from the
- * measured ~0.14-0.21g per-pulse core noise (using ~0.15g as
- * representative); kCoastWeightHat is the measured fleet median
- * main-grind coast weight (0.49g); kCoastWeightSd is derived from the
- * measured spread the same way (a measured IQR of 0.22g implies
- * sd ~= IQR / 1.349 ~= 0.163g, rounded to 0.16g at the same precision
- * as the others). N0 ~= 18 pseudo-observations reflects how much
- * historical data actually went into each fit.
+ * rather than guessed: rate_hat matches the historical regression fit;
+ * rate_precision derives from the measured session-to-session spread
+ * (~0.09 g/s sd); kTopupSlope/kTopupDeadtimeMs seed the topup LUT's
+ * initial per-bucket durations (see makeDefaultTopupModel) and remain
+ * the conversion factor the LUT's online update rule uses to translate
+ * an observed weight error into a duration adjustment; kCoastWeightHat
+ * is the measured fleet median main-grind coast weight (0.49g);
+ * kCoastWeightSd is derived from the measured spread the same way (a
+ * measured IQR of 0.22g implies sd ~= IQR / 1.349 ~= 0.163g, rounded to
+ * 0.16g at the same precision as the others). N0 ~= 18 pseudo-
+ * observations reflects how much historical data actually went into
+ * the rate/coast fits.
  */
 namespace TopupPriors {
 constexpr float kRateHat = 1.00f;
 constexpr float kRateSd = 0.09f;
 constexpr float kTopupSlope = 1.05f;
 constexpr float kTopupDeadtimeMs = 310.0f;
-constexpr float kTopupResidualSd = 0.15f;
 constexpr uint32_t kRateN0 = 18;
-constexpr uint32_t kTopupN0 = 18;
 constexpr float kCoastWeightHat = 0.49f;
 constexpr float kCoastWeightSd = 0.16f;
 }  // namespace TopupPriors
@@ -246,117 +263,94 @@ class MainGrindModel {
 };
 
 /**
- * Model B -- topup pulse response:
- * `weight_added(t) = max(0, topup_slope * (t - topup_deadtime_ms))`.
+ * Model B -- topup pulse response, as a self-tuning lookup table: one
+ * pulse duration per 0.1g-wide remaining-gap bucket (0.0-1.0g), each
+ * nudged toward whatever duration has actually produced a safe amount
+ * of weight for gaps that size.
  *
- * Unlike Model A, both parameters generalize cross-session, so the
- * fitted line itself is the persisted state. On construction, the
- * persisted (slope, deadtime, precision, n_effective) is expanded back
- * into an equivalent WeightedLinearFit via four symmetric
- * pseudo-observations (two x-locations, +-1 residual-sd each) -- this
- * reproduces the fitted line and residual variance exactly while
- * carrying the right total weight, and is how both the true cold-start
- * prior and a warm-started persisted fit are seeded through the same
- * code path.
+ * This replaces an earlier fitted-line approach (`weight_added(t) =
+ * slope * (t - deadtime)`, one line for every gap size) that assumed a
+ * short topup pulse's output scales smoothly with duration. Live
+ * testing showed that assumption doesn't hold: short pulses land in a
+ * discrete, clumpy regime (a given pulse either dislodges a small clump
+ * of grounds or does nothing) with real noise (~0.23g measured) too
+ * large for a single duration-from-gap formula to stay both safe and
+ * effective across the whole range -- see ARS.md AR-052/AR-059. A
+ * per-bucket table sidesteps that: each bucket's duration is whatever
+ * has empirically worked for gaps that size, closer to how the
+ * pre-rewrite firmware's hand-tuned table was built, just updated from
+ * real data instead of by hand.
  */
 class TopupModel {
  public:
   /** Tunable bounds for pulse acceptance and the topup decision. */
   struct Config {
-    // Recency half-life for the topup fit. <= 0 disables decay: the
-    // historical data showed no measurable drift in the topup slope
-    // over 17 months, unlike Model A's rate, where the half-life is
-    // load-bearing.
-    double half_life_days = 0.0;
-
     // Hard bounds a raw observation must satisfy before it's even
     // considered -- catches sensor-glitch garbage like the historical
     // 483g / -129g entries outright.
     double reject_hard_min_g = -1.0;
     double reject_hard_max_g = 10.0;
-    // Statistical consistency check against the *current* model:
-    // reject if |actual - predicted| > max(reject_min_abs_g,
-    // k * residual_sd).
-    double reject_k_sigma = 3.0;
-    double reject_min_abs_g = 0.5;
 
-    /** Plausibility bounds for the fallback check. */
-    double min_plausible_slope = 0.05;
-    double max_plausible_slope = 5.0;
-    double max_plausible_deadtime_ms = 1000.0;
-    double max_plausible_residual_sd = 2.0;
+    // A fired pulse aims for this fraction of its bucket's own upper
+    // edge, not the full width -- leaves slack so a slightly-larger-
+    // than-typical clump doesn't push past the true target, and leaves
+    // the remainder (if any) for a subsequent, smaller-bucket pulse.
+    double aim_fraction = 0.85;
 
-    /** Topup decision logic. */
-    double min_controllable_gap_g = 0.18;
-    double aim_fraction = 0.9;
-    // At 2.0 (~95% one-sided confidence) this exactly consumed the
-    // entire 0.3g overshoot budget against the cold-start residual_sd
-    // prior (0.15g), leaving zero margin for the pulse's own target
-    // weight and so never firing at all -- see ARS.md AR-052. 1.5
-    // (~93%) leaves 0.075g of real margin; the topup loop re-evaluates
-    // and re-fires every cycle, so a single pulse doesn't need to carry
-    // the whole overshoot guarantee alone.
-    double overshoot_k_sigma = 1.5;
+    // Asymmetric learning rate for the online duration update:
+    // overshoot (this pulse added more than aimed for) is corrected
+    // faster than undershoot, matching the project's standing priority
+    // that overshoot is the worse failure mode.
+    double learn_rate_overshoot = 0.6;
+    double learn_rate_undershoot = 0.3;
+
     // The relay is a physical, clicky (not solid-state) switch driving
     // a motor with real static friction/cogging to overcome -- below
     // ~300ms it just stalls and produces zero output rather than a
-    // proportionally smaller pulse. This is a hard hardware floor, kept
-    // independent of whatever `deadtimeMs()` gets fitted to (which has
-    // no lower bound of its own -- see TopupModel::isPlausible): even
-    // if the learned deadtime ever drifted below the stall point, this
-    // still refuses to command a pulse the relay can't actually act on.
+    // proportionally smaller pulse. This is a hard hardware floor a
+    // bucket's tuned duration is always clamped to, independent of
+    // whatever the online update rule would otherwise produce.
     double hygiene_min_duration_ms = 350.0;
     double hygiene_max_duration_ms = 5000.0;  ///< Beyond this, a duration isn't a real dose.
   };
 
   /** Outcome of recordPulse(). */
   struct PulseResult {
-    bool accepted = false;       ///< Folded into the fit.
+    bool accepted = false;       ///< Folded into the bucket's tuned duration.
     bool hard_rejected = false;  ///< Failed the absolute bounds check.
-    bool stat_rejected = false;  ///< Failed the |actual-predicted| consistency check.
-    bool fallback = false;       ///< Folded in, but produced an implausible fit and was reverted.
-    double predicted_g = 0.0;
-    double residual_g = 0.0;
+    int bucket = -1;             ///< Which bucket this observation updated.
   };
 
   /** Outcome of computeTopupDecision(). */
   struct Decision {
     bool should_fire = false;
     uint32_t duration_ms = 0;
-    double predicted_weight_g = 0.0;  ///< Expected topup output if fired.
+    int bucket = -1;
+    double aim_weight_g = 0.0;  ///< This bucket's aim point, for logging/telemetry.
   };
 
   explicit TopupModel(const TopupModelV1 &persisted);
   TopupModel(const TopupModelV1 &persisted, Config cfg);
 
-  /** Validates, then folds in, one observed topup pulse. */
-  PulseResult recordPulse(double runtime_ms, double weight_increment_g, int64_t now_epoch_s);
+  /** Maps a remaining gap to its LUT bucket index, clamped to the table's range. */
+  static int bucketForGap(double gap_g);
+
+  /** Validates, then folds in, one observed topup pulse for the bucket `gap_at_fire_g` mapped to. */
+  PulseResult recordPulse(double gap_at_fire_g, double weight_increment_g);
 
   /** Decides whether/how long to fire the next topup pulse for the given gap. */
-  Decision computeTopupDecision(double gap_g, double overshoot_budget_g) const;
+  Decision computeTopupDecision(double gap_g) const;
 
-  double slope() const { return m_fit.slope(); }
-  double deadtimeMs() const;
-  double residualStdDev() const;
-  /**
-   * Derived from the fit's decayed weight sum rather than tracked
-   * separately, so it can never drift out of sync with the fit itself.
-   */
-  uint32_t effectiveN() const;
-  int64_t lastUpdated() const { return m_last_updated; }
+  double durationForBucket(int bucket) const { return m_duration_ms[bucket]; }
+  uint32_t nEffectiveForBucket(int bucket) const { return m_n[bucket]; }
 
   /** Returns `base` with the persisted topup fields overwritten by this model's state. */
   TopupModelV1 dumpPersisted(const TopupModelV1 &base) const;
 
  private:
   Config m_cfg;
-  WeightedLinearFit m_fit;
-  int64_t m_last_updated;
-
-  double predictedWeight(double runtime_ms) const;
-  void seedFromPersisted(const TopupModelV1 &persisted);
-  void applyDecay(int64_t now_epoch_s);
-  bool isPlausible() const;
+  double m_duration_ms[kTopupLutBuckets];
+  uint32_t m_n[kTopupLutBuckets];
 };
 
 /**

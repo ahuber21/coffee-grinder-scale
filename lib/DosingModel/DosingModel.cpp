@@ -88,16 +88,25 @@ TopupModelV1 makeDefaultTopupModel() {
   m.version = kTopupModelVersion;
   m.rate_hat = TopupPriors::kRateHat;
   m.rate_precision = 1.0f / (TopupPriors::kRateSd * TopupPriors::kRateSd);
-  m.topup_slope = TopupPriors::kTopupSlope;
-  m.topup_deadtime_ms = TopupPriors::kTopupDeadtimeMs;
-  m.topup_precision =
-      1.0f / (TopupPriors::kTopupResidualSd * TopupPriors::kTopupResidualSd);
   m.rate_n_effective = TopupPriors::kRateN0;
-  m.topup_n_effective = TopupPriors::kTopupN0;
   m.last_updated = 0;
   m.coast_weight_hat = TopupPriors::kCoastWeightHat;
   m.coast_weight_precision =
       1.0f / (TopupPriors::kCoastWeightSd * TopupPriors::kCoastWeightSd);
+
+  // Seeds every bucket from the historical slope/deadtime fit -- the
+  // same formula the earlier fitted-line model used to turn a target
+  // weight into a duration -- as a starting point for TopupModel's
+  // per-bucket online tuning (see TopupModel::recordPulse) to correct
+  // from real pulses.
+  TopupModel::Config default_cfg;
+  for (int i = 0; i < kTopupLutBuckets; ++i) {
+    double bucket_upper = (i + 1) * kTopupLutBucketWidthG;
+    double aim = default_cfg.aim_fraction * bucket_upper;
+    double duration = TopupPriors::kTopupDeadtimeMs + 1000.0 * aim / TopupPriors::kTopupSlope;
+    m.topup_lut_duration_ms[i] = static_cast<float>(duration);
+    m.topup_lut_n[i] = 0;
+  }
   return m;
 }
 
@@ -226,108 +235,57 @@ TopupModelV1 MainGrindModel::dumpPersisted(const TopupModelV1 &base) const {
 
 // --- TopupModel ---------------------------------------------------------------
 
-TopupModel::TopupModel(const TopupModelV1 &persisted)
-    : TopupModel(persisted, Config()) {}
+TopupModel::TopupModel(const TopupModelV1 &persisted) : TopupModel(persisted, Config()) {}
 
-TopupModel::TopupModel(const TopupModelV1 &persisted, Config cfg)
-    : m_cfg(cfg), m_last_updated(persisted.last_updated) {
-  seedFromPersisted(persisted);
+TopupModel::TopupModel(const TopupModelV1 &persisted, Config cfg) : m_cfg(cfg) {
+  for (int i = 0; i < kTopupLutBuckets; ++i) {
+    double duration = persisted.topup_lut_duration_ms[i];
+    // A zero/implausible persisted entry (e.g. an older-schema blob that
+    // never had this bucket) falls back to the same formula
+    // makeDefaultTopupModel() seeds fresh buckets with, rather than
+    // silently commanding a 0ms pulse.
+    if (!(duration >= m_cfg.hygiene_min_duration_ms && duration <= m_cfg.hygiene_max_duration_ms)) {
+      double bucket_upper = (i + 1) * kTopupLutBucketWidthG;
+      double aim = m_cfg.aim_fraction * bucket_upper;
+      duration = TopupPriors::kTopupDeadtimeMs + 1000.0 * aim / TopupPriors::kTopupSlope;
+    }
+    m_duration_ms[i] = duration;
+    m_n[i] = persisted.topup_lut_n[i];
+  }
 }
 
-void TopupModel::seedFromPersisted(const TopupModelV1 &persisted) {
-  m_fit.reset();
-
-  // The fit's x-axis is seconds (see predictedWeight()/recordPulse()), so
-  // slope comes out directly in g/s, matching the persisted field's units.
-  double slope = persisted.topup_slope;
-  double deadtime_s = persisted.topup_deadtime_ms / 1000.0;
-  double n0 = std::max<double>(persisted.topup_n_effective, 1.0);
-  double residual_sd = persisted.topup_precision > 0.0f
-                            ? 1.0 / std::sqrt(static_cast<double>(persisted.topup_precision))
-                            : TopupPriors::kTopupResidualSd;
-
-  /*
-   * Reconstruct an equivalent WeightedLinearFit from the compact
-   * persisted summary via four symmetric pseudo-observations at two
-   * x-locations (spanning the ~400-1300ms linear region the fit covers).
-   * Cluster means sit exactly on the persisted line, so the weighted
-   * regression through them reproduces `slope`/`deadtime` exactly. Total
-   * weight equals n0, so this carries forward the model's confidence,
-   * not just its point estimate.
-   *
-   * The +-spread within each cluster is chosen so that, after
-   * residualVariance()'s own `n - 2` degrees-of-freedom correction is
-   * applied on top, the reconstructed residualStdDev() reproduces
-   * `residual_sd` exactly -- using `residual_sd` itself as the spread
-   * would silently inflate it (~6% at n0=18: sqrt(18/16)), since the
-   * dof correction is designed for real varied samples, not 4 synthetic
-   * points built to hit an exact target variance.
-   */
-  double dof = std::max(n0 - 2.0, 1.0);
-  double spread = residual_sd * std::sqrt(dof / n0);
-
-  double x1 = deadtime_s + 0.2;
-  double x2 = deadtime_s + 0.9;
-  double y1 = slope * (x1 - deadtime_s);
-  double y2 = slope * (x2 - deadtime_s);
-  double w = n0 / 4.0;
-
-  m_fit.addObservation(x1, y1 + spread, w);
-  m_fit.addObservation(x1, y1 - spread, w);
-  m_fit.addObservation(x2, y2 + spread, w);
-  m_fit.addObservation(x2, y2 - spread, w);
+int TopupModel::bucketForGap(double gap_g) {
+  int bucket = static_cast<int>(std::ceil(gap_g / kTopupLutBucketWidthG)) - 1;
+  if (bucket < 0) bucket = 0;
+  if (bucket >= kTopupLutBuckets) bucket = kTopupLutBuckets - 1;
+  return bucket;
 }
 
-double TopupModel::predictedWeight(double runtime_ms) const {
-  double s = m_fit.slope();
-  double deadtime_s = deadtimeMs() / 1000.0;
-  return std::max(0.0, s * (runtime_ms / 1000.0 - deadtime_s));
+TopupModel::Decision TopupModel::computeTopupDecision(double gap_g) const {
+  Decision d;
+  d.bucket = bucketForGap(gap_g);
+  double bucket_upper = (d.bucket + 1) * kTopupLutBucketWidthG;
+  d.aim_weight_g = m_cfg.aim_fraction * bucket_upper;
+
+  double duration_ms = m_duration_ms[d.bucket];
+  // Safety net: a bucket's tuned duration should already respect these
+  // bounds (recordPulse clamps every update to them), but never fire a
+  // pulse outside them regardless of how it got there.
+  if (duration_ms < m_cfg.hygiene_min_duration_ms || duration_ms > m_cfg.hygiene_max_duration_ms) {
+    return d;
+  }
+
+  d.should_fire = true;
+  d.duration_ms = static_cast<uint32_t>(duration_ms + 0.5);
+  return d;
 }
 
-double TopupModel::deadtimeMs() const {
-  double s = m_fit.slope();
-  if (std::fabs(s) < kMinDenom) return TopupPriors::kTopupDeadtimeMs;
-  return -m_fit.intercept() / s * 1000.0;
-}
-
-double TopupModel::residualStdDev() const {
-  double sd = m_fit.residualStdDev();
-  return sd > 0.0 ? sd : TopupPriors::kTopupResidualSd;
-}
-
-uint32_t TopupModel::effectiveN() const {
-  return static_cast<uint32_t>(m_fit.effectiveWeight() + 0.5);
-}
-
-void TopupModel::applyDecay(int64_t now_epoch_s) {
-  if (m_cfg.half_life_days <= 0.0) return;  // Decay can be disabled entirely.
-  if (m_last_updated == 0 || now_epoch_s <= m_last_updated) return;
-
-  double elapsed_days = (now_epoch_s - m_last_updated) / kSecondsPerDay;
-  double factor = std::exp(-elapsed_days / m_cfg.half_life_days);
-  m_fit.decay(factor);
-}
-
-bool TopupModel::isPlausible() const {
-  if (!m_fit.hasFit()) return false;
-  double s = m_fit.slope();
-  if (s < m_cfg.min_plausible_slope || s > m_cfg.max_plausible_slope) return false;
-  double dt = deadtimeMs();
-  if (dt < 0.0 || dt > m_cfg.max_plausible_deadtime_ms) return false;
-  double sd = m_fit.residualStdDev();
-  if (sd > m_cfg.max_plausible_residual_sd) return false;
-  return true;
-}
-
-TopupModel::PulseResult TopupModel::recordPulse(double runtime_ms,
-                                                 double weight_increment_g,
-                                                 int64_t now_epoch_s) {
+TopupModel::PulseResult TopupModel::recordPulse(double gap_at_fire_g, double weight_increment_g) {
   PulseResult r;
 
   /*
    * Hard bounds first: catches sensor-glitch garbage (e.g. the
-   * historical 483g / -129g entries) before it can influence anything,
-   * regardless of what the current model happens to predict.
+   * historical 483g / -129g entries) before it can influence anything.
    */
   if (weight_increment_g < m_cfg.reject_hard_min_g ||
       weight_increment_g > m_cfg.reject_hard_max_g) {
@@ -335,80 +293,32 @@ TopupModel::PulseResult TopupModel::recordPulse(double runtime_ms,
     return r;
   }
 
-  r.predicted_g = predictedWeight(runtime_ms);
-  r.residual_g = weight_increment_g - r.predicted_g;
+  int bucket = bucketForGap(gap_at_fire_g);
+  double bucket_upper = (bucket + 1) * kTopupLutBucketWidthG;
+  double aim_weight = m_cfg.aim_fraction * bucket_upper;
+  double error = aim_weight - weight_increment_g;  // > 0 == undershot this pulse
 
-  double sd = residualStdDev();
-  double reject_threshold = std::max(m_cfg.reject_min_abs_g, m_cfg.reject_k_sigma * sd);
-  if (std::fabs(r.residual_g) > reject_threshold) {
-    r.stat_rejected = true;
-    return r;
-  }
+  double learn_rate = error > 0.0 ? m_cfg.learn_rate_undershoot : m_cfg.learn_rate_overshoot;
+  double adjustment_ms = learn_rate * error * 1000.0 / TopupPriors::kTopupSlope;
 
-  applyDecay(now_epoch_s);
+  double new_duration = m_duration_ms[bucket] + adjustment_ms;
+  if (new_duration < m_cfg.hygiene_min_duration_ms) new_duration = m_cfg.hygiene_min_duration_ms;
+  if (new_duration > m_cfg.hygiene_max_duration_ms) new_duration = m_cfg.hygiene_max_duration_ms;
 
-  WeightedLinearFit backup = m_fit;
-  m_fit.addObservation(runtime_ms / 1000.0, weight_increment_g, 1.0);  // fit x is seconds
-
-  if (!isPlausible()) {
-    // Revert to the last known-good fit rather than let one update push
-    // the model somewhere physically implausible.
-    m_fit = backup;
-    r.fallback = true;
-    return r;
-  }
+  m_duration_ms[bucket] = new_duration;
+  if (m_n[bucket] < UINT32_MAX) m_n[bucket] += 1;
 
   r.accepted = true;
-  m_last_updated = now_epoch_s;
+  r.bucket = bucket;
   return r;
-}
-
-TopupModel::Decision TopupModel::computeTopupDecision(double gap_g,
-                                                        double overshoot_budget_g) const {
-  Decision d;
-
-  if (gap_g < m_cfg.min_controllable_gap_g) {
-    return d;  // Accept the undershoot, don't gamble a pulse
-  }
-
-  double s = m_fit.slope();
-  if (!(s > 0.0)) return d;  // defensive; fallback logic should keep this positive
-
-  double target_weight = m_cfg.aim_fraction * gap_g;  // Aim ~90% of the gap.
-
-  double sd = residualStdDev();
-  double predicted_upper = target_weight + m_cfg.overshoot_k_sigma * sd;
-  if (predicted_upper > overshoot_budget_g) {
-    // Shrink toward whatever leaves the upper bound inside the remaining
-    // overshoot budget.
-    double safe_weight = overshoot_budget_g - m_cfg.overshoot_k_sigma * sd;
-    target_weight = std::min(target_weight, std::max(0.0, safe_weight));
-  }
-
-  if (target_weight <= 0.0) return d;  // no positive duration is safe
-
-  double duration_ms = deadtimeMs() + 1000.0 * target_weight / s;
-
-  // Hygiene clamp: reject a computed duration that isn't a plausible pulse.
-  if (duration_ms <= m_cfg.hygiene_min_duration_ms ||
-      duration_ms > m_cfg.hygiene_max_duration_ms) {
-    return d;
-  }
-
-  d.should_fire = true;
-  d.duration_ms = static_cast<uint32_t>(duration_ms + 0.5);
-  d.predicted_weight_g = target_weight;
-  return d;
 }
 
 TopupModelV1 TopupModel::dumpPersisted(const TopupModelV1 &base) const {
   TopupModelV1 out = base;
-  out.topup_slope = static_cast<float>(m_fit.slope());
-  out.topup_deadtime_ms = static_cast<float>(deadtimeMs());
-  double var = m_fit.residualVariance();
-  out.topup_precision = var > 0.0 ? static_cast<float>(1.0 / var) : base.topup_precision;
-  out.topup_n_effective = effectiveN();
-  out.last_updated = m_last_updated;
+  for (int i = 0; i < kTopupLutBuckets; ++i) {
+    out.topup_lut_duration_ms[i] = static_cast<float>(m_duration_ms[i]);
+    out.topup_lut_n[i] = m_n[i];
+  }
   return out;
 }
 

@@ -109,17 +109,20 @@ String buildTelemetryJson(const TelemetryEvent &ev) {
       doc["grams"] = ev.grams;
       doc["target_grams"] = ev.target_grams;
       break;
-    case TelemetryType::MODEL_STATE:
+    case TelemetryType::MODEL_STATE: {
       doc["rate_hat_g_s"] = ev.rate_hat_g_s;
       doc["rate_sd_g_s"] = ev.rate_sd_g_s;
       doc["rate_n_effective"] = ev.rate_n_effective;
-      doc["topup_slope_g_s"] = ev.topup_slope_g_s;
-      doc["topup_deadtime_ms"] = ev.topup_deadtime_ms;
-      doc["topup_residual_sd_g"] = ev.topup_residual_sd_g;
-      doc["topup_n_effective"] = ev.topup_n_effective;
       doc["coast_weight_g"] = ev.coast_weight_g;
       doc["coast_weight_sd_g"] = ev.coast_weight_sd_g;
+      JsonArray durations = doc["topup_lut_duration_ms"].to<JsonArray>();
+      JsonArray counts = doc["topup_lut_n"].to<JsonArray>();
+      for (int i = 0; i < kTopupLutBuckets; ++i) {
+        durations.add(ev.topup_lut_duration_ms[i]);
+        counts.add(ev.topup_lut_n[i]);
+      }
       break;
+    }
   }
   String out;
   serializeJson(doc, out);
@@ -325,8 +328,8 @@ void handleWsMessage(AsyncWebSocketClient *client, const uint8_t *data, size_t l
     float grams = doc["grams"] | 0.0f;
     // Dosing task re-validates this range itself; this is just a
     // fast-fail check so a bad request doesn't queue up for nothing.
-    if (!std::isfinite(grams) || grams <= 0.0f || grams > 40.0f) {
-      sendError(client, "grams out of range (0, 40]", request_id);
+    if (!std::isfinite(grams) || grams <= 0.0f || grams > 50.0f) {
+      sendError(client, "grams out of range (0, 50]", request_id);
       return;
     }
     DoseRequest req{grams, request_id != 0 ? request_id : g_next_dose_request_id++};
@@ -516,8 +519,8 @@ void handleGetDosage(AsyncWebServerRequest *request) {
   }
 
   float grams = request->getParam("grams")->value().toFloat();
-  if (!std::isfinite(grams) || grams <= 0.0f || grams > 40.0f) {
-    doc["error"] = "grams out of range (0, 40]";
+  if (!std::isfinite(grams) || grams <= 0.0f || grams > 50.0f) {
+    doc["error"] = "grams out of range (0, 50]";
     serializeJson(doc, out);
     request->send(400, "application/json", out);
     return;

@@ -49,11 +49,11 @@ void test_topup_model_v1_roundtrips_through_byte_copy(void) {
   original.version = kTopupModelVersion;
   original.rate_hat = 1.0123f;
   original.rate_precision = 123.45f;
-  original.topup_slope = 1.05f;
-  original.topup_deadtime_ms = 310.0f;
-  original.topup_precision = 44.4f;
+  for (int i = 0; i < kTopupLutBuckets; ++i) {
+    original.topup_lut_duration_ms[i] = 350.0f + 10.0f * i;
+    original.topup_lut_n[i] = static_cast<uint32_t>(i);
+  }
   original.rate_n_effective = 18;
-  original.topup_n_effective = 18;
   original.last_updated = 1234567890LL;
   original.coast_weight_hat = 0.49f;
   original.coast_weight_precision = 39.06f;
@@ -67,11 +67,11 @@ void test_topup_model_v1_roundtrips_through_byte_copy(void) {
   TEST_ASSERT_EQUAL_UINT8(original.version, restored.version);
   TEST_ASSERT_EQUAL_FLOAT(original.rate_hat, restored.rate_hat);
   TEST_ASSERT_EQUAL_FLOAT(original.rate_precision, restored.rate_precision);
-  TEST_ASSERT_EQUAL_FLOAT(original.topup_slope, restored.topup_slope);
-  TEST_ASSERT_EQUAL_FLOAT(original.topup_deadtime_ms, restored.topup_deadtime_ms);
-  TEST_ASSERT_EQUAL_FLOAT(original.topup_precision, restored.topup_precision);
+  for (int i = 0; i < kTopupLutBuckets; ++i) {
+    TEST_ASSERT_EQUAL_FLOAT(original.topup_lut_duration_ms[i], restored.topup_lut_duration_ms[i]);
+    TEST_ASSERT_EQUAL_UINT32(original.topup_lut_n[i], restored.topup_lut_n[i]);
+  }
   TEST_ASSERT_EQUAL_UINT32(original.rate_n_effective, restored.rate_n_effective);
-  TEST_ASSERT_EQUAL_UINT32(original.topup_n_effective, restored.topup_n_effective);
   TEST_ASSERT_EQUAL_INT64(original.last_updated, restored.last_updated);
   TEST_ASSERT_EQUAL_FLOAT(original.coast_weight_hat, restored.coast_weight_hat);
   TEST_ASSERT_EQUAL_FLOAT(original.coast_weight_precision, restored.coast_weight_precision);
@@ -82,10 +82,16 @@ void test_topup_model_v1_roundtrips_through_byte_copy(void) {
 // ---------------------------------------------------------------------------
 
 void test_cold_start_topup_model_reports_prior(void) {
+  // Every bucket is seeded from the historical slope/deadtime fit via
+  // the same formula makeDefaultTopupModel() uses: deadtime +
+  // 1000*aim_fraction*bucket_upper/slope.
   TopupModelV1 persisted = makeDefaultTopupModel();
   TopupModel model(persisted);
-  TEST_ASSERT_DOUBLE_WITHIN(1e-6, 1.05, model.slope());
-  TEST_ASSERT_DOUBLE_WITHIN(1e-6, 310.0, model.deadtimeMs());
+
+  double expected_bucket0 = 310.0 + 1000.0 * 0.85 * 0.1 / 1.05;
+  double expected_bucket9 = 310.0 + 1000.0 * 0.85 * 1.0 / 1.05;
+  TEST_ASSERT_DOUBLE_WITHIN(1e-3, expected_bucket0, model.durationForBucket(0));
+  TEST_ASSERT_DOUBLE_WITHIN(1e-3, expected_bucket9, model.durationForBucket(9));
 }
 
 void test_cold_start_main_grind_model_reports_prior(void) {
@@ -104,29 +110,33 @@ void test_cold_start_coast_model_reports_prior(void) {
 // Convergence on synthetic data matching topup-model.md's real numbers
 // ---------------------------------------------------------------------------
 
-void test_topup_model_converges_to_known_slope_and_deadtime(void) {
-  const double true_slope = 1.05;
-  const double true_deadtime_s = 0.310;
-  const double noise_sd = 0.15;
+void test_topup_lut_converges_toward_bucket_aim_weight(void) {
+  // Simulates a (for this test only) deterministic pulse response to
+  // verify the online per-bucket update rule actually converges toward
+  // producing that bucket's aim weight, not just nudges randomly.
+  const double true_slope = 1.05;  // g/s -- matches TopupPriors::kTopupSlope
+  const double true_deadtime_ms = 310.0;
+
+  const int bucket = 4;  // gap in (0.4, 0.5]
+  const double gap_g = 0.45;
+  const double bucket_upper = (bucket + 1) * 0.1;
+  const double aim_weight = 0.85 * bucket_upper;  // TopupModel::Config's default aim_fraction
 
   TopupModelV1 persisted = makeDefaultTopupModel();
+  // Deliberately wrong starting point (well below what's needed) so
+  // convergence is actually exercised, not already correct at seed time.
+  persisted.topup_lut_duration_ms[bucket] = 350.0f;
   TopupModel model(persisted);
 
-  std::mt19937 rng = makeRng();
-  std::uniform_real_distribution<double> t_dist(350.0, 1300.0);
-  std::normal_distribution<double> noise(0.0, noise_sd);
-
-  int64_t now = 1000;
-  for (int i = 0; i < 300; ++i) {
-    double t_ms = t_dist(rng);
-    double truth = std::max(0.0, true_slope * (t_ms / 1000.0 - true_deadtime_s));
-    double observed = truth + noise(rng);
-    model.recordPulse(t_ms, observed, now);
-    now += 5;
+  for (int i = 0; i < 200; ++i) {
+    double duration_ms = model.durationForBucket(bucket);
+    double weight_added = std::max(0.0, true_slope * (duration_ms - true_deadtime_ms) / 1000.0);
+    model.recordPulse(gap_g, weight_added);
   }
 
-  TEST_ASSERT_DOUBLE_WITHIN(0.05, true_slope, model.slope());
-  TEST_ASSERT_DOUBLE_WITHIN(60.0, true_deadtime_s * 1000.0, model.deadtimeMs());
+  double final_duration = model.durationForBucket(bucket);
+  double final_weight = std::max(0.0, true_slope * (final_duration - true_deadtime_ms) / 1000.0);
+  TEST_ASSERT_DOUBLE_WITHIN(0.01, aim_weight, final_weight);
 }
 
 void test_main_grind_model_converges_to_known_rate(void) {
@@ -255,120 +265,26 @@ void test_main_grind_model_nonpositive_rate_never_predicts_immediate_stop(void) 
 }
 
 // ---------------------------------------------------------------------------
-// Cold-start blending: gradual, not a hard cutover
-// ---------------------------------------------------------------------------
-
-void test_topup_model_blend_is_gradual_not_hard_cutover(void) {
-  const double alt_slope = 1.4;
-  const double deadtime_s = 0.310;
-
-  TopupModelV1 persisted = makeDefaultTopupModel();
-  TopupModel model(persisted);
-
-  TEST_ASSERT_DOUBLE_WITHIN(1e-6, 1.05, model.slope());
-
-  std::mt19937 rng = makeRng();
-  std::normal_distribution<double> noise(0.0, 0.05);
-  std::uniform_real_distribution<double> t_dist(400.0, 1200.0);
-
-  int64_t now = 1000;
-  for (int i = 0; i < 5; ++i) {
-    double t_ms = t_dist(rng);
-    double truth = alt_slope * (t_ms / 1000.0 - deadtime_s);
-    model.recordPulse(t_ms, truth + noise(rng), now);
-    now += 5;
-  }
-  double slope_after_5 = model.slope();
-  // Moved meaningfully off the prior, but 5 points can't outweigh the ~18
-  // pseudo-observation prior -- should still land closer to 1.05 than 1.4.
-  TEST_ASSERT_TRUE(slope_after_5 > 1.05 + 1e-4);
-  TEST_ASSERT_TRUE(slope_after_5 < 1.05 + (alt_slope - 1.05) * 0.6);
-
-  for (int i = 0; i < 200; ++i) {
-    double t_ms = t_dist(rng);
-    double truth = alt_slope * (t_ms / 1000.0 - deadtime_s);
-    model.recordPulse(t_ms, truth + noise(rng), now);
-    now += 5;
-  }
-  double slope_after_205 = model.slope();
-  // With real data now dominating, should have converged much closer to truth.
-  TEST_ASSERT_TRUE(slope_after_205 > slope_after_5);
-  TEST_ASSERT_DOUBLE_WITHIN(0.1, alt_slope, slope_after_205);
-}
-
-// ---------------------------------------------------------------------------
 // Outlier rejection
 // ---------------------------------------------------------------------------
 
 void test_topup_model_rejects_hard_bound_outlier(void) {
   TopupModelV1 persisted = makeDefaultTopupModel();
   TopupModel model(persisted);
+  double duration_before = model.durationForBucket(TopupModel::bucketForGap(0.45));
 
   // Matches the real garbage value topup-model.md §1.3 found in the field.
-  TopupModel::PulseResult r = model.recordPulse(700.0, 483.0, 1000);
+  TopupModel::PulseResult r = model.recordPulse(0.45, 483.0);
 
   TEST_ASSERT_TRUE(r.hard_rejected);
   TEST_ASSERT_FALSE(r.accepted);
-  TEST_ASSERT_DOUBLE_WITHIN(1e-6, 1.05, model.slope());
-  TEST_ASSERT_DOUBLE_WITHIN(1e-6, 310.0, model.deadtimeMs());
-}
-
-void test_topup_model_rejects_statistically_inconsistent_outlier(void) {
-  TopupModelV1 persisted = makeDefaultTopupModel();
-  TopupModel model(persisted);
-
-  // In-bounds ([-1,10]) but wildly inconsistent with the current fit at
-  // this runtime (predicted ~= 0.41g).
-  TopupModel::PulseResult r = model.recordPulse(700.0, 8.0, 1000);
-
-  TEST_ASSERT_TRUE(r.stat_rejected);
-  TEST_ASSERT_FALSE(r.accepted);
-  TEST_ASSERT_DOUBLE_WITHIN(1e-6, 1.05, model.slope());
+  TEST_ASSERT_DOUBLE_WITHIN(1e-6, duration_before,
+                             model.durationForBucket(TopupModel::bucketForGap(0.45)));
 }
 
 // ---------------------------------------------------------------------------
 // Recency decay
 // ---------------------------------------------------------------------------
-
-void test_recency_decay_reduces_old_observations_influence(void) {
-  TopupModelV1 persisted = makeDefaultTopupModel();
-
-  TopupModel::Config decaying_cfg;
-  decaying_cfg.half_life_days = 15.0;
-  TopupModel decaying(persisted, decaying_cfg);
-
-  TopupModel::Config static_cfg;
-  static_cfg.half_life_days = 0.0;  // decay disabled
-  TopupModel steady(persisted, static_cfg);
-
-  // Identical "old" pulse, consistent with the prior, fed to both. Uses a
-  // nonzero epoch: 0 is the struct's "never updated" sentinel, and using it
-  // here would make the *next* call look like a first-ever update too,
-  // masking the decay this test is trying to observe.
-  int64_t old_epoch = 1000;
-  decaying.recordPulse(700.0, 1.05 * (0.7 - 0.310), old_epoch);
-  steady.recordPulse(700.0, 1.05 * (0.7 - 0.310), old_epoch);
-
-  // 45 days later (3 half-lives for the decaying model), a handful of
-  // identical "fresh" pulses implying a different slope.
-  const double alt_slope = 1.3;
-  int64_t later = old_epoch + 45 * 86400;
-  const double xs_ms[] = {400.0, 600.0, 800.0, 1000.0, 1200.0};
-
-  for (int i = 0; i < 5; ++i) {
-    double fresh_value = alt_slope * (xs_ms[i] / 1000.0 - 0.310);
-    decaying.recordPulse(xs_ms[i], fresh_value, later + i * 5);
-    steady.recordPulse(xs_ms[i], fresh_value, later + i * 5);
-  }
-
-  double decaying_gap = std::fabs(decaying.slope() - alt_slope);
-  double steady_gap = std::fabs(steady.slope() - alt_slope);
-
-  // The decayed model discounted its older evidence more, so the same
-  // fresh evidence pulled it much closer to alt_slope than the
-  // non-decaying model, which is still anchored by ~19 units of old weight.
-  TEST_ASSERT_TRUE(decaying_gap < steady_gap);
-}
 
 // ---------------------------------------------------------------------------
 // CoastModel (Model C), §8
@@ -455,70 +371,51 @@ void test_coast_model_recency_decay_reduces_old_observations_influence(void) {
 // computeTopupDecision, §4.5
 // ---------------------------------------------------------------------------
 
-void test_decision_refuses_below_min_controllable_gap(void) {
-  TopupModelV1 persisted = makeDefaultTopupModel();
-  TopupModel model(persisted);
-
-  TopupModel::Decision d = model.computeTopupDecision(0.1, 0.3);
-  TEST_ASSERT_FALSE(d.should_fire);
+void test_bucket_for_gap_maps_correctly(void) {
+  TEST_ASSERT_EQUAL_INT(0, TopupModel::bucketForGap(0.05));
+  TEST_ASSERT_EQUAL_INT(0, TopupModel::bucketForGap(0.1));   // upper edge included
+  TEST_ASSERT_EQUAL_INT(1, TopupModel::bucketForGap(0.11));  // just past the edge
+  TEST_ASSERT_EQUAL_INT(4, TopupModel::bucketForGap(0.45));
+  TEST_ASSERT_EQUAL_INT(9, TopupModel::bucketForGap(1.0));
+  TEST_ASSERT_EQUAL_INT(9, TopupModel::bucketForGap(1.5));  // clamped, no bucket beyond 1.0g
 }
 
-void test_decision_aims_at_ninety_percent_of_gap(void) {
+void test_decision_fires_using_bucket_duration_and_aim_weight(void) {
   TopupModelV1 persisted = makeDefaultTopupModel();
   TopupModel model(persisted);
 
-  // Large overshoot budget so the upper-bound shrink never engages.
-  TopupModel::Decision d = model.computeTopupDecision(1.0, 5.0);
+  TopupModel::Decision d = model.computeTopupDecision(0.45);  // bucket 4
 
   TEST_ASSERT_TRUE(d.should_fire);
-  TEST_ASSERT_DOUBLE_WITHIN(1e-6, 0.9, d.predicted_weight_g);
-  // duration = deadtime_ms + 1000*0.9/1.05
-  double expected_ms = 310.0 + 1000.0 * 0.9 / 1.05;
-  TEST_ASSERT_UINT32_WITHIN(1, static_cast<uint32_t>(expected_ms + 0.5), d.duration_ms);
+  TEST_ASSERT_EQUAL_INT(4, d.bucket);
+  TEST_ASSERT_DOUBLE_WITHIN(1e-6, 0.85 * 0.5, d.aim_weight_g);
+  TEST_ASSERT_UINT32_WITHIN(1, static_cast<uint32_t>(model.durationForBucket(4) + 0.5),
+                             d.duration_ms);
 }
 
-void test_decision_shrinks_duration_for_overshoot_budget(void) {
+void test_decision_fires_even_for_a_tiny_0_1g_gap(void) {
+  // Owner request: topup should still attempt to close even a 0.1g gap,
+  // not just accept it as undershoot -- no min-controllable-gap cutoff
+  // in the bucket-based decision (DosingTask.cpp's own min_topup_grams
+  // setting, ~0.08g by default, is the only "basically zero" gate).
   TopupModelV1 persisted = makeDefaultTopupModel();
   TopupModel model(persisted);
 
-  TopupModel::Decision unshrunk = model.computeTopupDecision(1.0, 5.0);
-  TopupModel::Decision shrunk = model.computeTopupDecision(1.0, 0.5);
-
-  TEST_ASSERT_TRUE(shrunk.should_fire);
-  TEST_ASSERT_TRUE(shrunk.duration_ms < unshrunk.duration_ms);
-  TEST_ASSERT_TRUE(shrunk.predicted_weight_g < unshrunk.predicted_weight_g);
-
-  // safe_weight = overshoot_budget - k_sigma*residual_sd; derive the
-  // expected sd from the model itself (the seeded fit's dof-corrected
-  // residual sd now reproduces the nominal prior exactly, see AR-052).
-  double safe_weight = 0.5 - 1.5 * model.residualStdDev();
-  double expected_ms = model.deadtimeMs() + 1000.0 * safe_weight / model.slope();
-  TEST_ASSERT_UINT32_WITHIN(1, static_cast<uint32_t>(expected_ms + 0.5), shrunk.duration_ms);
-}
-
-void test_decision_respects_hygiene_clamp(void) {
-  TopupModelV1 persisted = makeDefaultTopupModel();
-  TopupModel model(persisted);
-
-  // A huge gap pushes the naive duration well past the 5s hygiene clamp
-  // (mirrors the legacy `top_up_seconds > 5.0f` check).
-  TopupModel::Decision d = model.computeTopupDecision(10.0, 20.0);
-  TEST_ASSERT_FALSE(d.should_fire);
-}
-
-void test_decision_fires_at_cold_start_with_production_budget(void) {
-  // AR-052: a fresh (never-persisted) model with DosingTask.cpp's actual
-  // 0.3g overshoot budget must be able to fire at all -- this exact
-  // combination previously deadlocked permanently (0.3 - 2.0*0.15 == 0,
-  // clamping every gap's target weight to zero) and was only reachable
-  // in production, since every existing test before this one used either
-  // a much larger budget or a gap below min_controllable_gap_g.
-  TopupModelV1 persisted = makeDefaultTopupModel();
-  TopupModel model(persisted);
-
-  TopupModel::Decision d = model.computeTopupDecision(1.0, 0.3);
+  TopupModel::Decision d = model.computeTopupDecision(0.1);
   TEST_ASSERT_TRUE(d.should_fire);
-  TEST_ASSERT_TRUE(d.predicted_weight_g > 0.0);
+  TEST_ASSERT_EQUAL_INT(0, d.bucket);
+}
+
+void test_topup_model_falls_back_to_default_seed_for_invalid_persisted_bucket(void) {
+  // An out-of-hygiene-bounds persisted duration (corrupt NVS, or an
+  // older schema's blob reinterpreted) must not be trusted verbatim --
+  // falls back to the same formula a fresh bucket is seeded with.
+  TopupModelV1 persisted = makeDefaultTopupModel();
+  double expected = persisted.topup_lut_duration_ms[3];
+  persisted.topup_lut_duration_ms[3] = 50.0f;  // below the 350ms hygiene floor
+
+  TopupModel model(persisted);
+  TEST_ASSERT_DOUBLE_WITHIN(1e-3, expected, model.durationForBucket(3));
 }
 
 int main(int argc, char **argv) {
@@ -536,30 +433,24 @@ int main(int argc, char **argv) {
   RUN_TEST(test_cold_start_main_grind_model_reports_prior);
   RUN_TEST(test_cold_start_coast_model_reports_prior);
 
-  RUN_TEST(test_topup_model_converges_to_known_slope_and_deadtime);
+  RUN_TEST(test_topup_lut_converges_toward_bucket_aim_weight);
   RUN_TEST(test_main_grind_model_converges_to_known_rate);
   RUN_TEST(test_main_grind_model_predicts_sane_stop_time);
   RUN_TEST(test_main_grind_model_predicts_earlier_stop_time_with_coast);
   RUN_TEST(test_main_grind_model_ignores_sudden_weight_drop);
   RUN_TEST(test_main_grind_model_nonpositive_rate_never_predicts_immediate_stop);
 
-  RUN_TEST(test_topup_model_blend_is_gradual_not_hard_cutover);
-
   RUN_TEST(test_topup_model_rejects_hard_bound_outlier);
-  RUN_TEST(test_topup_model_rejects_statistically_inconsistent_outlier);
-
-  RUN_TEST(test_recency_decay_reduces_old_observations_influence);
+  RUN_TEST(test_topup_model_falls_back_to_default_seed_for_invalid_persisted_bucket);
 
   RUN_TEST(test_coast_model_shifts_meaningfully_with_consistent_observations);
   RUN_TEST(test_coast_model_rejects_negative_observation);
   RUN_TEST(test_coast_model_rejects_absurdly_large_observation);
   RUN_TEST(test_coast_model_recency_decay_reduces_old_observations_influence);
 
-  RUN_TEST(test_decision_refuses_below_min_controllable_gap);
-  RUN_TEST(test_decision_aims_at_ninety_percent_of_gap);
-  RUN_TEST(test_decision_shrinks_duration_for_overshoot_budget);
-  RUN_TEST(test_decision_respects_hygiene_clamp);
-  RUN_TEST(test_decision_fires_at_cold_start_with_production_budget);
+  RUN_TEST(test_bucket_for_gap_maps_correctly);
+  RUN_TEST(test_decision_fires_using_bucket_duration_and_aim_weight);
+  RUN_TEST(test_decision_fires_even_for_a_tiny_0_1g_gap);
 
   return UNITY_END();
 }
