@@ -126,6 +126,27 @@ only 1 in-range completed sample for each of single/double -- the
 histograms are correctly built and will fill in with real distributions
 as more clean doses accumulate.
 
+Reviewing that table, the owner then caught a real bug: the "Target"
+column showed 8.7g/17g for doses they knew were 9.5g/18g. Root cause --
+`sessions.target_weight_g` is `target_grams_corrected`, the margin-
+reduced internal MAIN_GRIND stop threshold, not the actual requested
+dose (`TelemetryTask.cpp:170-171`). That field was also feeding the
+histogram deltas and the Accuracy panel, silently biasing every number
+by roughly the topup margin's size. Fixed by switching the sessions
+table, Accuracy panel, and both histograms to `requested_weight_g`;
+`target_weight_g` is still shown, now explicitly labeled "main-grind
+stop", in the per-session detail view where both numbers side by side
+are actually useful. After the fix, double-dose deltas now cluster
+tightly around +0.15-0.2g -- consistent with the live 18g test's
++0.21g overshoot -- confirming the fix, not just the display, was
+correct. Surfaced but not yet acted on: since `CoastModel` now predicts
+and cancels the physical coast contribution independently inside the
+stop-time formula, `top_up_margin_single/double`'s only remaining job
+is leaving room for TOPUP, not compensating for coast -- its *size*
+could plausibly shrink, though the two-stage grind-then-topup design
+itself still looks necessary for hitting the accuracy targets. Logged
+as an open question below rather than acted on without live data.
+
 **Live debugging session (2026-09-11, after the first OTA deploy):**
 diagnosed and fixed, in order, using WS `"log"`-channel diagnostics
 (no serial cable access) rather than guessing: buttons not registering
@@ -442,6 +463,15 @@ deployed and verified on the physical device.
   coffee machine's on/off state, either pulled from the owner's Home
   Assistant instance or by having the ESP32 poll the machine directly
   -- is a deliberate follow-up, not started ("blank now, HA later").
+- **Shrinking `top_up_margin_single/double` now that `CoastModel`
+  exists**: the margin originally had to cover both physical coast and
+  leave room for TOPUP; now that coast is predicted and cancelled
+  independently in the stop-time formula (`DosingTask.cpp:253-256`), the
+  margin's only remaining job is the TOPUP buffer. Its current size
+  (0.3g/0.5g) may be larger than that alone needs, but changing it
+  touches the same overshoot/undershoot tradeoff as AR-052/AR-059 --
+  wants live data on how tight the main grind lands relative to the
+  coast prediction before touching the actual values, not a guess.
 
 ## Parked ideas (out of scope for this rewrite)
 

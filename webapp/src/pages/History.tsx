@@ -238,7 +238,7 @@ function SessionDetail({ session }: { session: Session }) {
       <h3>Session {session.session_id.slice(0, 8)}</h3>
       <p className="muted">
         {formatTimestamp(session.started_at)} · {session.mode} · requested{" "}
-        {session.requested_weight_g}g, target {session.target_weight_g}g
+        {session.requested_weight_g}g, main-grind stop {session.target_weight_g}g
         {session.final_weight_g !== null && `, final ${session.final_weight_g}g`}
       </p>
       {error && <p style={{ color: "var(--red)" }}>{error}</p>}
@@ -298,10 +298,10 @@ export default function HistoryPage() {
 
   useEffect(() => {
     fetchCompletedDosesForMode("single")
-      .then((doses) => setSingleDeltas(doses.map((d) => d.final_weight_g - d.target_weight_g)))
+      .then((doses) => setSingleDeltas(doses.map((d) => d.final_weight_g - d.requested_weight_g)))
       .catch(() => setSingleDeltas([]));
     fetchCompletedDosesForMode("double")
-      .then((doses) => setDoubleDeltas(doses.map((d) => d.final_weight_g - d.target_weight_g)))
+      .then((doses) => setDoubleDeltas(doses.map((d) => d.final_weight_g - d.requested_weight_g)))
       .catch(() => setDoubleDeltas([]));
   }, []);
 
@@ -309,7 +309,7 @@ export default function HistoryPage() {
     if (!sessions || sessions.length === 0) return null;
     const completed = sessions.filter((s) => s.outcome === "completed" && s.final_weight_g !== null);
     if (completed.length === 0) return null;
-    const errors = completed.map((s) => Math.abs(s.final_weight_g! - s.target_weight_g));
+    const errors = completed.map((s) => Math.abs(s.final_weight_g! - s.requested_weight_g));
     const withinSpot = errors.filter((e) => e < 0.05).length;
     const within02 = errors.filter((e) => e < 0.2).length;
     return {
@@ -373,7 +373,7 @@ export default function HistoryPage() {
                   <tr key={s.session_id} className="session-row" onClick={() => setSelected(s)}>
                     <td>{formatTimestamp(s.started_at)}</td>
                     <td>{s.mode}</td>
-                    <td>{s.target_weight_g.toFixed(2)}g</td>
+                    <td>{s.requested_weight_g.toFixed(2)}g</td>
                     <td>{s.final_weight_g !== null ? `${s.final_weight_g.toFixed(2)}g` : "--"}</td>
                     <td>
                       <span className={`outcome ${s.outcome}`}>{s.outcome}</span>

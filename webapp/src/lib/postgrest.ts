@@ -56,20 +56,24 @@ export function fetchRecentSessions(limit = 50): Promise<Session[]> {
 }
 
 export interface DoseOutcome {
-  target_weight_g: number;
+  requested_weight_g: number;
   final_weight_g: number;
 }
 
 // Only completed sessions with a recorded final weight -- everything this
 // histogram needs, for a given fixed target-dose mode (single/double), and
 // a much larger sample than the "recent sessions" table needs to show.
+// Deltas here must use requested_weight_g, not target_weight_g -- the
+// latter is the margin-corrected internal MAIN_GRIND stop threshold
+// (requested minus top_up_margin_single/double), not what was actually
+// asked for; TOPUP's whole job is closing that margin back up.
 export function fetchCompletedDosesForMode(
   mode: "single" | "double",
   limit = 500
 ): Promise<DoseOutcome[]> {
   return get<DoseOutcome[]>(
     `/sessions?mode=eq.${mode}&outcome=eq.completed&final_weight_g=not.is.null` +
-      `&order=started_at.desc&limit=${limit}&select=target_weight_g,final_weight_g`
+      `&order=started_at.desc&limit=${limit}&select=requested_weight_g,final_weight_g`
   );
 }
 

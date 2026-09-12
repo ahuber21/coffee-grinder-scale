@@ -1466,3 +1466,22 @@ Format per entry:
   chart couldn't show the rest anyway); the caption discloses how many
   points were excluded so the fit's provenance stays honest rather than
   silently dropping outliers.
+- **Follow-up (same day)**: the owner noticed the "Recent sessions"
+  table's Target column showed 8.7g/17g for doses they knew were
+  9.5g/18g. Root cause: `sessions.target_weight_g` (both the table and
+  this histogram's original delta calc) is `target_grams_corrected`
+  (`TelemetryTask.cpp:170-171`) -- the margin-reduced internal MAIN_GRIND
+  stop threshold (`requested - top_up_margin_single/double`), not what
+  was actually asked for. That field measures the wrong thing for both
+  the table display and, more importantly, the histogram/accuracy-panel
+  deltas: comparing final weight to the corrected threshold instead of
+  the true request biased every delta by roughly the margin's size.
+  Fixed by switching the table's Target column, the Accuracy panel, and
+  both histograms to `requested_weight_g` throughout; `target_weight_g`
+  is still shown, now explicitly labeled "main-grind stop", in the
+  per-session detail view where both numbers are meaningful side by
+  side. Whether `top_up_margin_single/double` itself can now be shrunk
+  (since `CoastModel` already predicts and cancels the physical coast
+  contribution independently, per `DosingTask.cpp:253-256` -- the margin's
+  only remaining job is leaving room for TOPUP, not compensating for
+  coast) is a separate open question, not yet acted on.
