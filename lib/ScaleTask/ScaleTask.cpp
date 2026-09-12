@@ -63,7 +63,19 @@ void scaleTaskFn(void *) {
   g_ads.begin();
   applySettingsIfChanged();
   g_ads.initRingBuffer();
-  g_ads.tare();
+
+  // Retry until the ring buffer settles, same bar the idle auto-tare below
+  // holds itself to -- a mid-transient boot tare biases every dose until
+  // that auto-tare corrects it, up to kAutoTareIdleReturnCooldownMs later.
+  constexpr uint32_t kBootTareTimeoutMs = 5000;
+  uint32_t bootTareDeadline = millis() + kBootTareTimeoutMs;
+  while (!g_ads.tare() && millis() < bootTareDeadline) {
+    vTaskDelay(pdMS_TO_TICKS(2));
+    g_ads.readADCIfReady();
+  }
+  if (millis() >= bootTareDeadline) {
+    Serial.println("[Scale] boot tare never stabilized; using last reading");
+  }
 
   xEventGroupSetBits(g_sys_events, kScaleReadyBit);
 

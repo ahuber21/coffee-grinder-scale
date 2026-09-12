@@ -49,6 +49,7 @@ uint32_t g_state_entered_ms = 0;
 /** Sub-state within DosingState::TOPUP -- one pulse's decide/fire/settle cycle. */
 enum class TopupPhase { DECIDING, PULSING, SETTLING };
 TopupPhase g_topup_phase = TopupPhase::DECIDING;
+uint32_t g_topup_deciding_entered_ms = 0;  ///< DECIDING's own stable-or-timeout timer -- SETTLING reuses g_state_entered_ms for its own.
 uint32_t g_topup_pulse_start_ms = 0;
 uint32_t g_topup_pulse_duration_ms = 0;
 float g_topup_weight_before_pulse = 0.0f;
@@ -172,7 +173,16 @@ void sendDisplayCommand() {
   DisplayCommand cmd{};
   cmd.seq = g_display_seq++;
   cmd.mode = g_state;
-  cmd.current_grams = g_have_sample ? g_last_sample.grams : 0.0f;
+  // GRINDING/TOPUP/STOPPING/FINALIZE show progress toward a dose, so the
+  // cup's own weight (whatever the tare baseline happened to capture) must
+  // never leak onto the screen -- otherwise a heavier cup shows up as a
+  // three-digit reading instead of the 0..target_grams the layout expects.
+  bool session_active = g_state == DosingState::GRINDING || g_state == DosingState::TOPUP ||
+                        g_state == DosingState::STOPPING || g_state == DosingState::FINALIZE;
+  cmd.current_grams =
+      g_have_sample ? (session_active ? g_last_sample.grams - g_grams_on_grind_start
+                                       : g_last_sample.grams)
+                    : 0.0f;
   cmd.target_grams = g_target_grams;
   cmd.elapsed_s = g_state == DosingState::FINALIZE
                       ? g_frozen_elapsed_ms / 1000.0f
@@ -250,10 +260,16 @@ void handleGrindingSample(const ScaleSample &s) {
   double delta_weight = s.grams - g_grams_on_grind_start;
   g_main_grind_model->addSample(runtime_ms, delta_weight);
 
-  double target_delta = g_target_grams_corrected - g_grams_on_grind_start;
+  // addSample above is fed delta_weight (already relative to the tare
+  // baseline), so the target handed to the model must be in that same
+  // delta space -- g_target_grams_corrected alone, not reduced by the
+  // baseline again. That second subtraction is invisible whenever the
+  // baseline is near zero, but goes deeply wrong the moment it isn't
+  // (e.g. a dosing cup with real weight on it), predicting a near-zero
+  // stop time and cutting the main grind off almost immediately.
   double coast_estimate = g_coast_model->currentCoastEstimate();
-  double predicted_stop_ms =
-      g_main_grind_model->predictStopTimeMsWithCoast(target_delta, coast_estimate);
+  double predicted_stop_ms = g_main_grind_model->predictStopTimeMsWithCoast(
+      g_target_grams_corrected, coast_estimate);
 
   // Primary (time-estimate) and fallback (raw-weight) stop checks both
   // compare against the same canonical value, target_grams_corrected --
@@ -267,19 +283,29 @@ void handleGrindingSample(const ScaleSample &s) {
     g_grinder_stopped_ms = s.millis;
     g_weight_at_relay_off = s.grams;
     g_main_grind_model->finalizeSession(nowEpochS());
-    sendTelemetry(TelemetryType::PROGRESS, s.grams, g_target_grams);
+    sendTelemetry(TelemetryType::PROGRESS, static_cast<float>(delta_weight), g_target_grams);
     transitionTo(DosingState::STOPPING);
   }
 }
 
 /** Per-sample TOPUP update: drives the DECIDING/PULSING/SETTLING pulse cycle. */
 void handleTopupSample(const ScaleSample &s) {
-  float gap = g_target_grams - (s.grams - g_grams_on_grind_start);
+  float delta_weight = s.grams - g_grams_on_grind_start;
+  float gap = g_target_grams - delta_weight;
 
   switch (g_topup_phase) {
     case TopupPhase::DECIDING: {
+      // Every decision here needs a settled reading -- old firmware
+      // required stability before firing a pulse or declaring the dose
+      // done too. Bounded so a persistently noisy sensor can't stall
+      // every decision until the overall topup cutoff finally fires.
+      bool settled = s.stable ||
+                    s.millis - g_topup_deciding_entered_ms >= g_settings.stability_max_wait_ms;
+      if (!settled) {
+        break;
+      }
       if (gap <= g_settings.min_topup_grams) {
-        sendTelemetry(TelemetryType::FINALIZE, s.grams, g_target_grams);
+        sendTelemetry(TelemetryType::FINALIZE, delta_weight, g_target_grams);
         transitionTo(DosingState::FINALIZE);
         return;
       }
@@ -287,7 +313,7 @@ void handleTopupSample(const ScaleSample &s) {
       if (!decision.should_fire) {
         // Shouldn't normally happen (every bucket always has a clamped,
         // in-bounds duration) -- a safety net, not the everyday path.
-        sendTelemetry(TelemetryType::FINALIZE, s.grams, g_target_grams);
+        sendTelemetry(TelemetryType::FINALIZE, delta_weight, g_target_grams);
         transitionTo(DosingState::FINALIZE);
         return;
       }
@@ -308,12 +334,20 @@ void handleTopupSample(const ScaleSample &s) {
       break;
     }
     case TopupPhase::SETTLING: {
-      if (s.millis - g_state_entered_ms >= g_settings.stability_min_wait_ms) {
+      // stability_min_wait_ms gives the pulse's mechanical bounce a floor
+      // to damp out before the ADC's own stability check is trusted at
+      // all -- otherwise a lucky quiet window mid-oscillation could pass
+      // as "stable" far too early. stability_max_wait_ms is the fallback
+      // so a sensor that never reports stable can't stall the model.
+      bool minWaitElapsed = s.millis - g_state_entered_ms >= g_settings.stability_min_wait_ms;
+      bool settled = s.stable || s.millis - g_state_entered_ms >= g_settings.stability_max_wait_ms;
+      if (minWaitElapsed && settled) {
         double weight_added = s.grams - g_topup_weight_before_pulse;
         g_topup_model->recordPulse(g_topup_gap_at_fire, weight_added);
-        sendTelemetry(TelemetryType::TOPUP_PULSE, s.grams, g_target_grams,
-                      static_cast<float>(weight_added));
+        sendTelemetry(TelemetryType::TOPUP_PULSE, s.grams - g_grams_on_grind_start,
+                      g_target_grams, static_cast<float>(weight_added));
         g_topup_phase = TopupPhase::DECIDING;
+        g_topup_deciding_entered_ms = s.millis;
       }
       break;
     }
@@ -466,29 +500,55 @@ void dosingTaskFn(void *) {
         break;
       }
       case DosingState::TARE: {
-        if (g_have_sample) {
+        // Wait for a settled reading, same bar as the ADC's own auto-tare --
+        // a mid-transient sample here would bias every stop decision for the
+        // rest of the session, since they're all deltas from this baseline.
+        if (g_have_sample && g_last_sample.stable) {
           g_grams_on_grind_start = g_last_sample.grams;  // software tare baseline
           g_session_id = g_next_session_id++;
           g_main_grind_model->startSession();
           g_grinder_started_ms = millis();
           grinderRelay(true);
-          sendTelemetry(TelemetryType::TARGET, g_grams_on_grind_start, g_target_grams);
+          // Delta-from-baseline is 0 by definition right at tare -- the
+          // baseline itself (whatever the cup happens to weigh) must never
+          // be sent as "current weight" here, same reasoning as everywhere
+          // else this value is used.
+          sendTelemetry(TelemetryType::TARGET, 0.0f, g_target_grams);
           transitionTo(DosingState::GRINDING);
         }
         break;
       }
       case DosingState::STOPPING: {
-        if (millis() - g_state_entered_ms >= g_settings.stability_min_wait_ms &&
-            g_have_sample) {
+        // Waits for a settled reading (bounded, so a persistently noisy
+        // sensor can't stall here forever) before recording the coast --
+        // it trains the model that predicts the *main grind's* stop time,
+        // so a transient reading here is a slow, compounding bias.
+        bool settled = (g_have_sample && g_last_sample.stable) ||
+                       millis() - g_state_entered_ms >= g_settings.stability_max_wait_ms;
+        if (settled && g_have_sample) {
           double observed_coast = g_last_sample.grams - g_weight_at_relay_off;
           g_coast_model->recordCoast(observed_coast, nowEpochS());
           g_topup_phase = TopupPhase::DECIDING;
+          g_topup_deciding_entered_ms = millis();
           transitionTo(DosingState::TOPUP);
         }
         break;
       }
       case DosingState::FINALIZE: {
         if (!g_finalize_done) {
+          // Wait for a settled reading before latching the final weight --
+          // same bar as TARE -- since the coast right after the grinder
+          // cuts off can leave it mid-transient for a moment.
+          bool settled = (g_have_sample && g_last_sample.stable) ||
+                         millis() - g_state_entered_ms >= g_settings.stability_max_wait_ms;
+          if (!settled) {
+            break;
+          }
+          // finalize_timeout_ms below now counts from the actual latch,
+          // not from FINALIZE entry, so the result stays on screen for
+          // its full duration regardless of how long settling took.
+          g_state_entered_ms = millis();
+
           // Fold the three models' latest state into one blob and hand
           // it to Settings task -- never a per-sample write.
           TopupModelV1 blob = g_persisted_model;
@@ -501,7 +561,12 @@ void dosingTaskFn(void *) {
           PersistRequest req{PersistBlobId::TOPUP_MODEL_V1, blob, g_session_id};
           xQueueSend(g_persist_request_q, &req, 0);
 
-          sendTelemetry(TelemetryType::COMPLETE, g_have_sample ? g_last_sample.grams : 0,
+          // final_weight_g must be comparable to requested_weight_g/
+          // target_weight_g (both plain dose amounts) -- the absolute
+          // reading includes whatever the cup itself weighs, which is
+          // exactly the "3-digit number" bug.
+          sendTelemetry(TelemetryType::COMPLETE,
+                        g_have_sample ? g_last_sample.grams - g_grams_on_grind_start : 0,
                         g_target_grams);
           g_last_coffee_ms = millis();
           g_finalize_done = true;
