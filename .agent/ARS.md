@@ -1367,3 +1367,57 @@ Format per entry:
   sample while SCREENSAVER is active, wakes to IDLE if the reading has
   moved past that baseline by more than the configured delta -- the
   same per-sample drain loop that already special-cases GRINDING/TOPUP.
+
+### AR-059 — TOPUP's fitted-line model doesn't hold at short pulse durations; replaced with a self-tuning LUT
+- **Area**: lib/DosingModel, firmware/dosing, firmware/settings, web
+- **Status**: fixed -- a real architecture reversal, see DECISIONS.md D23
+- **Found**: 2026-09-12, live: after AR-052/AR-057's fixes let topup
+  pulses fire at all, a 4g manual dose stopped GRINDING around 3g (as
+  designed), then fired ~10 tiny pulses that "sneaked up" on 3.7g before
+  accepting that as done -- a full 0.3g left unclosed. Owner's own
+  words: "most of the pulses did nothing, some had a clump that added
+  0.05 to 0.15g... nothing intentional about this behavior... it's just
+  randomly adding a bunch of clumps until we are at delta 0.3."
+  Pulling the live model state confirmed it precisely: real measured
+  pulse noise had grown to 0.23g (`topup_residual_sd_g`), at which point
+  `1.5 * 0.23 = 0.345g` already exceeds the entire 0.3g overshoot
+  budget on its own -- the exact AR-052 deadlock, recurring naturally
+  once enough real (noisy) pulse data had actually been folded in.
+- **Why it matters**: the fitted-line model (`weight_added = slope *
+  (t - deadtime)`) assumes short-pulse output scales smoothly and
+  predictably with duration. Real short pulses instead behave like a
+  discrete, clumpy release process (grounds either dislodge or don't) --
+  a physically different regime than the *main* grind, which runs long
+  enough to average over many such events into the smooth, low-noise
+  rate the model correctly captures there (0.09 g/s sd, vs. topup's
+  0.23g). No amount of re-tuning `overshoot_k_sigma`/`aim_fraction`
+  fixes a wrong shape of model.
+- **Resolution**: replaced `TopupModel`'s single fitted line with a
+  10-bucket (0.1g-wide, 0.0-1.0g) self-tuning lookup table of pulse
+  durations -- closer to the pre-rewrite firmware's hand-tuned 6-bucket
+  table (recovered from `git show main:src/main.cpp`), but updated from
+  real pulses instead of by hand. Each bucket aims for 85% of its own
+  upper bound (leaving slack for a smaller-bucket pulse to close the
+  remainder) and is nudged by an online rule that corrects overshoot
+  faster (0.6) than it grows duration for undershoot (0.3), matching
+  the project's standing overshoot-over-undershoot priority. No
+  `min_controllable_gap_g` cutoff anymore -- per the owner's request,
+  even a 0.1g gap gets a real attempt, gated only by the pre-existing
+  `min_topup_grams` "basically zero" setting. `TopupModelV1` bumped to
+  schema v3 (`topup_slope`/`topup_deadtime_ms`/`topup_precision`/
+  `topup_n_effective` replaced by `topup_lut_duration_ms[10]`/
+  `topup_lut_n[10]`) -- **this invalidates any old-version NVS blob
+  wholesale, not just the topup fields**, so the accumulated
+  `MainGrindModel`/`CoastModel` state (rate_n_effective had reached
+  1407 real samples) reset to cold-start priors on this deploy too. The
+  point estimates themselves (rate_hat=1.0 g/s) had already converged to
+  match the compiled-in prior almost exactly, so this is a confidence
+  reset, not a wrong-value regression -- but a real, disclosed side
+  effect of the version bump, not a free one. `TopupModel::PulseResult`
+  no longer needs `predicted_g`/`residual_g`/`stat_rejected`/`fallback`
+  (no per-pulse prediction to check consistency against anymore); the
+  hard absolute-bounds rejection (garbage sensor values) is kept as-is.
+  The SPA's Model tab now renders the live LUT as a table (bucket,
+  duration, aim weight, pulses seen) instead of slope/deadtime/noise
+  scalars. See ARS.md AR-052 (superseded for the topup-specific parts)
+  and DECISIONS.md D23.

@@ -7,14 +7,18 @@ fire (AR-052), added the NVS persistence it needed (AR-028), froze the
 FINALIZE timer and lengthened the post-dose auto-tare grace period
 (AR-053/054), wired up a real SCREENSAVER idle timer that blanks the
 panel (AR-055), and added a Model tab to the SPA showing the dosing
-algorithm's live fitted parameters and formulas. See also
-`two_paragraph_breakdown.md` for a short, always-current summary.*
+algorithm's live fitted parameters and formulas. Continued live testing
+then surfaced that the topup fitted-line model itself doesn't hold at
+short pulse durations (noisy, clumpy real behavior) -- replaced with a
+self-tuning per-gap-bucket lookup table (AR-059/D23), a real
+architecture reversal of D7. See also `two_paragraph_breakdown.md` for
+a short, always-current summary.*
 
 ## Where things stand
 
 Planning and design are done; implementation is underway. Branch
 `rewrite/rtos-fork`. Standing rules in `AGENTS.md`, full decision log in
-`DECISIONS.md` (D1-D22), all findings in `ARS.md` (AR-001-058, all
+`DECISIONS.md` (D1-D23), all findings in `ARS.md` (AR-001-059, all
 resolved or non-blocking), design docs in `.agent/design/`.
 
 **First real first-use session (2026-09-12):** the owner used the
@@ -51,7 +55,39 @@ just stalls and produces zero output rather than a smaller dose --
 AR-057, now a real 350ms floor independent of whatever the model
 happens to have learned). Also added, per a follow-up request: SCREENSAVER
 now wakes on a large weight change (configurable, default 2g), not just
-a button press (AR-058).
+a button press (AR-058). The max requestable manual dose (WS/HTTP API
+and the SPA's "Request a dose" field) was also raised from 40g to 50g
+per a direct request.
+
+**Topup redesign (2026-09-12, same day):** continued live testing (a 4g
+manual dose) showed the just-unstuck topup mechanism firing ~10 tiny,
+inconsistent pulses -- "most did nothing, some clumped 0.05-0.15g,
+nothing intentional about it" -- before settling 0.3g short every time.
+Pulling the live model state confirmed real pulse noise had grown to
+0.23g, large enough that AR-052's fix (k_sigma=1.5) was already back at
+its own deadlock boundary. Root cause: the fitted-line topup model
+doesn't hold at short pulse durations, which behave as a discrete,
+clumpy release rather than a smooth function of time. Replaced
+entirely with a self-tuning 10-bucket (0.1g granularity, 0.0-1.0g)
+lookup table of pulse durations, closer to the pre-rewrite firmware's
+own hand-tuned table (recovered its exact bucket scheme from git
+history) but updated from real pulses via an asymmetric online rule
+(corrects overshoot faster than it grows duration for undershoot). A
+real architecture reversal of D7 -- see DECISIONS.md D23 and ARS.md
+AR-059, including the disclosed side effect: the required `TopupModelV1`
+schema bump (v2->v3) also reset `MainGrindModel`/`CoastModel`'s
+accumulated confidence (rate_n_effective had reached 1407 real
+samples), not just the topup fields -- the point estimates themselves
+had already converged to match the compiled-in priors almost exactly,
+so this is a confidence reset, not a wrong-value regression. Two other
+owner corrections from the same review, applied at the same time:
+`MainGrindModel`/`CoastModel` no longer decay with recency (this
+grinder hasn't drifted in 7 years -- AR-056), and every topup pulse
+duration is now hard-floored at 350ms regardless of what's learned,
+since the relay physically stalls below ~300ms (AR-057). SPA's Model
+tab now renders the live LUT as a table instead of slope/deadtime/noise
+scalars. 21/21 native tests pass (rewritten for the new API); firmware
+and SPA deployed and confirmed live.
 
 **Live debugging session (2026-09-11, after the first OTA deploy):**
 diagnosed and fixed, in order, using WS `"log"`-channel diagnostics

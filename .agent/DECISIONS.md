@@ -294,3 +294,39 @@ the tightly-fitted, already-live-verified number layouts (IDLE's fixed
 decimal-point anchoring, the grinding block's dynamically centered
 digit layout) rather than risk a pixel-overflow regression that
 couldn't be caught without the physical device in hand.
+
+**D23 — Reverses part of D7: TOPUP's fitted-line model replaced with a
+self-tuning per-gap-bucket lookup table.** D7 (`design/topup-model.md`)
+deliberately replaced the pre-rewrite firmware's hand-tuned 6-bucket
+lookup table with a single fitted line (`weight_added = slope * (t -
+deadtime)`) precisely because a lookup table couldn't adapt as
+conditions changed. Live testing after AR-052/AR-057 unstuck the model
+enough to actually fire pulses showed why that line doesn't hold at
+short topup durations: real measured pulse noise (0.23g) is far larger
+than the cold-start prior assumed, because a short pulse's output is a
+discrete, clumpy release (grounds either dislodge or don't), not a
+smooth function of duration the way the *main* grind's is (which runs
+long enough to average over many such events). The owner, watching
+this live, put it plainly: "there's nothing intentional about this
+behavior... it's just randomly adding a bunch of clumps." No amount of
+retuning the fitted line's safety margin fixes a model whose underlying
+shape is wrong for the regime it's applied to.
+
+The fix keeps the "adapts over time" property D7 wanted but drops the
+single-formula assumption: `TopupModelV1` v3 stores one tuned pulse
+duration per 0.1g-wide remaining-gap bucket (0.0-1.0g, 10 buckets --
+recovered the pre-rewrite firmware's exact bucket-boundary scheme from
+`git show main:src/main.cpp`, since its manually-tuned values were
+never in source control, only ever the live device's own EEPROM/NVS),
+each nudged by an online rule (asymmetric: corrects overshoot faster
+than it grows duration for undershoot) from real pulses. This is
+functionally the pre-rewrite table's own design, just tuned from data
+going forward instead of by hand once -- the earlier "replace the
+static table" framing undersold what made the fitted-line approach
+actually break: it wasn't the *table* that was the problem, it was
+that a table entry never adapted; a self-tuning table keeps the
+adaptation without forcing the wrong (smooth, continuous) functional
+form onto physically discrete behavior. See ARS.md AR-059 for the full
+technical detail and the real side effect (the version bump this
+required also reset `MainGrindModel`/`CoastModel`'s accumulated
+confidence, not just the topup fields).
