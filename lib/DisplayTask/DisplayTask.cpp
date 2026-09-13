@@ -861,6 +861,28 @@ void displayTaskFn(void *) {
   bool havePendingCmd = false;
   DisplayCommand pendingCmd{};
 
+  // Applies one command as the screen's new state: mode-change side effects
+  // (full clear, connection-indicator reset, screensaver backlight toggle),
+  // the render itself, and updating `last`/`havePendingCmd`. Shared by the
+  // live-command and flush-pending-after-boot branches below so the two
+  // can't drift apart (e.g. one of them silently skipping the backlight
+  // toggle, or leaving a stale pending command primed to replay later).
+  auto applyCommand = [&](const DisplayCommand &cmd) {
+    bool modeChanged = cmd.mode != last.mode;
+    if (modeChanged) {
+      g_tft.fillScreen(ST7735_BLACK);
+      g_lastConnColor = 0;  // a freshly-cleared screen has no indicator yet
+      if (cmd.mode == DisplayMode::SCREENSAVER) {
+        backlightPercent(0);
+      } else if (last.mode == DisplayMode::SCREENSAVER) {
+        backlightPercent(100);
+      }
+    }
+    renderMode(cmd, modeChanged);
+    last = cmd;
+    havePendingCmd = false;
+  };
+
   const TickType_t frameFloor = pdMS_TO_TICKS(16);  // ~60fps frame-rate floor.
   TickType_t lastFrame = xTaskGetTickCount();
 
@@ -879,28 +901,10 @@ void displayTaskFn(void *) {
         pendingCmd = cmd;
         havePendingCmd = true;
       } else {
-        bool modeChanged = cmd.mode != last.mode;
-        if (modeChanged) {
-          g_tft.fillScreen(ST7735_BLACK);
-          g_lastConnColor = 0;  // a freshly-cleared screen has no indicator yet
-          if (cmd.mode == DisplayMode::SCREENSAVER) {
-            backlightPercent(0);
-          } else if (last.mode == DisplayMode::SCREENSAVER) {
-            backlightPercent(100);
-          }
-        }
-        renderMode(cmd, modeChanged);
-        last = cmd;
+        applyCommand(cmd);
       }
     } else if (havePendingCmd && !holdingBoot) {
-      bool modeChanged = pendingCmd.mode != last.mode;
-      if (modeChanged) {
-        g_tft.fillScreen(ST7735_BLACK);
-        g_lastConnColor = 0;
-      }
-      renderMode(pendingCmd, modeChanged);
-      last = pendingCmd;
-      havePendingCmd = false;
+      applyCommand(pendingCmd);
     } else if (last.mode == DisplayMode::BOOT || last.mode == DisplayMode::OTA_UPDATE) {
       // These two modes animate continuously (boot splash, OTA liquid
       // fill) rather than only redrawing when new state arrives -- every

@@ -55,6 +55,8 @@ uint32_t g_topup_pulse_duration_ms = 0;
 float g_topup_weight_before_pulse = 0.0f;
 float g_topup_gap_at_fire = 0.0f;  ///< Gap at DECIDING time, for recordPulse's bucket lookup.
 
+uint32_t g_tare_requested_after_seq = 0;  ///< sample_seq at TareRequest send -- see TARE's own wait.
+
 bool g_finalize_done = false;
 float g_finalize_latched_delta = 0.0f;  ///< Delta weight at the moment FINALIZE latched -- see the cup-lift dismiss check.
 
@@ -126,7 +128,8 @@ void sendLog(const char *line) {
 
 /** Moves the FSM to `next`, resetting the state-entry timer and active bit. */
 void transitionTo(DosingState next) {
-  if (next != g_state) {
+  bool state_changing = next != g_state;
+  if (state_changing) {
     char line[96];
     snprintf(line, sizeof(line), "state %s -> %s", dosingStateName(g_state),
               dosingStateName(next));
@@ -137,12 +140,16 @@ void transitionTo(DosingState next) {
     // done -- only the weight readout should keep moving on this screen.
     g_frozen_elapsed_ms = g_grinder_started_ms ? millis() - g_grinder_started_ms : 0;
   }
-  if (next == DosingState::TARE) {
+  if (next == DosingState::TARE && state_changing) {
     // Every dose gets a fresh hardware re-tare, not just whatever the
     // idle auto-tare last happened to leave behind (which can be
-    // several seconds stale). TARE's own wait for g_last_sample.stable
-    // below is unaffected -- tareRaw is a subtracted constant, not part
-    // of the ring buffer's own stability computation.
+    // several seconds stale). The retare itself lands on Scale task's
+    // next tick at the earliest -- recording the newest sample_seq
+    // already seen lets TARE's own wait below require a sample produced
+    // after this request, not a stale one already sitting in
+    // g_last_sample from before the retare (which would otherwise still
+    // pass the stability check and silently latch the old baseline).
+    g_tare_requested_after_seq = g_have_sample ? g_last_sample.sample_seq : 0;
     TareRequest req{};
     xQueueSend(g_tare_request_q, &req, 0);
   }
@@ -513,7 +520,15 @@ void dosingTaskFn(void *) {
         // Wait for a settled reading, same bar as the ADC's own auto-tare --
         // a mid-transient sample here would bias every stop decision for the
         // rest of the session, since they're all deltas from this baseline.
-        if (g_have_sample && g_last_sample.stable) {
+        // Also require the sample to postdate the re-tare request itself
+        // (sample_seq compared with wraparound-safe signed subtraction) --
+        // otherwise a cup that was already sitting stable before TARE was
+        // even entered would latch on the very next tick, using a baseline
+        // from before the fresh hardware re-tare actually landed.
+        bool sample_postdates_retare =
+            g_have_sample &&
+            static_cast<int32_t>(g_last_sample.sample_seq - g_tare_requested_after_seq) > 0;
+        if (sample_postdates_retare && g_last_sample.stable) {
           g_grams_on_grind_start = g_last_sample.grams;  // software tare baseline
           g_session_id = g_next_session_id++;
           g_main_grind_model->startSession();

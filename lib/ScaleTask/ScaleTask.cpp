@@ -92,17 +92,17 @@ void scaleTaskFn(void *) {
     // dose is confirmed -- drained (and applied) before this tick's
     // sample is built, so the very next sample already reflects it.
     // tare() captures the ring buffer's mean unconditionally, so retry
-    // until it lands on a stable one (same pattern as the boot tare
-    // above, and as the pre-rewrite firmware's TARE state, which held
-    // there indefinitely too) -- a timeout here would let tareRaw freeze
-    // on a mid-transient mean while DosingTask's own unbounded stable
-    // wait moves on regardless, since ring-buffer self-consistency alone
-    // says nothing about whether the tare it's relative to was right.
+    // until it lands on a stable one, bounded the same way the boot tare
+    // above is: an unbounded retry here would stall this whole task
+    // (and with it every sample this device's display/WS/telemetry
+    // depend on) indefinitely if the load cell never settles, with no
+    // recovery short of a power cycle.
     TareRequest tareReq;
     while (xQueueReceive(g_tare_request_q, &tareReq, 0) == pdTRUE) {
+      constexpr uint32_t kPreDoseTareTimeoutMs = 5000;
       uint32_t waitStartMs = millis();
       uint32_t lastWarnMs = waitStartMs;
-      while (!g_ads.tare()) {
+      while (!g_ads.tare() && millis() - waitStartMs < kPreDoseTareTimeoutMs) {
         vTaskDelay(pdMS_TO_TICKS(2));
         g_ads.readADCIfReady();
         uint32_t now = millis();
@@ -111,6 +111,9 @@ void scaleTaskFn(void *) {
                          static_cast<unsigned>(now - waitStartMs));
           lastWarnMs = now;
         }
+      }
+      if (millis() - waitStartMs >= kPreDoseTareTimeoutMs) {
+        Serial.println("[Scale] pre-dose tare never stabilized; using last reading");
       }
     }
 
