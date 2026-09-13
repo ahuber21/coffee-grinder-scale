@@ -58,6 +58,19 @@ constexpr uint16_t kColorSecondary = 0x9CD3;      ///< #98989D -- supporting tex
 constexpr uint16_t kColorTrack = 0x39C7;          ///< #3A3A3C -- progress bar track.
 constexpr uint16_t kColorAccentBlue = 0x0C3F;     ///< #0A84FF -- active/primary action.
 constexpr uint16_t kColorAccentGreen = 0x368B;    ///< #30D158 -- success/finalize.
+constexpr uint16_t kColorOtaTrack = 0x0842;       ///< Near-black navy -- OTA screen's unfilled region.
+constexpr uint16_t kColorOtaBlue = 0x0B7F;        ///< Richer, more saturated blue than kColorAccentBlue -- this screen's own accent, not the shared UI one.
+
+/** Linearly interpolates two RGB565 colors by `t` (clamped to 0..1). */
+uint16_t lerpColor565(uint16_t a, uint16_t b, float t) {
+  t = t < 0.0f ? 0.0f : (t > 1.0f ? 1.0f : t);
+  int ar = (a >> 11) & 0x1F, ag = (a >> 5) & 0x3F, ab = a & 0x1F;
+  int br = (b >> 11) & 0x1F, bg = (b >> 5) & 0x3F, bb = b & 0x1F;
+  int r = ar + static_cast<int>((br - ar) * t);
+  int g = ag + static_cast<int>((bg - ag) * t);
+  int bl = ab + static_cast<int>((bb - ab) * t);
+  return static_cast<uint16_t>((r << 11) | (g << 5) | bl);
+}
 
 /** Cache of the top-of-screen progress bar's last-drawn width/color. */
 struct { int16_t lastWidth = -1; uint16_t lastColor = 0; } g_progress;
@@ -608,37 +621,175 @@ void drawDebugLayout(const char *ip, int32_t rawAdc, bool stable, bool force) {
   g_debug.haveAny = true;
 }
 
-// --- OTA_UPDATE layout: "UPDATE" top row, percent bottom row ---------------
+// --- OTA_UPDATE layout: liquid-fill progress, blue rising to green ---------
 
-struct { uint8_t percent = 0xFF; } g_ota;
+/** Cache of the OTA screen's animation clock and last real redraw. */
+struct {
+  uint8_t percent = 0xFF;
+  uint32_t startMs = 0;
+  uint32_t lastDrawMs = 0;
+} g_ota;
 
-/** Draws (or skips, if unchanged) the OTA_UPDATE screen's progress percent. */
+/**
+ * Full-screen "liquid fill" OTA progress: a blue-to-green gradient rises
+ * from the bottom as `percent` climbs, banded for a sense of depth, with
+ * a soft highlight that sweeps upward through the fill on a loop so the
+ * screen keeps visibly moving between the relatively infrequent progress
+ * callbacks ArduinoOTA actually delivers. Redrawn in full every call
+ * (unlike this file's other layouts) rather than diffed -- animation-only
+ * ticks need a fresh frame regardless of whether `percent` changed, and a
+ * full repaint of this screen is cheap enough on this panel not to matter.
+ */
 void drawOtaLayout(uint8_t percent, bool force) {
-  if (!force && percent == g_ota.percent) {
+  uint32_t now = millis();
+  if (force || g_ota.percent == 0xFF) {
+    g_ota.startMs = now;
+  }
+  // Throttles actual SPI work to ~11fps for animation-only ticks (the
+  // display task itself still polls at ~60fps); a real percent change
+  // or a mode-entry force always redraws immediately.
+  constexpr uint32_t kAnimFrameMs = 90;
+  if (!force && percent == g_ota.percent && (now - g_ota.lastDrawMs) < kAnimFrameMs) {
     return;
   }
-  char bottom[8];
-  snprintf(bottom, sizeof(bottom), "%3u%%", percent);
-  drawTwoRow("UPDATE", bottom, force);
-  // drawTwoRow's top row always clears y=0.. regardless of `force` (it
-  // only skips its own one-time full-row clear, not the per-call text
-  // redraw) -- always redraw the bar after it rather than relying on
-  // drawProgressBar's own diff, which could otherwise stay skipped while
-  // the pixels underneath were just wiped.
-  drawProgressBar(percent / 100.0f, kColorAccentBlue, /*force=*/true);
   g_ota.percent = percent;
+  g_ota.lastDrawMs = now;
+
+  float frac = percent / 100.0f;
+  int16_t filled = static_cast<int16_t>(frac * kH + 0.5f);
+  // Biased toward frac^2.2 rather than frac itself, so the fill reads as
+  // a rich blue for most of the update and only turns green in the last
+  // stretch -- a straight linear blend started looking teal by the
+  // midpoint, which read as muddy rather than "getting close."
+  uint16_t baseColor = lerpColor565(kColorOtaBlue, kColorAccentGreen, powf(frac, 2.2f));
+
+  // Unfilled region, top of screen.
+  if (filled < kH) {
+    g_tft.fillRect(0, 0, kW, kH - filled, kColorOtaTrack);
+  }
+
+  // Filled region in horizontal bands, lightest at the rising surface and
+  // darkening slightly with depth, plus a brighter band riding through it
+  // that sweeps bottom-to-top every ~1.6s.
+  if (filled > 0) {
+    constexpr int16_t kBands = 10;
+    constexpr uint32_t kShimmerPeriodMs = 1600;
+    float shimmerPhase = fmodf(static_cast<float>(now - g_ota.startMs), kShimmerPeriodMs) /
+                          kShimmerPeriodMs;
+    int16_t shimmerY = kH - static_cast<int16_t>(shimmerPhase * filled);
+    constexpr int16_t kShimmerHalfH = 6;
+
+    int16_t bandH = filled / kBands;
+    if (bandH < 1) bandH = 1;
+    for (int16_t i = 0; i < kBands && i * bandH < filled; ++i) {
+      int16_t y = kH - filled + i * bandH;
+      int16_t h = (i == kBands - 1) ? (filled - i * bandH) : bandH;
+      if (h <= 0) continue;
+      // A light touch -- enough to read as depth without muddying most
+      // of the fill toward the near-black track color.
+      float depth = static_cast<float>(i) / kBands;
+      uint16_t bandColor = lerpColor565(baseColor, kColorOtaTrack, depth * 0.12f);
+      if (y + h > shimmerY - kShimmerHalfH && y < shimmerY + kShimmerHalfH) {
+        // Toward a cool cyan-white, not neutral white, so the highlight
+        // stays in the same blue family instead of looking washed out.
+        bandColor = lerpColor565(bandColor, 0xAFFF, 0.4f);
+      }
+      g_tft.fillRect(0, y, kW, h, bandColor);
+    }
+  }
+
+  // Big centered percent, white-on-black-shadow so it reads over any band.
+  char pct[6];
+  snprintf(pct, sizeof(pct), "%u%%", percent);
+  constexpr uint8_t pctSize = 3;
+  int16_t x, y;
+  uint16_t w, h;
+  g_tft.setTextSize(pctSize);
+  g_tft.getTextBounds(pct, 0, 0, &x, &y, &w, &h);
+  int16_t textX = (kW - static_cast<int16_t>(w)) / 2;
+  int16_t textY = (kH - static_cast<int16_t>(h)) / 2;
+  g_tft.setTextColor(ST7735_BLACK);
+  g_tft.setCursor(textX + 1, textY + 1);
+  g_tft.print(pct);
+  g_tft.setTextColor(ST7735_WHITE);
+  g_tft.setCursor(textX, textY);
+  g_tft.print(pct);
+
+  // Small label above the number -- same shadow trick, since a fast
+  // update can have the fill reach this high before it's done.
+  constexpr uint8_t labelSize = 1;
+  const char *label = "UPDATING";
+  g_tft.setTextSize(labelSize);
+  g_tft.getTextBounds(label, 0, 0, &x, &y, &w, &h);
+  int16_t labelX = (kW - static_cast<int16_t>(w)) / 2;
+  int16_t labelY = textY - static_cast<int16_t>(h) - 8;
+  g_tft.setTextColor(ST7735_BLACK);
+  g_tft.setCursor(labelX + 1, labelY + 1);
+  g_tft.print(label);
+  g_tft.setTextColor(ST7735_WHITE);
+  g_tft.setCursor(labelX, labelY);
+  g_tft.print(label);
+}
+
+// --- BOOT layout: wordmark, breathing accent bar, expanding ripples -------
+
+/** Cache of the BOOT splash's animation clock. */
+struct { uint32_t startMs = 0; } g_boot;
+
+/**
+ * Boot splash: the "Eureka" wordmark (drawn once, per drawCentered's own
+ * diffing) with a breathing accent bar underneath and a pair of
+ * staggered rings expanding below that -- a small, deliberate sign of
+ * life while the rest of the system finishes booting, rather than a
+ * static screen that gives no indication anything is happening.
+ */
+void drawBootLayout(bool force) {
+  uint32_t now = millis();
+  if (force) {
+    g_boot.startMs = now;
+    drawCentered("Eureka", 2, ST7735_WHITE, true);
+  }
+  uint32_t elapsed = now - g_boot.startMs;
+
+  // Accent bar: width breathes smoothly between 22 and 34px. Always
+  // erased over its full possible width first so a shrinking bar never
+  // leaves a stale sliver from a wider previous frame.
+  constexpr int16_t barY = kH / 2 + 14;
+  constexpr int16_t barMaxW = 34;
+  constexpr int16_t barMinW = 22;
+  constexpr float kBarPeriodMs = 1400.0f;
+  float barPhase =
+      0.5f + 0.5f * sinf(elapsed * (2.0f * static_cast<float>(M_PI)) / kBarPeriodMs);
+  int16_t barW = barMinW + static_cast<int16_t>(barPhase * (barMaxW - barMinW));
+  g_tft.fillRect(kW / 2 - barMaxW / 2, barY, barMaxW, 3, ST7735_BLACK);
+  g_tft.fillRoundRect(kW / 2 - barW / 2, barY, barW, 3, 1, kColorAccentBlue);
+
+  // Two staggered rings expanding outward from a point below the bar,
+  // fading from accent blue to black as they grow -- confined to its own
+  // region, well clear of the wordmark and bar above, so a plain
+  // full-width clear each frame can't touch either.
+  constexpr int16_t cx = kW / 2;
+  constexpr int16_t clearY = barY + 11;
+  constexpr int16_t kMaxRadius = 24;
+  constexpr int16_t cy = clearY + kMaxRadius;
+  constexpr float kRipplePeriodMs = 1600.0f;
+
+  g_tft.fillRect(0, clearY, kW, kH - clearY, ST7735_BLACK);
+  for (int i = 0; i < 2; ++i) {
+    float offset = i * kRipplePeriodMs * 0.5f;
+    float phase = fmodf(static_cast<float>(elapsed) + offset, kRipplePeriodMs) / kRipplePeriodMs;
+    int16_t radius = static_cast<int16_t>(phase * kMaxRadius);
+    if (radius <= 0) continue;
+    uint16_t color = lerpColor565(kColorAccentBlue, ST7735_BLACK, phase);
+    g_tft.drawCircle(cx, cy, radius, color);
+  }
 }
 
 /** Dispatches one DisplayCommand to its mode's layout function. */
 void renderMode(const DisplayCommand &cmd, bool force) {
   switch (cmd.mode) {
     case DisplayMode::BOOT:
-      drawCentered("Eureka", 2, ST7735_WHITE, force);
-      if (force) {
-        // A small brand accent under the wordmark -- drawn once, since
-        // this mode is otherwise static for its whole (brief) lifetime.
-        g_tft.fillRoundRect(kW / 2 - 14, kH / 2 + 14, 28, 3, 1, kColorAccentBlue);
-      }
+      drawBootLayout(force);
       break;
 
     case DisplayMode::IDLE:
@@ -697,26 +848,65 @@ void displayTaskFn(void *) {
   last.mode = DisplayMode::BOOT;
   renderMode(last, true);
 
+  // Dosing task's own boot gate (settings/scale/display ready) typically
+  // clears well under a second in -- long before the splash's wordmark and
+  // ripples have had any time to actually be seen -- and its first real
+  // command overwrites this single-slot mailbox immediately. Holding BOOT
+  // on screen for a minimum stretch regardless of what's already arrived
+  // is the only way the splash is ever visible rather than just flashed
+  // past; correctness of the FSM itself doesn't depend on this, only what
+  // gets drawn.
+  constexpr uint32_t kMinBootSplashMs = 1800;
+  uint32_t bootSplashStartMs = millis();
+  bool havePendingCmd = false;
+  DisplayCommand pendingCmd{};
+
   const TickType_t frameFloor = pdMS_TO_TICKS(16);  // ~60fps frame-rate floor.
   TickType_t lastFrame = xTaskGetTickCount();
 
   for (;;) {
     DisplayCommand cmd;
+    bool holdingBoot =
+        last.mode == DisplayMode::BOOT && (millis() - bootSplashStartMs) < kMinBootSplashMs;
+
     // Block up to the frame floor for a new command; this both rate-limits
     // needless redraw work and lets the task idle when nothing changed.
     if (xQueueReceive(g_display_mailbox, &cmd, frameFloor) == pdTRUE) {
-      bool modeChanged = cmd.mode != last.mode;
+      if (holdingBoot && cmd.mode != DisplayMode::BOOT) {
+        // Keep the freshest real command waiting rather than the first
+        // one seen -- the mailbox itself is single-slot, so an early
+        // "IDLE, 0.0g" would otherwise go stale under a later one.
+        pendingCmd = cmd;
+        havePendingCmd = true;
+      } else {
+        bool modeChanged = cmd.mode != last.mode;
+        if (modeChanged) {
+          g_tft.fillScreen(ST7735_BLACK);
+          g_lastConnColor = 0;  // a freshly-cleared screen has no indicator yet
+          if (cmd.mode == DisplayMode::SCREENSAVER) {
+            backlightPercent(0);
+          } else if (last.mode == DisplayMode::SCREENSAVER) {
+            backlightPercent(100);
+          }
+        }
+        renderMode(cmd, modeChanged);
+        last = cmd;
+      }
+    } else if (havePendingCmd && !holdingBoot) {
+      bool modeChanged = pendingCmd.mode != last.mode;
       if (modeChanged) {
         g_tft.fillScreen(ST7735_BLACK);
-        g_lastConnColor = 0;  // a freshly-cleared screen has no indicator yet
-        if (cmd.mode == DisplayMode::SCREENSAVER) {
-          backlightPercent(0);
-        } else if (last.mode == DisplayMode::SCREENSAVER) {
-          backlightPercent(100);
-        }
+        g_lastConnColor = 0;
       }
-      renderMode(cmd, modeChanged);
-      last = cmd;
+      renderMode(pendingCmd, modeChanged);
+      last = pendingCmd;
+      havePendingCmd = false;
+    } else if (last.mode == DisplayMode::BOOT || last.mode == DisplayMode::OTA_UPDATE) {
+      // These two modes animate continuously (boot splash, OTA liquid
+      // fill) rather than only redrawing when new state arrives -- every
+      // other mode is static between real state changes, so it's cheap
+      // for this branch to just re-render with whatever was last sent.
+      renderMode(last, false);
     }
 
     vTaskDelayUntil(&lastFrame, frameFloor);
