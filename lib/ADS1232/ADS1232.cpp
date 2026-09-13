@@ -28,7 +28,7 @@ ADS1232::ADS1232(uint8_t pdwn, uint8_t sclk, uint8_t dout, uint8_t spd,
       spdPin(spd),
       gain1Pin(gain1pin),
       gain0Pin(gain0pin),
-      calFactor(1.0f),
+      calFactor(1.0),
       ringBufferIndex(0),
       ringBufferSize(1) {
   resetBuffer();
@@ -184,12 +184,15 @@ bool ADS1232::tare() {
   return isStable;
 }
 
-void ADS1232::setCalFactor(float cal) { calFactor = cal; }
+void ADS1232::setCalFactor(double cal) { calFactor = cal; }
 
 double ADS1232::getUnits() {
   bool isStable = false;
-  float raw = getRaw(isStable) - tareRaw;
-  float units = raw * calFactor;
+  // double throughout, not just on the return type -- computing the
+  // multiplication itself in float would throw away calFactor's extra
+  // precision right here regardless of what type carried it in.
+  double raw = getRaw(isStable) - tareRaw;
+  double units = raw * calFactor;
 
   // First run (or invalid last) always accept
   if (isnan(_lastUnitsFiltered)) {

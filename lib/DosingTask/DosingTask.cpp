@@ -56,6 +56,7 @@ float g_topup_weight_before_pulse = 0.0f;
 float g_topup_gap_at_fire = 0.0f;  ///< Gap at DECIDING time, for recordPulse's bucket lookup.
 
 bool g_finalize_done = false;
+float g_finalize_latched_delta = 0.0f;  ///< Delta weight at the moment FINALIZE latched -- see the cup-lift dismiss check.
 
 uint32_t g_last_activity_ms = 0;  ///< Last button press or IDLE entry -- drives the SCREENSAVER timer.
 float g_screensaver_baseline_grams = 0.0f;  ///< Weight at SCREENSAVER entry, for the wake check.
@@ -135,6 +136,15 @@ void transitionTo(DosingState next) {
     // Freezes the displayed elapsed time once dispensing is actually
     // done -- only the weight readout should keep moving on this screen.
     g_frozen_elapsed_ms = g_grinder_started_ms ? millis() - g_grinder_started_ms : 0;
+  }
+  if (next == DosingState::TARE) {
+    // Every dose gets a fresh hardware re-tare, not just whatever the
+    // idle auto-tare last happened to leave behind (which can be
+    // several seconds stale). TARE's own wait for g_last_sample.stable
+    // below is unaffected -- tareRaw is a subtracted constant, not part
+    // of the ring buffer's own stability computation.
+    TareRequest req{};
+    xQueueSend(g_tare_request_q, &req, 0);
   }
   if (next == DosingState::SCREENSAVER) {
     // Reference point for the wake-on-weight-change check below.
@@ -514,6 +524,13 @@ void dosingTaskFn(void *) {
           // be sent as "current weight" here, same reasoning as everywhere
           // else this value is used.
           sendTelemetry(TelemetryType::TARGET, 0.0f, g_target_grams);
+          // Debug-only stats: the same physical dosing cup should tare to
+          // roughly the same raw ADC count every time -- logging it (never
+          // persisting it as a calibration constant) lets that assumption
+          // actually be checked across sessions instead of just presumed.
+          // Sent after TARGET, not before: TelemetryTask's session row
+          // (which this references by FK) is only created on that event.
+          sendTelemetry(TelemetryType::TARE_DEBUG, g_grams_on_grind_start);
           transitionTo(DosingState::GRINDING);
         }
         break;
@@ -565,13 +582,25 @@ void dosingTaskFn(void *) {
           // target_weight_g (both plain dose amounts) -- the absolute
           // reading includes whatever the cup itself weighs, which is
           // exactly the "3-digit number" bug.
-          sendTelemetry(TelemetryType::COMPLETE,
-                        g_have_sample ? g_last_sample.grams - g_grams_on_grind_start : 0,
-                        g_target_grams);
+          g_finalize_latched_delta = g_have_sample ? g_last_sample.grams - g_grams_on_grind_start : 0;
+          sendTelemetry(TelemetryType::COMPLETE, g_finalize_latched_delta, g_target_grams);
           g_last_coffee_ms = millis();
           g_finalize_done = true;
         }
-        if (millis() - g_state_entered_ms >= g_settings.finalize_timeout_ms) {
+        // Lifting the cup swings the absolute reading (and so the
+        // delta) by roughly the cup's own weight -- tens of grams at
+        // least -- which the fixed-width display layout was never sized
+        // for (a 3-digit, possibly-negative number overflows the line).
+        // Rather than redesign the layout for a case nobody needs to
+        // read, treat a swing this large as "the user picked up the
+        // cup, they've seen the result" and dismiss straight to IDLE.
+        constexpr float kCupLiftDeltaG = 3.0f;
+        bool cupLifted =
+            g_have_sample &&
+            fabsf((g_last_sample.grams - g_grams_on_grind_start) - g_finalize_latched_delta) >=
+                kCupLiftDeltaG;
+        if (g_finalize_done &&
+            (cupLifted || millis() - g_state_entered_ms >= g_settings.finalize_timeout_ms)) {
           g_finalize_done = false;
           transitionTo(DosingState::IDLE);
         }

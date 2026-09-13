@@ -67,7 +67,7 @@ class ADS1232 {
 
   // this is the number that will help us translate voltage
   // read from the ADC to units (grams,whatever).
-  void setCalFactor(float cal);
+  void setCalFactor(double cal);
 
   void setRingBufferSize(uint8_t datasetsize);
 
@@ -105,7 +105,7 @@ class ADS1232 {
 
   // ADC config
   int32_t tareRaw;
-  float calFactor;
+  double calFactor;  // see SettingsSnapshot::calibration_factor for why this isn't float
 
   // ADC values
   uint8_t ringBufferIndex;

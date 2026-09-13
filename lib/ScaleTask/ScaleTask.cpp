@@ -88,6 +88,32 @@ void scaleTaskFn(void *) {
 
     g_ads.readADCIfReady();
 
+    // Explicit per-dose re-tare, requested by Dosing task the instant a
+    // dose is confirmed -- drained (and applied) before this tick's
+    // sample is built, so the very next sample already reflects it.
+    // tare() captures the ring buffer's mean unconditionally, so retry
+    // until it lands on a stable one (same pattern as the boot tare
+    // above, and as the pre-rewrite firmware's TARE state, which held
+    // there indefinitely too) -- a timeout here would let tareRaw freeze
+    // on a mid-transient mean while DosingTask's own unbounded stable
+    // wait moves on regardless, since ring-buffer self-consistency alone
+    // says nothing about whether the tare it's relative to was right.
+    TareRequest tareReq;
+    while (xQueueReceive(g_tare_request_q, &tareReq, 0) == pdTRUE) {
+      uint32_t waitStartMs = millis();
+      uint32_t lastWarnMs = waitStartMs;
+      while (!g_ads.tare()) {
+        vTaskDelay(pdMS_TO_TICKS(2));
+        g_ads.readADCIfReady();
+        uint32_t now = millis();
+        if (now - lastWarnMs >= 2000) {
+          Serial.printf("[Scale] pre-dose tare still not stable after %u ms\n",
+                         static_cast<unsigned>(now - waitStartMs));
+          lastWarnMs = now;
+        }
+      }
+    }
+
     bool stable = false;
     int32_t raw = g_ads.getRaw(stable);
 
@@ -98,6 +124,10 @@ void scaleTaskFn(void *) {
         .sample_seq = seq++,
         .millis = millis(),
     };
+
+    // Always current, no backlog -- see the mailbox's own doc comment in
+    // Queues.h for why this is separate from g_scale_sample_q.
+    xQueueOverwrite(g_latest_sample_mailbox, &sample);
 
     bool dosing_active = (xEventGroupGetBits(g_sys_events) & kDosingActiveBit) != 0;
     if (g_prev_dosing_active && !dosing_active) {

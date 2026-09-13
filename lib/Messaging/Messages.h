@@ -90,6 +90,11 @@ enum class TelemetryType : uint8_t {
   COMPLETE,
   LOG_LINE,
   MODEL_STATE,
+  // Debug-only: the tare baseline's raw ADC count and converted grams, one
+  // per session, so the same physical dosing cup's tare can be checked for
+  // consistency across sessions -- not a calibration input, just stats.
+  // See .agent/design/db-schema/002_tare_debug_stats.sql.
+  TARE_DEBUG,
 };
 
 /**
@@ -142,6 +147,16 @@ struct DoseRequest {
 };
 
 /**
+ * An explicit hardware re-tare request, sent from Dosing task to Scale
+ * task once the confirm button is pressed -- guarantees every dose starts
+ * from a freshly-zeroed ADC baseline rather than whatever the last
+ * opportunistic idle auto-tare happened to leave behind (up to
+ * kAutoTareMinIntervalMs/kAutoTareIdleReturnCooldownMs stale). No payload
+ * needed; the request itself is the whole message.
+ */
+struct TareRequest {};
+
+/**
  * The single source of truth for tunable settings, distributed to
  * every task via one overwrite mailbox per subscriber. Persisted via
  * the write-through path below rather than a dirty flag, and carries
@@ -157,13 +172,22 @@ struct SettingsSnapshot {
   uint8_t speed = 10;
   uint8_t gain = 128;
   /*
-   * 1.0f, not 0.0f: ScaleTask forwards this straight into
+   * 1.0, not 0.0: ScaleTask forwards this straight into
    * ADS1232::setCalFactor (units = raw * calFactor), and the driver's
-   * own constructor already defaults calFactor to 1.0f for exactly this
+   * own constructor already defaults calFactor to 1.0 for exactly this
    * reason -- a fresh/uncalibrated scale should read raw counts
    * (visibly wrong, but a real number), not silently read 0.0g forever.
+   *
+   * double, not float: this gets multiplied against raw ADC deltas that
+   * can run into the tens of thousands of counts, and a realistic
+   * calibration factor for this hardware has ~6-7 significant digits of
+   * its own (e.g. 0.000924583895...) -- float32's ~7 significant digits
+   * total leaves it with essentially nothing to spare once combined with
+   * that multiplication, silently rounding away real precision on every
+   * write. double carries the extra headroom through storage (NVS),
+   * the WS wire format, and the multiplication itself.
    */
-  float calibration_factor = 1.0f;
+  double calibration_factor = 1.0;
 
   // Dosing config (Dosing task's slice).
   float target_dose_single = 18.0f;
@@ -231,7 +255,11 @@ enum class SettingsFieldId : uint16_t {
 struct SettingsWriteRequest {
   SettingsFieldId field_id;
   union {
-    float f;
+    // double, not float -- calibration_factor needs the extra precision
+    // (see SettingsSnapshot's own comment); every other field that reads
+    // this member is unaffected, since a double carries any float value
+    // through unchanged and narrows back losslessly for those.
+    double f;
     uint32_t u;
     bool b;
   } value;

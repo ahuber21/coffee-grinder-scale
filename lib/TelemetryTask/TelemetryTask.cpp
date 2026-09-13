@@ -214,6 +214,22 @@ void postTopupPulseEvent(const TelemetryEvent &ev) {
   postgrestRequest("POST", "/events", String(body));
 }
 
+/**
+ * TARE_DEBUG -> POST /tare_debug: debug-only row logging this session's
+ * tare baseline (raw ADC count + converted grams). Purely observational --
+ * see .agent/design/db-schema/002_tare_debug_stats.sql -- never read back
+ * by the firmware or folded into calibration.
+ */
+void postTareDebug(const TelemetryEvent &ev) {
+  if (!g_session_open) return;
+
+  char body[160];
+  snprintf(body, sizeof(body), "{\"session_id\":\"%s\",\"raw_adc\":%ld,\"grams\":%.4f}",
+           g_session_uuid, static_cast<long>(ev.raw_adc), ev.grams);
+
+  postgrestRequest("POST", "/tare_debug", String(body));
+}
+
 /** RAW_SAMPLE -> POST /raw_samples: forward-compatible, not emitted yet. */
 void postRawSample(const TelemetryEvent &ev) {
   if (!g_session_open) return;
@@ -282,6 +298,9 @@ void telemetryTaskFn(void *) {
           break;
         case TelemetryType::RAW_SAMPLE:
           postRawSample(ev);
+          break;
+        case TelemetryType::TARE_DEBUG:
+          postTareDebug(ev);
           break;
         case TelemetryType::FINALIZE:
           g_finalize_seen = true;

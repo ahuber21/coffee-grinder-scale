@@ -78,6 +78,8 @@ const char *telemetryTypeToString(TelemetryType t) {
       return "log";
     case TelemetryType::MODEL_STATE:
       return "model_state";
+    case TelemetryType::TARE_DEBUG:
+      return "tare_debug";
   }
   return "unknown";
 }
@@ -96,6 +98,10 @@ String buildTelemetryJson(const TelemetryEvent &ev) {
       doc["raw_adc"] = ev.raw_adc;
       doc["grams"] = ev.grams;
       doc["stable"] = ev.stable;
+      break;
+    case TelemetryType::TARE_DEBUG:
+      doc["raw_adc"] = ev.raw_adc;
+      doc["grams"] = ev.grams;
       break;
     case TelemetryType::TOPUP_PULSE:
       doc["grams"] = ev.grams;
@@ -129,12 +135,29 @@ String buildTelemetryJson(const TelemetryEvent &ev) {
   return out;
 }
 
+/*
+ * ArduinoJson's double serializer (TextFormatter::writeFloat) always
+ * prints a fixed 9 places after the decimal point, not 9 significant
+ * digits -- for a value with calibration_factor's real magnitude
+ * (~1e-4 to ~1e-3), 3-4 of those 9 places are wasted on leading zeros,
+ * so only ~6 significant digits ever survive the round trip to the
+ * browser and back, no matter how precisely it's stored internally
+ * (verified: SettingsSnapshot/NVS/ADS1232::calFactor already carry the
+ * full double precision correctly -- only the JSON text was lossy).
+ * Multiplying by 1e6 for the wire only moves the value's magnitude up
+ * near 1-1000, where those same 9 decimal places are all genuinely
+ * significant. The wire field is named calibration_factor_x1e6, not
+ * calibration_factor, specifically so this scaling can never be missed
+ * or silently reapplied on top of itself.
+ */
+constexpr double CALIBRATION_FACTOR_WIRE_SCALE = 1e6;
+
 /** Serializes the broadcast subset of SettingsSnapshot into WS envelope JSON. */
 String buildSettingsJson(const SettingsSnapshot &s) {
   JsonDocument doc;
   doc["type"] = "settings";
   doc["version"] = s.version;
-  doc["calibration_factor"] = s.calibration_factor;
+  doc["calibration_factor_x1e6"] = s.calibration_factor * CALIBRATION_FACTOR_WIRE_SCALE;
   doc["target_dose_single"] = s.target_dose_single;
   doc["target_dose_double"] = s.target_dose_double;
   doc["top_up_margin_single"] = s.top_up_margin_single;
@@ -172,9 +195,30 @@ void sendError(AsyncWebSocketClient *client, const char *message, uint32_t reque
   client->text(out);
 }
 
+/**
+ * Sends a per-client {"type":"raw_read", ...} reply -- the Advanced/
+ * Calibration page's live polling loop, answered straight from
+ * g_latest_sample_mailbox rather than through the Telemetry/session
+ * machinery, since this is an ephemeral live probe with nothing to
+ * persist and no session to attach it to.
+ */
+void sendRawRead(AsyncWebSocketClient *client, uint32_t request_id) {
+  ScaleSample sample{};
+  bool have_sample = xQueuePeek(g_latest_sample_mailbox, &sample, 0) == pdTRUE;
+  JsonDocument doc;
+  doc["type"] = "raw_read";
+  doc["request_id"] = request_id;
+  doc["raw_adc"] = have_sample ? sample.raw_adc : 0;
+  doc["grams"] = have_sample ? sample.grams : 0.0f;
+  doc["stable"] = have_sample ? sample.stable : false;
+  String out;
+  serializeJson(doc, out);
+  client->text(out);
+}
+
 /** Maps a "settings_write" request's field name to a SettingsFieldId. */
 bool settingsFieldFromName(const char *name, SettingsFieldId &out) {
-  if (strcmp(name, "calibration_factor") == 0) {
+  if (strcmp(name, "calibration_factor_x1e6") == 0) {
     out = SettingsFieldId::CALIBRATION_FACTOR;
     return true;
   }
@@ -303,15 +347,26 @@ void handleWsMessage(AsyncWebSocketClient *client, const uint8_t *data, size_t l
     if (fieldId == SettingsFieldId::WIFI_RESET_FLAG ||
         fieldId == SettingsFieldId::WIFI_REBOOT_FLAG) {
       req.value.b = doc["value"] | false;
-    } else if (fieldId == SettingsFieldId::CALIBRATION_FACTOR ||
-               fieldId == SettingsFieldId::TARGET_DOSE_SINGLE ||
+    } else if (fieldId == SettingsFieldId::CALIBRATION_FACTOR) {
+      // The wire value is calibration_factor_x1e6 (see buildSettingsJson
+      // and CALIBRATION_FACTOR_WIRE_SCALE's own comment) -- divide back
+      // down to the true factor immediately, so every internal consumer
+      // (SettingsSnapshot, NVS, ADS1232::calFactor) only ever sees the
+      // real, unscaled value.
+      req.value.f = (doc["value"] | static_cast<double>(NAN)) / CALIBRATION_FACTOR_WIRE_SCALE;
+    } else if (fieldId == SettingsFieldId::TARGET_DOSE_SINGLE ||
                fieldId == SettingsFieldId::TARGET_DOSE_DOUBLE ||
                fieldId == SettingsFieldId::TOP_UP_MARGIN_SINGLE ||
                fieldId == SettingsFieldId::TOP_UP_MARGIN_DOUBLE ||
                fieldId == SettingsFieldId::MIN_TOPUP_GRAMS ||
                fieldId == SettingsFieldId::RATE_CALCULATION_PERCENTAGE ||
                fieldId == SettingsFieldId::SCREENSAVER_WAKE_WEIGHT_DELTA_G) {
-      req.value.f = doc["value"] | NAN;
+      // static_cast<double>, not the bare NAN macro (which is float-typed)
+      // -- ArduinoJson's operator| deduces its parse target type from the
+      // fallback's type, so a float fallback here would parse (and
+      // truncate) the JSON number as a float before it ever reaches the
+      // double-typed union member below, defeating the whole point.
+      req.value.f = doc["value"] | static_cast<double>(NAN);
     } else {
       // Every remaining field (button/ADC/timeout settings) is uint32_t.
       req.value.u = doc["value"] | static_cast<uint32_t>(0);
@@ -321,6 +376,11 @@ void handleWsMessage(AsyncWebSocketClient *client, const uint8_t *data, size_t l
     if (xQueueSend(g_settings_write_q, &req, 0) != pdTRUE) {
       sendError(client, "settings queue full, try again", request_id);
     }
+    return;
+  }
+
+  if (strcmp(type, "raw_read_request") == 0) {
+    sendRawRead(client, request_id);
     return;
   }
 

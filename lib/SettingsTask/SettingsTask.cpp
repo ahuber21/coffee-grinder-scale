@@ -66,8 +66,8 @@ bool isPlausibleTopupModel(const TopupModelV1 &m);
 // Field validators: the single source of truth, shared by the live
 // write path and the NVS loader below.
 
-/** True unless a calibration factor of exactly 0.0f would zero the scale. */
-bool validCalibrationFactor(float v) { return std::isfinite(v) && v != 0.0f; }
+/** True unless a calibration factor of exactly 0.0 would zero the scale. */
+bool validCalibrationFactor(double v) { return std::isfinite(v) && v != 0.0; }
 /** A plausible single/double target dose. */
 bool validDoseGrams(float v) { return std::isfinite(v) && v > 0.0f && v <= 100.0f; }
 /** A non-negative top-up margin. */
@@ -141,7 +141,7 @@ bool loadSettingsFromNvs(SettingsSnapshot &out) {
     Serial.println("[Settings] NVS gain invalid -- using default");
   }
 
-  float cal_factor = g_prefs.getFloat(kKeyCalFactor, defaults.calibration_factor);
+  double cal_factor = g_prefs.getDouble(kKeyCalFactor, defaults.calibration_factor);
   if (validCalibrationFactor(cal_factor)) {
     out.calibration_factor = cal_factor;
   } else {
@@ -299,7 +299,7 @@ void saveSettingsToNvs(const SettingsSnapshot &snap) {
   g_prefs.putUChar(kKeyReadSamples, snap.read_samples);
   g_prefs.putUChar(kKeySpeed, snap.speed);
   g_prefs.putUChar(kKeyGain, snap.gain);
-  g_prefs.putFloat(kKeyCalFactor, snap.calibration_factor);
+  g_prefs.putDouble(kKeyCalFactor, snap.calibration_factor);
   g_prefs.putFloat(kKeyDoseSingle, snap.target_dose_single);
   g_prefs.putFloat(kKeyDoseDouble, snap.target_dose_double);
   g_prefs.putFloat(kKeyMarginSingle, snap.top_up_margin_single);

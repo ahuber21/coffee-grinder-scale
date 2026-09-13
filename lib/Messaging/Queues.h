@@ -24,6 +24,13 @@
 constexpr UBaseType_t kScaleSampleQueueDepth = 8;
 extern QueueHandle_t g_scale_sample_q;
 
+// Scale -> Network: latest sample only, for the Advanced/Calibration
+// page's on-demand raw-ADC polling. Deliberately separate from
+// g_scale_sample_q (a real queue Dosing task drains item-by-item) --
+// Network task only ever wants "whatever the ADC reads right now", never
+// a backlog, and peeking a mailbox costs it nothing when no one's asking.
+extern QueueHandle_t g_latest_sample_mailbox;  // depth 1, xQueueOverwrite
+
 // Dosing (and, narrowly, Network for OTA_UPDATE) -> Display.
 extern QueueHandle_t g_display_mailbox;  // depth 1, xQueueOverwrite
 
@@ -40,6 +47,10 @@ extern QueueHandle_t g_telemetry_q;
 // Network -> Dosing.
 constexpr UBaseType_t kDoseRequestQueueDepth = 2;
 extern QueueHandle_t g_dose_request_q;
+
+// Dosing -> Scale: explicit hardware re-tare, once per dose.
+constexpr UBaseType_t kTareRequestQueueDepth = 2;
+extern QueueHandle_t g_tare_request_q;
 
 // Settings snapshot distribution: one mailbox per subscriber.
 extern QueueHandle_t g_settings_mailbox_scale;
