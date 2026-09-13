@@ -161,6 +161,17 @@ void panelBegin() {
   g_tft.initR(INITR_MINI160x80);
   g_tft.setRotation(0);
   g_tft.invertDisplay(false);
+  // This physical panel's color filter is BGR, not the RGB the driver
+  // library assumes for the MINI160x80 tab type -- confirmed live: a
+  // color meant to read as blue (low red, low-mid green, full blue)
+  // rendered as orange (full red, low-mid green, low blue), exactly
+  // what swapping red and blue on that value would produce. Re-issuing
+  // MADCTL with just the BGR bit set corrects every color in the file
+  // at the source, rather than swapping red/blue in every constant.
+  // setRotation(0) sets no MX/MY/MV bits for this tab type, so nothing
+  // else about the panel's orientation changes.
+  constexpr uint8_t kMadctlBgr = 0x08;  // ST7735_MADCTL_BGR
+  g_tft.sendCommand(ST77XX_MADCTL, &kMadctlBgr, 1);
   ledcAttachPin(DISPLAY_BACKLIGHT_PIN, 1);
   ledcSetup(1, 100, 8);
   backlightPercent(100);
