@@ -18,11 +18,13 @@ Telemetry -- communicating over queues/mailboxes instead of one
 ## Connecting to the device
 
 - **Web app**: `http://eureka.local/` (mDNS, no OTA password -- trusted
-  home LAN only). A small React SPA (`webapp/`) with three tabs: **Live**
+  home LAN only). A small React SPA (`webapp/`) with four tabs: **Live**
   (current weight/target, a session chart, manual dose request),
   **Settings** (calibration factor, target doses, top-up margins, button
   debounce, WiFi reset/reboot), **History** (past sessions, queried
-  straight from PostgREST in the browser -- bypasses the device). Replaces
+  straight from PostgREST in the browser -- bypasses the device), and
+  **Advanced** (debug sub-pages: tare-baseline consistency, live raw-ADC
+  calibration, and the dosing models' fitted state/formulas). Replaces
   the old `/console` page and the local-only `dev/graph`/`dev/settings`
   mock tooling.
 - **Realtime channel**: one WebSocket at `/ws` (typed JSON envelope) --
