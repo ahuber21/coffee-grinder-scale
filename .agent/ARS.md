@@ -1725,3 +1725,41 @@ Format per entry:
   silently lost, per this project's practice of tracking real findings
   even at low urgency (cf. AR-020, AR-026, AR-027).
 - **Resolution**: —
+
+### AR-071 — Physical TFT panel's color filter is BGR, but the driver was configured for RGB -- every "blue" element likely rendered wrong since the D22 redesign
+- **Area**: firmware/display, hardware
+- **Status**: fixed
+- **Found**: 2026-09-13, owner watching the new OTA liquid-fill screen
+  live on the physical device: "the FW flashing starts orange/red, but
+  previously we discussed the target was blue, getting more green as it
+  progresses... maybe red and blue are swapped."
+- **What**: `kColorOtaBlue = 0x0B7F` decodes under standard RGB565 to
+  R=1/31, G=27/63, B=31/31 -- low red, moderate green, full blue, i.e.
+  unambiguously blue. Swapping only red and blue on that same value gives
+  R=31/31, G=27/63, B=1/31 -- full red with moderate green, i.e. orange.
+  That is exactly what was reported. `panelBegin()` calls
+  `g_tft.initR(INITR_MINI160x80)`, and the Adafruit ST7735 driver library
+  sets `MADCTL = ST77XX_MADCTL_RGB` for that exact tab type at rotation 0
+  (confirmed by reading the vendored library source) -- so the driver
+  believes it configured RGB order, but the actual physical panel's color
+  filter is BGR. Confirmed via `git show main:lib/Display/Display.cpp`
+  that the pre-rewrite firmware used the identical `initR(INITR_MINI160x80)`
+  call -- this is a pre-existing hardware/driver mismatch, not something
+  introduced by this session's display work.
+- **Why it matters**: every other "blue" UI element added by D22's
+  iOS-style redesign (the top-of-screen progress bar, BOOT/CONFIRM's
+  accent underlines, `kColorAccentBlue` generally) almost certainly
+  rendered as orange/red too, just never noticed -- a thin 2-3px bar or
+  underline against a black background is easy to glance past, while a
+  full-screen animated liquid fill made the wrong hue undeniable. This
+  had been live on the actual device since D22 shipped without anyone
+  catching it.
+- **Resolution**: `panelBegin()` now re-issues `MADCTL` with just the BGR
+  bit set (`0x08`) immediately after `setRotation(0)`, correcting color
+  order at the source for every color drawn rather than swapping red/blue
+  in each of the file's hex constants individually. `setRotation(0)` sets
+  no `MX`/`MY`/`MV` bits for this tab type, so panel orientation is
+  unaffected. Fixed, rebuilt, and OTA-redeployed to the physical device
+  in the same session (owner's explicit go-ahead); awaiting the owner's
+  visual confirmation that the OTA screen (and, by extension, every other
+  blue element) now reads correctly.
