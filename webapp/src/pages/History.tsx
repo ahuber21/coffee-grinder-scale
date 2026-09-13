@@ -8,6 +8,8 @@ import {
   BarElement,
   LinearScale,
   Tooltip,
+  Legend,
+  Filler,
 } from "chart.js";
 import {
   fetchRecentSessions,
@@ -18,7 +20,17 @@ import {
   type SessionEvent,
 } from "../lib/postgrest";
 
-Chart.register(LineController, LineElement, PointElement, BarController, BarElement, LinearScale, Tooltip);
+Chart.register(
+  LineController,
+  LineElement,
+  PointElement,
+  BarController,
+  BarElement,
+  LinearScale,
+  Tooltip,
+  Legend,
+  Filler
+);
 
 const HISTOGRAM_RANGE_G = 0.5;
 const HISTOGRAM_BIN_WIDTH_G = 0.05;
@@ -95,9 +107,10 @@ function DeltaHistogram({
             type: "bar",
             label: `${label} (n=${fit?.n ?? 0})`,
             data: bins.map((b) => ({ x: b.center, y: b.count })),
-            backgroundColor: `${color}55`,
-            borderColor: color,
-            borderWidth: 1,
+            backgroundColor: `${color}99`,
+            borderWidth: 0,
+            borderRadius: { topLeft: 3, topRight: 3, bottomLeft: 0, bottomRight: 0 },
+            borderSkipped: false,
             parsing: false,
           },
           ...(curve.length > 0
@@ -125,20 +138,36 @@ function DeltaHistogram({
             type: "linear",
             min: -HISTOGRAM_RANGE_G,
             max: HISTOGRAM_RANGE_G,
-            title: { display: true, text: "Δ from target (g)", color: "rgba(235, 235, 245, 0.6)" },
-            ticks: { color: "rgba(235, 235, 245, 0.6)" },
-            grid: { color: "rgba(84, 84, 88, 0.3)" },
+            title: { display: true, text: "Δ from target (g)", color: "rgba(235, 235, 245, 0.45)" },
+            ticks: { color: "rgba(235, 235, 245, 0.45)" },
+            grid: { color: "rgba(84, 84, 88, 0.2)" },
+            border: { display: false },
           },
           y: {
             type: "linear",
             beginAtZero: true,
-            title: { display: true, text: "Count", color: "rgba(235, 235, 245, 0.6)" },
-            ticks: { color: "rgba(235, 235, 245, 0.6)" },
-            grid: { color: "rgba(84, 84, 88, 0.3)" },
+            title: { display: true, text: "Count", color: "rgba(235, 235, 245, 0.45)" },
+            ticks: { color: "rgba(235, 235, 245, 0.45)" },
+            grid: { color: "rgba(84, 84, 88, 0.2)" },
+            border: { display: false },
           },
         },
         plugins: {
-          legend: { labels: { color: "#ffffff" } },
+          legend: {
+            labels: { color: "rgba(235, 235, 245, 0.75)", boxWidth: 14, boxHeight: 10 },
+          },
+          tooltip: {
+            backgroundColor: "#1c1c1e",
+            titleColor: "rgba(235, 235, 245, 0.6)",
+            bodyColor: "#ffffff",
+            borderColor: "rgba(84, 84, 88, 0.65)",
+            borderWidth: 1,
+            padding: 10,
+            cornerRadius: 8,
+            callbacks: {
+              title: (items) => `Δ ${(items[0]?.parsed.x ?? 0).toFixed(2)}g`,
+            },
+          },
         },
       },
     });
@@ -197,9 +226,15 @@ function SessionDetail({ session }: { session: Session }) {
                   label: "Weight (g)",
                   data: samples.map((s) => ({ x: s.timestamp_ms / 1000, y: s.filtered_value })),
                   borderColor: "#0a84ff",
-                  borderWidth: 2.5,
+                  backgroundColor: "rgba(10, 132, 255, 0.12)",
+                  borderWidth: 2,
                   pointRadius: 0,
+                  pointHoverRadius: 4,
+                  pointHoverBackgroundColor: "#0a84ff",
+                  pointHoverBorderColor: "#0b0b0c",
+                  pointHoverBorderWidth: 2,
                   tension: 0.15,
+                  fill: "origin",
                   parsing: false,
                 },
               ],
@@ -207,18 +242,37 @@ function SessionDetail({ session }: { session: Session }) {
             options: {
               responsive: true,
               animation: false,
+              interaction: { mode: "index", intersect: false },
               scales: {
                 x: {
                   type: "linear",
-                  title: { display: true, text: "Time (s)", color: "rgba(235, 235, 245, 0.6)" },
-                  ticks: { color: "rgba(235, 235, 245, 0.6)" },
-                  grid: { color: "rgba(84, 84, 88, 0.3)" },
+                  title: { display: true, text: "Time (s)", color: "rgba(235, 235, 245, 0.45)" },
+                  ticks: { color: "rgba(235, 235, 245, 0.45)" },
+                  grid: { color: "rgba(84, 84, 88, 0.2)" },
+                  border: { display: false },
                 },
                 y: {
                   type: "linear",
-                  title: { display: true, text: "Weight (g)", color: "rgba(235, 235, 245, 0.6)" },
-                  ticks: { color: "rgba(235, 235, 245, 0.6)" },
-                  grid: { color: "rgba(84, 84, 88, 0.3)" },
+                  title: { display: true, text: "Weight (g)", color: "rgba(235, 235, 245, 0.45)" },
+                  ticks: { color: "rgba(235, 235, 245, 0.45)" },
+                  grid: { color: "rgba(84, 84, 88, 0.2)" },
+                  border: { display: false },
+                },
+              },
+              plugins: {
+                tooltip: {
+                  backgroundColor: "#1c1c1e",
+                  titleColor: "rgba(235, 235, 245, 0.6)",
+                  bodyColor: "#ffffff",
+                  borderColor: "rgba(84, 84, 88, 0.65)",
+                  borderWidth: 1,
+                  padding: 10,
+                  cornerRadius: 8,
+                  displayColors: false,
+                  callbacks: {
+                    title: (items) => `t = ${(items[0]?.parsed.x ?? 0).toFixed(2)}s`,
+                    label: (item) => `${(item.parsed.y ?? 0).toFixed(2)} g`,
+                  },
                 },
               },
             },

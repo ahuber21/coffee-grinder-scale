@@ -88,3 +88,18 @@ export function fetchSessionRawSamples(sessionId: string): Promise<RawSample[]> 
     `/raw_samples?session_id=eq.${sessionId}&order=timestamp_ms.asc&select=sample_id,session_id,event_id,timestamp_ms,filtered_value,stable,grinder_state`
   );
 }
+
+export interface TareDebugSample {
+  raw_adc: number;
+  grams: number;
+  created_at: string;
+}
+
+// One row per dose start (button press or API custom-dose) -- the same
+// physical cup is tared every time, so raw_adc should read consistently
+// session to session if the tare/ADC path is behaved.
+export function fetchTareDebugSamples(limit = 2000): Promise<TareDebugSample[]> {
+  return get<TareDebugSample[]>(
+    `/tare_debug?order=created_at.asc&limit=${limit}&select=raw_adc,grams,created_at`
+  );
+}

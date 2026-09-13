@@ -12,6 +12,7 @@ import type {
   ErrorMessage,
   InboundMessage,
   OutboundMessage,
+  RawReadMessage,
   SettingsMessage,
   TelemetryMessage,
 } from "./types";
@@ -29,6 +30,10 @@ interface DeviceSocketValue {
   settings: SettingsMessage | null;
   telemetryHistory: TelemetryMessage[];
   lastError: ErrorMessage | null;
+  // Latest reply only -- Advanced/Calibration page's own polling loop
+  // watches this and accumulates its own local sample history from it;
+  // there's no reason for every other page to carry that stream too.
+  lastRawRead: RawReadMessage | null;
   send: (message: OutboundMessage) => void;
   nextRequestId: () => number;
 }
@@ -40,6 +45,7 @@ export function DeviceSocketProvider({ children }: { children: ReactNode }) {
   const [settings, setSettings] = useState<SettingsMessage | null>(null);
   const [telemetryHistory, setTelemetryHistory] = useState<TelemetryMessage[]>([]);
   const [lastError, setLastError] = useState<ErrorMessage | null>(null);
+  const [lastRawRead, setLastRawRead] = useState<RawReadMessage | null>(null);
   const socketRef = useRef<WebSocket | null>(null);
   const requestIdRef = useRef(1);
 
@@ -76,6 +82,8 @@ export function DeviceSocketProvider({ children }: { children: ReactNode }) {
           setSettings(parsed);
         } else if (parsed.type === "error") {
           setLastError(parsed);
+        } else if (parsed.type === "raw_read") {
+          setLastRawRead(parsed);
         } else {
           setTelemetryHistory((prev) => {
             const next = [...prev, parsed];
@@ -106,7 +114,7 @@ export function DeviceSocketProvider({ children }: { children: ReactNode }) {
 
   return (
     <DeviceSocketContext.Provider
-      value={{ status, settings, telemetryHistory, lastError, send, nextRequestId }}
+      value={{ status, settings, telemetryHistory, lastError, lastRawRead, send, nextRequestId }}
     >
       {children}
     </DeviceSocketContext.Provider>

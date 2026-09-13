@@ -53,8 +53,10 @@ interface SelectFieldProps {
 }
 
 // For the ADS1232 driver's hardware-fixed choices (gain, speed) where any
-// other value is meaningless -- a free-typed number invites a rejected write.
-function SelectSettingRow({ field, label, currentValue, options, unit }: SelectFieldProps) {
+// other value is meaningless -- a free-typed number invites a rejected
+// write. Exported: the Advanced/Calibration page reuses this for its own
+// live SPS toggle rather than duplicating the write-request plumbing.
+export function SelectSettingRow({ field, label, currentValue, options, unit }: SelectFieldProps) {
   const { send, nextRequestId } = useDeviceSocket();
 
   return (
@@ -160,13 +162,16 @@ export default function SettingsPage() {
       <div className="panel">
         <h3>Scale</h3>
         <NumberSettingRow
-          field="calibration_factor"
-          label="Calibration factor"
-          currentValue={settings?.calibration_factor ?? null}
-          step="0.0001"
+          field="calibration_factor_x1e6"
+          label="Calibration factor (×10⁻⁶)"
+          currentValue={settings?.calibration_factor_x1e6 ?? null}
+          step="0.000001"
         />
         <p className="muted" style={{ fontSize: "0.85em" }}>
-          Double-check against a known reference weight before setting it.
+          Shown and set scaled by 1e6 (e.g. 924.583895, not 0.000924583895) -- the true factor
+          has more significant digits than fit in 9 decimal places once its actual magnitude
+          (~1e-4) is accounted for, and JSON over the wire only carries 9. Double-check against
+          a known reference weight before setting it.
         </p>
       </div>
 

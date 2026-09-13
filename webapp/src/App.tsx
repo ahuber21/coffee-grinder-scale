@@ -3,15 +3,21 @@ import { useDeviceSocket } from "./lib/DeviceSocketContext";
 import LivePage from "./pages/Live";
 import SettingsPage from "./pages/Settings";
 import HistoryPage from "./pages/History";
-import ModelPage from "./pages/Model";
+import AdvancedPage from "./pages/Advanced";
 
-// Four tabs, one flat hash router -- no react-router dependency needed
-// for something this small.
-type Tab = "live" | "settings" | "history" | "model";
+// Four top-level tabs, one flat hash router -- no react-router dependency
+// needed for something this small. Advanced carries a second path segment
+// for its own sub-tabs (#/advanced/tare, #/advanced/calibration,
+// #/advanced/model) -- AdvancedPage owns parsing that segment, App only
+// needs to know "advanced" is a top-level tab.
+type Tab = "live" | "settings" | "history" | "advanced";
 
 function tabFromHash(hash: string): Tab {
   const clean = hash.replace(/^#\/?/, "");
-  if (clean === "settings" || clean === "history" || clean === "model") return clean;
+  const top = clean.split("/")[0];
+  if (top === "settings" || top === "history" || top === "advanced") {
+    return top;
+  }
   return "live";
 }
 
@@ -41,14 +47,16 @@ export default function App() {
         <a href="#/history" className={tab === "history" ? "active" : ""}>
           History
         </a>
-        <a href="#/model" className={tab === "model" ? "active" : ""}>
-          Model
+        <a href="#/advanced" className={tab === "advanced" ? "active" : ""}>
+          Advanced
         </a>
       </nav>
-      {tab === "live" && <LivePage />}
-      {tab === "settings" && <SettingsPage />}
-      {tab === "history" && <HistoryPage />}
-      {tab === "model" && <ModelPage />}
+      <div className="page-fade" key={tab}>
+        {tab === "live" && <LivePage />}
+        {tab === "settings" && <SettingsPage />}
+        {tab === "history" && <HistoryPage />}
+        {tab === "advanced" && <AdvancedPage />}
+      </div>
     </div>
   );
 }

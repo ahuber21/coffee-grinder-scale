@@ -66,12 +66,24 @@ export type TelemetryMessage =
   | TelemetryLog
   | TelemetryModelState;
 
+// Matches NetworkTask.cpp's CALIBRATION_FACTOR_WIRE_SCALE exactly --
+// divide calibration_factor_x1e6 by this to get the true factor, and
+// multiply a true factor by this before writing it back.
+export const CALIBRATION_FACTOR_WIRE_SCALE = 1e6;
+
 // Mirrors buildSettingsJson's field list, which now covers every
 // SettingsSnapshot field except the two write-only WiFi action flags.
 export interface SettingsMessage {
   type: "settings";
   version: number;
-  calibration_factor: number;
+  // Scaled ×1e6 on the wire, not the true calibration factor -- see
+  // NetworkTask.cpp's CALIBRATION_FACTOR_WIRE_SCALE comment.
+  // ArduinoJson's double serializer prints a fixed 9 places after the
+  // decimal point (not 9 significant digits), which loses most of a
+  // value this small (~1e-4) to leading zeros; the ×1e6 scaling is what
+  // keeps a round-trip through Settings/Calibration from silently
+  // truncating a carefully-measured factor to ~6 significant digits.
+  calibration_factor_x1e6: number;
   target_dose_single: number;
   target_dose_double: number;
   top_up_margin_single: number;
@@ -101,14 +113,14 @@ export interface ErrorMessage {
   request_id: number;
 }
 
-export type InboundMessage = TelemetryMessage | SettingsMessage | ErrorMessage;
+export type InboundMessage = TelemetryMessage | SettingsMessage | ErrorMessage | RawReadMessage;
 
 // handleWsMessage's settingsFieldFromName -- the exact set of fields the
 // firmware currently accepts a write for. Extending this requires a
 // matching change in lib/Messaging/Messages.h's SettingsFieldId and
 // NetworkTask.cpp's settingsFieldFromName first.
 export type WritableSettingsField =
-  | "calibration_factor"
+  | "calibration_factor_x1e6"
   | "target_dose_single"
   | "target_dose_double"
   | "top_up_margin_single"
@@ -146,4 +158,21 @@ export interface DoseRequestOutbound {
   request_id: number;
 }
 
-export type OutboundMessage = SettingsWriteOutbound | DoseRequestOutbound;
+// Advanced/Calibration page's live polling -- answered directly from
+// ScaleTask's latest-sample mailbox (NetworkTask.cpp's sendRawRead()),
+// not through the session/telemetry machinery, since it's an ephemeral
+// probe with nothing to persist.
+export interface RawReadRequestOutbound {
+  type: "raw_read_request";
+  request_id: number;
+}
+
+export interface RawReadMessage {
+  type: "raw_read";
+  request_id: number;
+  raw_adc: number;
+  grams: number;
+  stable: boolean;
+}
+
+export type OutboundMessage = SettingsWriteOutbound | DoseRequestOutbound | RawReadRequestOutbound;

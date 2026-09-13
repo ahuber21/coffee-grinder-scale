@@ -7,12 +7,13 @@ import {
   LinearScale,
   Tooltip,
   Legend,
+  Filler,
   type ChartDataset,
 } from "chart.js";
 import { useDeviceSocket } from "../lib/DeviceSocketContext";
 import type { TelemetryMessage } from "../lib/types";
 
-Chart.register(LineController, LineElement, PointElement, LinearScale, Tooltip, Legend);
+Chart.register(LineController, LineElement, PointElement, LinearScale, Tooltip, Legend, Filler);
 
 // Sessions are identified by session_id (Messages.h: "assigned by
 // dosing_task at CONFIGURED entry"), not by a dedicated "session started"
@@ -27,6 +28,32 @@ type TelemetryWithTarget = Extract<TelemetryMessage, { grams: number; target_gra
 function hasTargetGrams(m: TelemetryMessage): m is TelemetryWithTarget {
   return "grams" in m && "target_grams" in m;
 }
+
+/** Linear interpolation between two hex colors ("#rrggbb"), t clamped to 0..1. */
+function lerpHex(a: string, b: string, t: number): string {
+  const c = Math.max(0, Math.min(1, t));
+  const ar = parseInt(a.slice(1, 3), 16);
+  const ag = parseInt(a.slice(3, 5), 16);
+  const ab = parseInt(a.slice(5, 7), 16);
+  const br = parseInt(b.slice(1, 3), 16);
+  const bg = parseInt(b.slice(3, 5), 16);
+  const bb = parseInt(b.slice(5, 7), 16);
+  const r = Math.round(ar + (br - ar) * c);
+  const g = Math.round(ag + (bg - ag) * c);
+  const bl = Math.round(ab + (bb - ab) * c);
+  return `#${r.toString(16).padStart(2, "0")}${g.toString(16).padStart(2, "0")}${bl
+    .toString(16)
+    .padStart(2, "0")}`;
+}
+
+type Phase = "idle" | "grinding" | "topping-up" | "done";
+
+const PHASE_LABEL: Record<Phase, string> = {
+  idle: "Ready",
+  grinding: "Grinding",
+  "topping-up": "Topping up",
+  done: "Done",
+};
 
 export default function LivePage() {
   const { status, telemetryHistory, send, nextRequestId } = useDeviceSocket();
@@ -67,6 +94,24 @@ export default function LivePage() {
   }, [sessionMessages]);
 
   const isComplete = sessionMessages.some((m) => m.type === "complete");
+
+  // Derived purely from which telemetry types this session has seen so
+  // far -- there's no explicit FSM-state message over the wire, but the
+  // message sequence maps 1:1 to it: target opens GRINDING, progress marks
+  // the main grind's stop (entering STOPPING/TOPUP), complete closes it out.
+  const phase: Phase = useMemo(() => {
+    if (currentSessionId === null) return "idle";
+    if (isComplete) return "done";
+    if (sessionMessages.some((m) => m.type === "progress")) return "topping-up";
+    return "grinding";
+  }, [currentSessionId, isComplete, sessionMessages]);
+
+  const progressFrac =
+    latestGrams !== null && targetGrams !== null && targetGrams > 0
+      ? Math.max(0, Math.min(1, latestGrams / targetGrams))
+      : 0;
+  const meterColor = lerpHex("#0a84ff", "#30d158", progressFrac);
+
   const recentLogs = useMemo(
     () => telemetryHistory.filter((m) => m.type === "log").slice(-8),
     [telemetryHistory]
@@ -78,17 +123,21 @@ export default function LivePage() {
       label: "Weight (g)",
       data: [],
       borderColor: "#0a84ff",
-      backgroundColor: "#0a84ff",
-      borderWidth: 2.5,
+      backgroundColor: "rgba(10, 132, 255, 0.12)",
+      borderWidth: 2,
       pointRadius: 0,
-      tension: 0.15,
-      fill: false,
+      pointHoverRadius: 4,
+      pointHoverBackgroundColor: "#0a84ff",
+      pointHoverBorderColor: "#0b0b0c",
+      pointHoverBorderWidth: 2,
+      tension: 0.2,
+      fill: "origin",
       parsing: false,
     };
     const targetDataset: ChartDataset<"line"> = {
       label: "Target",
       data: [],
-      borderColor: "rgba(255, 159, 10, 0.7)",
+      borderColor: "rgba(255, 159, 10, 0.65)",
       borderDash: [4, 4],
       borderWidth: 1.5,
       pointRadius: 0,
@@ -101,21 +150,41 @@ export default function LivePage() {
       options: {
         responsive: true,
         animation: false,
+        interaction: { mode: "index", intersect: false },
         scales: {
           x: {
             type: "linear",
-            title: { display: true, text: "Time (s)", color: "rgba(235, 235, 245, 0.6)" },
-            ticks: { color: "rgba(235, 235, 245, 0.6)" },
-            grid: { color: "rgba(84, 84, 88, 0.3)" },
+            title: { display: true, text: "Time (s)", color: "rgba(235, 235, 245, 0.45)" },
+            ticks: { color: "rgba(235, 235, 245, 0.45)" },
+            grid: { color: "rgba(84, 84, 88, 0.2)" },
+            border: { display: false },
           },
           y: {
             type: "linear",
-            title: { display: true, text: "Weight (g)", color: "rgba(235, 235, 245, 0.6)" },
-            ticks: { color: "rgba(235, 235, 245, 0.6)" },
-            grid: { color: "rgba(84, 84, 88, 0.3)" },
+            beginAtZero: true,
+            title: { display: true, text: "Weight (g)", color: "rgba(235, 235, 245, 0.45)" },
+            ticks: { color: "rgba(235, 235, 245, 0.45)" },
+            grid: { color: "rgba(84, 84, 88, 0.2)" },
+            border: { display: false },
           },
         },
-        plugins: { legend: { labels: { color: "#ffffff" } } },
+        plugins: {
+          legend: { labels: { color: "rgba(235, 235, 245, 0.75)", boxWidth: 14, boxHeight: 2 } },
+          tooltip: {
+            backgroundColor: "#1c1c1e",
+            titleColor: "rgba(235, 235, 245, 0.6)",
+            bodyColor: "#ffffff",
+            borderColor: "rgba(84, 84, 88, 0.65)",
+            borderWidth: 1,
+            padding: 10,
+            cornerRadius: 8,
+            displayColors: false,
+            callbacks: {
+              title: (items) => `t = ${(items[0]?.parsed.x ?? 0).toFixed(2)}s`,
+              label: (item) => `${item.dataset.label}: ${(item.parsed.y ?? 0).toFixed(2)} g`,
+            },
+          },
+        },
       },
     });
     return () => chartRef.current?.destroy();
@@ -137,9 +206,13 @@ export default function LivePage() {
     } else {
       chart.data.datasets[1].data = [];
     }
-    (chart.data.datasets[0] as ChartDataset<"line">).borderColor = isComplete
-      ? "#30d158"
-      : "#0a84ff";
+    const lineColor = isComplete ? "#30d158" : "#0a84ff";
+    const lineDataset = chart.data.datasets[0] as ChartDataset<"line">;
+    lineDataset.borderColor = lineColor;
+    lineDataset.backgroundColor = isComplete
+      ? "rgba(48, 209, 88, 0.12)"
+      : "rgba(10, 132, 255, 0.12)";
+    lineDataset.pointHoverBackgroundColor = lineColor;
     chart.update();
   }, [sessionMessages, targetGrams, isComplete]);
 
@@ -151,15 +224,32 @@ export default function LivePage() {
 
   return (
     <>
-      <div className="panel">
-        <div className="big-number">
-          {latestGrams !== null ? latestGrams.toFixed(2) : "--"}
-          <span style={{ fontSize: "1.5rem", color: "var(--text-dim)" }}> g</span>
+      <div className="panel hero">
+        <div className="hero-top">
+          <span className={`phase-pill phase-${phase}`}>{PHASE_LABEL[phase]}</span>
+          {currentSessionId !== null && (
+            <span className="muted hero-session">session #{currentSessionId}</span>
+          )}
         </div>
-        <div className="muted">
-          {targetGrams !== null ? `target ${targetGrams.toFixed(2)} g` : "no active session"}
-          {currentSessionId !== null && ` · session #${currentSessionId}`}
+
+        <div className="hero-number">
+          {latestGrams !== null ? latestGrams.toFixed(2) : "0.00"}
+          <span className="hero-unit"> g</span>
         </div>
+
+        {targetGrams !== null ? (
+          <>
+            <div className="meter-track">
+              <div
+                className="meter-fill"
+                style={{ width: `${progressFrac * 100}%`, background: meterColor }}
+              />
+            </div>
+            <div className="muted hero-target">target {targetGrams.toFixed(2)} g</div>
+          </>
+        ) : (
+          <div className="muted hero-target">Place a cup and press a dose button to begin</div>
+        )}
       </div>
 
       <div className="panel">
@@ -191,13 +281,15 @@ export default function LivePage() {
       {recentLogs.length > 0 && (
         <div className="panel">
           <h3>Recent log lines</h3>
-          {recentLogs.map((m, i) =>
-            m.type === "log" ? (
-              <div key={i} className="muted" style={{ fontSize: "0.85em" }}>
-                [{m.runtime_ms}ms] {m.line}
-              </div>
-            ) : null
-          )}
+          <div className="log-lines">
+            {recentLogs.map((m, i) =>
+              m.type === "log" ? (
+                <div key={i} className="log-line">
+                  <span className="log-time">{m.runtime_ms}ms</span> {m.line}
+                </div>
+              ) : null
+            )}
+          </div>
         </div>
       )}
     </>

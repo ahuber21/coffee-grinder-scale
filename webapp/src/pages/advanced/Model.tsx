@@ -9,8 +9,8 @@ import {
   Legend,
   type ChartDataset,
 } from "chart.js";
-import { useDeviceSocket } from "../lib/DeviceSocketContext";
-import type { TelemetryModelState } from "../lib/types";
+import { useDeviceSocket } from "../../lib/DeviceSocketContext";
+import type { TelemetryModelState } from "../../lib/types";
 
 Chart.register(LineController, LineElement, PointElement, LinearScale, Tooltip, Legend);
 
@@ -32,10 +32,12 @@ function fmt(n: number, digits = 3): string {
   return n.toFixed(digits);
 }
 
-// One distinct hue per bucket, evenly spaced -- readable at a glance without
-// hand-picking 10 colors.
+// Buckets are ordered (increasing gap size), so this is a magnitude ramp,
+// not a categorical set -- one hue, light-to-dark, never a rainbow across
+// the 10 series.
 function bucketColor(i: number): string {
-  return `hsl(${Math.round((i * 360) / 10)}, 70%, 60%)`;
+  const lightness = 74 - i * 4.2;
+  return `hsl(210, 85%, ${lightness}%)`;
 }
 
 export default function ModelPage() {
@@ -80,19 +82,23 @@ export default function ModelPage() {
         scales: {
           x: {
             type: "linear",
-            title: { display: true, text: "Reading # (this session)", color: "rgba(235, 235, 245, 0.6)" },
-            ticks: { color: "rgba(235, 235, 245, 0.6)", stepSize: 1 },
-            grid: { color: "rgba(84, 84, 88, 0.3)" },
+            title: { display: true, text: "Reading # (this session)", color: "rgba(235, 235, 245, 0.45)" },
+            ticks: { color: "rgba(235, 235, 245, 0.45)", stepSize: 1 },
+            grid: { color: "rgba(84, 84, 88, 0.2)" },
+            border: { display: false },
           },
           y: {
             type: "linear",
-            title: { display: true, text: "Duration (ms)", color: "rgba(235, 235, 245, 0.6)" },
-            ticks: { color: "rgba(235, 235, 245, 0.6)" },
-            grid: { color: "rgba(84, 84, 88, 0.3)" },
+            title: { display: true, text: "Duration (ms)", color: "rgba(235, 235, 245, 0.45)" },
+            ticks: { color: "rgba(235, 235, 245, 0.45)" },
+            grid: { color: "rgba(84, 84, 88, 0.2)" },
+            border: { display: false },
           },
         },
         plugins: {
-          legend: { labels: { color: "#ffffff", boxWidth: 12, font: { size: 10 } } },
+          legend: {
+            labels: { color: "rgba(235, 235, 245, 0.75)", boxWidth: 12, font: { size: 10 } },
+          },
         },
       },
     });
