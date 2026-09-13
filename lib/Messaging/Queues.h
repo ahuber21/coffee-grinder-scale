@@ -52,6 +52,10 @@ extern QueueHandle_t g_dose_request_q;
 constexpr UBaseType_t kTareRequestQueueDepth = 2;
 extern QueueHandle_t g_tare_request_q;
 
+// Scale -> Dosing: whether that re-tare actually settled in time.
+constexpr UBaseType_t kTareResultQueueDepth = 2;
+extern QueueHandle_t g_tare_result_q;
+
 // Settings snapshot distribution: one mailbox per subscriber.
 extern QueueHandle_t g_settings_mailbox_scale;
 extern QueueHandle_t g_settings_mailbox_dosing;

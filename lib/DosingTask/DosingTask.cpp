@@ -446,6 +446,21 @@ void dosingTaskFn(void *) {
       }
     }
 
+    // Scale task's reply to the re-tare request TARE's entry sent --
+    // only meaningful while still waiting in TARE for it; a reply
+    // arriving after that (state already moved on some other way) is
+    // simply discarded. A failed tare is not a recoverable condition to
+    // retry from here -- it already exhausted its own bounded retry
+    // inside Scale task -- so this aborts the dose outright rather than
+    // starting it from an unproven baseline.
+    TareResult tare_result;
+    while (xQueueReceive(g_tare_result_q, &tare_result, 0) == pdTRUE) {
+      if (g_state == DosingState::TARE && !tare_result.ok) {
+        sendLog("pre-dose tare never stabilized -- aborting dose");
+        transitionTo(DosingState::IDLE);
+      }
+    }
+
     // Debounced button presses, interpreted according to Dosing's own
     // current state -- e.g. CONFIRM's same-button-confirms /
     // different-button-cancels logic lives here.

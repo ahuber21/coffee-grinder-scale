@@ -92,19 +92,23 @@ void scaleTaskFn(void *) {
     // dose is confirmed -- drained (and applied) before this tick's
     // sample is built, so the very next sample already reflects it.
     // tare() captures the ring buffer's mean unconditionally, so retry
-    // until it lands on a stable one, bounded the same way the boot tare
-    // above is: an unbounded retry here would stall this whole task
-    // (and with it every sample this device's display/WS/telemetry
-    // depend on) indefinitely if the load cell never settles, with no
-    // recovery short of a power cycle.
+    // until it lands on a stable one. Bounded only to guarantee this
+    // task can't stall forever (and with it every sample this device's
+    // display/WS/telemetry depend on) if the load cell never settles --
+    // an untared dose is worse than a slow one, so on timeout this does
+    // NOT fall back to "use the last reading anyway": it reports failure
+    // below and leaves tareRaw exactly as it was, and Dosing task aborts
+    // that dose rather than start it from an unproven baseline.
     TareRequest tareReq;
     while (xQueueReceive(g_tare_request_q, &tareReq, 0) == pdTRUE) {
-      constexpr uint32_t kPreDoseTareTimeoutMs = 5000;
+      constexpr uint32_t kPreDoseTareTimeoutMs = 20000;
       uint32_t waitStartMs = millis();
       uint32_t lastWarnMs = waitStartMs;
-      while (!g_ads.tare() && millis() - waitStartMs < kPreDoseTareTimeoutMs) {
+      bool tared = g_ads.tare();
+      while (!tared && millis() - waitStartMs < kPreDoseTareTimeoutMs) {
         vTaskDelay(pdMS_TO_TICKS(2));
         g_ads.readADCIfReady();
+        tared = g_ads.tare();
         uint32_t now = millis();
         if (now - lastWarnMs >= 2000) {
           Serial.printf("[Scale] pre-dose tare still not stable after %u ms\n",
@@ -112,9 +116,11 @@ void scaleTaskFn(void *) {
           lastWarnMs = now;
         }
       }
-      if (millis() - waitStartMs >= kPreDoseTareTimeoutMs) {
-        Serial.println("[Scale] pre-dose tare never stabilized; using last reading");
+      if (!tared) {
+        Serial.println("[Scale] pre-dose tare never stabilized -- aborting this dose");
       }
+      TareResult result{tared};
+      xQueueSend(g_tare_result_q, &result, 0);
     }
 
     bool stable = false;

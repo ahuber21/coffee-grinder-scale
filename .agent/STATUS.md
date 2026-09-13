@@ -48,7 +48,11 @@ physical device) found and fixed real bugs before any of this reached
 hardware: the per-dose re-tare could still latch a stale baseline on a
 same-tick race, and its `ScaleTask` retry loop had no timeout and could
 livelock the whole scale subsystem forever, with no recovery short of a
-power cycle (AR-063); a `DisplayTask` boot-splash edge case could replay
+power cycle -- the first fix for the latter (silently proceed with a
+stale reading after 5s) was wrong and the owner corrected it: keep
+retrying, bound only to 20s to guarantee no permanent hang, and on that
+timeout abort the dose outright rather than run it on an unproven
+baseline (AR-063); a `DisplayTask` boot-splash edge case could replay
 a stale command and skip the screensaver backlight toggle on one code
 path (AR-064); the new Advanced pages had several real bugs (premature
 "stable" reporting, a poll-rate input that snapped back to its default

@@ -157,6 +157,17 @@ struct DoseRequest {
 struct TareRequest {};
 
 /**
+ * Scale task's reply to a TareRequest, sent once the retry loop either
+ * settles or gives up. `ok == false` means no trustworthy zero point was
+ * found within the bounded retry window -- Dosing task must abort the
+ * dose rather than start it from an unsettled (or stale) baseline; a
+ * dose that never had a valid tare is not a valid run.
+ */
+struct TareResult {
+  bool ok;
+};
+
+/**
  * The single source of truth for tunable settings, distributed to
  * every task via one overwrite mailbox per subscriber. Persisted via
  * the write-through path below rather than a dirty flag, and carries

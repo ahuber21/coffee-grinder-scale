@@ -1517,10 +1517,25 @@ Format per entry:
   sample_seq` already seen at the moment the re-tare is requested, and
   TARE's wait requires a subsequent sample whose `sample_seq` postdates
   it (wraparound-safe signed-subtraction compare) in addition to being
-  stable. (2) `ScaleTask`'s per-dose retry is now bounded to 5s, same as
-  the boot tare, after which it proceeds with whatever the last reading
-  was rather than spinning forever. Both firmware build and all 21 native
-  tests still pass.
+  stable.
+
+  (2) First attempt bounded the retry to 5s and, on timeout, proceeded
+  with whatever the last reading was -- **rejected by the owner**: the
+  pre-rewrite firmware's own unbounded `while (!tare())` was deliberate
+  and compared favorably against the rewrite in practice, and starting a
+  dose from an unsettled tare is worse than waiting, not better. Owner's
+  actual instruction: keep retrying (no silent fallback to a stale/
+  unsettled baseline), but bound it to 20s purely to guarantee the task
+  can't hang forever, and on that timeout **abort the dose** rather than
+  run it. Implemented as a new `TareResult{bool ok}` reply (Scale ->
+  Dosing, `g_tare_result_q`): `ScaleTask` retries for up to 20s exactly
+  as before, and on failure sends `ok=false` and leaves `tareRaw`
+  untouched (never silently "uses the last reading"); `DosingTask`
+  aborts straight to IDLE with a logged reason if that arrives while
+  still waiting in TARE. No session/telemetry is ever opened for a dose
+  that fails this way -- per the owner, "it's not a valid run in this
+  case," so there's nothing to record as aborted, it simply never
+  started. Both firmware build and all 21 native tests still pass.
 
 ### AR-064 — DisplayTask's boot-splash hold could replay a stale command and skip the screensaver backlight toggle on one code path
 - **Area**: firmware/display
