@@ -1,32 +1,77 @@
 # Status
 
-*Last updated: 2026-09-12 — first real first-use session on the
-physical device after the handoff/redesign work: found and fixed a
-structural bug that made the topup mechanism permanently unable to
-fire (AR-052), added the NVS persistence it needed (AR-028), froze the
-FINALIZE timer and lengthened the post-dose auto-tare grace period
-(AR-053/054), wired up a real SCREENSAVER idle timer that blanks the
-panel (AR-055), and added a Model tab to the SPA showing the dosing
-algorithm's live fitted parameters and formulas. Continued live testing
-then surfaced that the topup fitted-line model itself doesn't hold at
-short pulse durations (noisy, clumpy real behavior) -- replaced with a
-self-tuning per-gap-bucket lookup table (AR-059/D23), a real
-architecture reversal of D7. A live 18g grind test confirmed the LUT
-redesign works as intended; two small follow-ups from that same test
-raised the ADS1232 ring buffer to 96 samples (AR-060) and added a
-historical per-bucket duration chart to the Model tab (AR-061). The
-History tab now also shows a per-target-dose (single/double) Gaussian-
-fit delta histogram, which incidentally surfaced that most of today's
-early `completed` sessions predate the hardware fixes and have garbage
-final weights (AR-062). See also `two_paragraph_breakdown.md` for a
-short, always-current summary.*
+*Last updated: 2026-09-13 — full-codebase review pass ("would a human
+love to use this scale?"), fanned out across parallel sub-agents.
+First committed a batch of uncommitted WIP found sitting in the tree at
+session start (calibration_factor float->double precision fix, an
+explicit per-dose hardware re-tare, a new debug-only tare/calibration
+Advanced tab, boot-splash and OTA liquid-fill display animations --
+none of it previously reviewed by anyone). Code review of that WIP then
+found and fixed two real bugs before they ever reached hardware: the
+per-dose re-tare could still latch a stale baseline on a same-tick race
+(AR-063), and its ScaleTask retry loop had no timeout and could
+livelock the whole scale subsystem forever (AR-063). Also fixed a
+DisplayTask boot-splash edge case (AR-064), several bugs and papercuts
+in the new Advanced pages found via code review plus a live read-only
+browser walkthrough against the real device (AR-065), and a handful of
+D21 comment-style violations (AR-066). Logged three items needing the
+owner's input rather than acting unilaterally: no way to abort a
+running dose from the web app (AR-067), dev mode connecting silently to
+the real physical device with only a small status dot as indication
+(AR-068, echoing AR-036), and a real ~8.7% session-to-session spread in
+the tare baseline's raw ADC count that the new debug page itself
+surfaced (AR-069). See `ARS.md` AR-063 through AR-070 for full detail.
+See also `two_paragraph_breakdown.md` for a short, always-current
+summary.*
 
 ## Where things stand
 
 Planning and design are done; implementation is underway. Branch
 `rewrite/rtos-fork`. Standing rules in `AGENTS.md`, full decision log in
-`DECISIONS.md` (D1-D23), all findings in `ARS.md` (AR-001-062, all
+`DECISIONS.md` (D1-D23), all findings in `ARS.md` (AR-001-070, all
 resolved or non-blocking), design docs in `.agent/design/`.
+
+**Full-codebase review pass (2026-09-13):** asked to review the whole
+codebase broadly (code, comments, text, design, style) against "would a
+human love to use this scale?", fanning work out across parallel
+sub-agents and using the cheapest model suitable for each piece. Found
+a substantial batch of uncommitted, never-reviewed WIP already sitting
+in the working tree at session start -- the `calibration_factor`
+float->double precision fix, an explicit per-dose hardware re-tare, a
+new debug-only Advanced tab (Tare calibration / Calibration / Model
+sub-pages), and boot-splash/OTA liquid-fill display animations.
+Verified it built and passed all 21 native tests, then committed it as
+four logical commits before reviewing it. That review (one sub-agent on
+firmware correctness, one on the new webapp pages, one on comment
+style, plus a live read-only browser walkthrough against the real
+physical device) found and fixed real bugs before any of this reached
+hardware: the per-dose re-tare could still latch a stale baseline on a
+same-tick race, and its `ScaleTask` retry loop had no timeout and could
+livelock the whole scale subsystem forever, with no recovery short of a
+power cycle (AR-063); a `DisplayTask` boot-splash edge case could replay
+a stale command and skip the screensaver backlight toggle on one code
+path (AR-064); the new Advanced pages had several real bugs (premature
+"stable" reporting, a poll-rate input that snapped back to its default
+mid-keystroke, a silently-mis-handled invalid-number filter) and UX
+papercuts (a calibration input clipping the exact digits the precision
+fix exists to preserve, a Model-tab formula that was scrollable with no
+visual cue) (AR-065); and a few D21 comment-style violations, including
+one this review's own comment-style sub-agent missed and a follow-up
+grep for historical-reference phrasing caught independently (AR-066).
+Three findings were logged rather than acted on unilaterally, since
+each needs the owner's judgment: no way to abort a running dose from
+the web app, only the physical BACK button (AR-067); dev mode
+(`npm run dev`) connects directly and silently to the real physical
+device with only a small status dot as indication, echoing AR-036's
+exact lesson (AR-068); and the new tare-debug page's first real data
+(8 doses) shows a genuine ~8.7% session-to-session spread in the tare
+baseline's raw ADC count -- possibly normal drift, possibly worth a
+physical look, too few samples yet to tell (AR-069). A handful of minor
+code-quality-only items were bundled into one low-priority entry rather
+than filed separately (AR-070). Firmware and webapp both build clean
+and all 21 native tests pass after every change in this pass; nothing
+was OTA-deployed (per the standing rule, building/testing is always
+fine, flashing the physical device is the owner's call only).
 
 **First real first-use session (2026-09-12):** the owner used the
 device for actual dosing for the first time since the redesign work and

@@ -1485,3 +1485,228 @@ Format per entry:
   contribution independently, per `DosingTask.cpp:253-256` -- the margin's
   only remaining job is leaving room for TOPUP, not compensating for
   coast) is a separate open question, not yet acted on.
+
+### AR-063 — Per-dose hardware re-tare could still latch a stale baseline, and its retry loop had no timeout
+- **Area**: firmware/dosing, firmware/scale
+- **Status**: fixed
+- **Found**: 2026-09-13, code review of the (already-tested, already-committed
+  but never independently reviewed) calibration-precision/per-dose-retare
+  work, as part of a full-codebase review pass.
+- **What**: two bugs in the explicit per-dose hardware re-tare added
+  alongside the `calibration_factor` double-precision fix. (1)
+  `DosingTask`'s TARE state only checked "is there any cached stable
+  sample" before latching the grind baseline -- since the fresh re-tare
+  request lands on `ScaleTask`'s *next* tick at the earliest, a cup that
+  had already been sitting still since before CONFIRM would satisfy that
+  check on the very same tick TARE was entered, using a baseline computed
+  from the *old* `tareRaw`, silently defeating the whole point of the
+  re-tare. (2) `ScaleTask`'s retry loop around the re-tare itself
+  (`while (!g_ads.tare())`) had no timeout, unlike the otherwise-identical
+  boot-time tare it was modeled on -- a load cell that never settles
+  (vibration, EMI, a marginal connection) would livelock the entire Scale
+  task forever, with no further samples produced for display/WS/telemetry
+  and no recovery short of a power cycle.
+- **Why it matters**: (1) would have shipped a feature that looked correct
+  (builds, passes tests, "every dose gets a fresh re-tare" per its own
+  comment) but silently didn't do its job under a common real condition
+  (re-dosing shortly after a previous dose, inside the auto-tare cooldown
+  window -- exactly the scenario the feature exists for). (2) is a full,
+  unrecoverable subsystem hang triggered by nothing worse than one slow-
+  to-settle reading.
+- **Resolution**: (1) `DosingTask` now records the newest `ScaleSample::
+  sample_seq` already seen at the moment the re-tare is requested, and
+  TARE's wait requires a subsequent sample whose `sample_seq` postdates
+  it (wraparound-safe signed-subtraction compare) in addition to being
+  stable. (2) `ScaleTask`'s per-dose retry is now bounded to 5s, same as
+  the boot tare, after which it proceeds with whatever the last reading
+  was rather than spinning forever. Both firmware build and all 21 native
+  tests still pass.
+
+### AR-064 — DisplayTask's boot-splash hold could replay a stale command and skip the screensaver backlight toggle on one code path
+- **Area**: firmware/display
+- **Status**: fixed
+- **Found**: 2026-09-13, same review pass as AR-063.
+- **What**: while the boot splash's minimum-display-time hold is active, a
+  real command that arrives is stashed as `pendingCmd`/`havePendingCmd`
+  rather than rendered immediately. If the hold ends at a moment when a
+  *live* command happens to already be waiting in the mailbox, that live
+  command was applied directly without ever clearing `havePendingCmd` --
+  leaving the stale, boot-era `pendingCmd` primed to overwrite the screen
+  again whenever the mailbox next happens to time out (e.g. a tick
+  DosingTask skips sending a command). Separately, the code path that
+  *did* flush a pending command duplicated the live path's mode-change
+  handling but omitted the screensaver backlight on/off toggle the live
+  path applies.
+- **Why it matters**: an intermittent, self-correcting but real "wrong
+  screen flash" bug, and a code shape where the two paths could keep
+  drifting further apart the next time either was touched.
+- **Resolution**: both paths now go through one shared `applyCommand`
+  lambda (mode-change side effects, render, `last`/`havePendingCmd`
+  update) so they structurally can't diverge again.
+
+### AR-065 — New Advanced/Calibration debug pages had several real bugs and small UX papercuts
+- **Area**: web
+- **Status**: fixed
+- **Found**: 2026-09-13, code review plus a live walkthrough (against the
+  real device, read-only) of the Advanced tab added alongside the
+  calibration-precision work.
+- **What**: `Calibration.tsx`'s ring-buffer stats reported "stable"/
+  "changing" after as few as one sample rather than waiting for the
+  buffer to actually fill, contradicting its own stated behavior; its
+  poll-rate input snapped back to the 5Hz fallback mid-keystroke for any
+  value starting with "0" (e.g. typing "0.5") because it re-parsed and
+  clamped a controlled numeric value on every change; its linear-fit
+  slope printed raw float noise instead of being rounded like the
+  intercept beside it. `TareCalibration.tsx`'s ADC-range filter silently
+  mis-handled invalid numeric input -- a garbage min with an empty max
+  showed all data while implying a filter was applied, and a garbage min
+  with a valid max showed "no samples in range," indistinguishable from a
+  genuinely empty result. The Settings page's calibration-factor input
+  was stuck at the default 8em width, visually clipping the last 1-2
+  digits of the ~10-digit value the precision fix (AR-063's sibling
+  commit) specifically exists to preserve. The Model tab's formula code
+  blocks were horizontally scrollable with no visual affordance
+  indicating that -- discovered live by scrolling a formula box and
+  finding real content that had looked simply cut off. A few flex rows
+  (Advanced's sub-tab nav, the calibration record-point row, the tare
+  filter row) had no `flex-wrap`, risking overflow at phone width.
+- **Why it matters**: these are debug/diagnostic tools built specifically
+  to validate the calibration-precision work, so their own correctness
+  mattered directly; the input-clipping and formula-cutoff bugs in
+  particular each undercut the exact feature they were built alongside.
+- **Resolution**: ring-buffer stats now return null (shown as "filling
+  X%") until the buffer holds `bufferSize` samples; poll rate uses a
+  draft-string input like the buffer-size field beside it; the ADC filter
+  validates each bound independently and shows an inline "not a valid
+  number" hint instead of silently misbehaving; the calibration input
+  widened to 12em; the formula display switched from a single scrolling
+  line (`white-space: pre` + `overflow-x: auto`) to wrapping
+  (`white-space: pre-wrap`), which needs no discovery; the three flex
+  rows got `flex-wrap: wrap`.
+
+### AR-066 — D21 comment-style violations in the newest code (two historical references, three long inline comments)
+- **Area**: firmware/dosing, firmware/display, lib/DosingModel
+- **Status**: fixed
+- **Found**: 2026-09-13, comment-style sweep (this review pass) plus
+  independent verification -- found one additional violation the sweep
+  missed by grepping directly for historical-reference phrasing.
+- **What**: `DosingTask.cpp`'s topup-decision comment said "old firmware
+  required stability..." and `DosingModel.cpp`'s LUT-seeding comment said
+  "the same formula the earlier fitted-line model used" -- both reference
+  a since-replaced version of the code (D21 explicitly forbids this: the
+  comment must stand on its own for a reader who has never seen any other
+  version). Separately, three genuinely-warranted long explanatory
+  comments (the delta-space math in `handleGrindingSample`, the FINALIZE
+  cup-lift dismiss rationale, and `DisplayTask`'s boot-splash-hold
+  rationale) were written as multi-line plain `//` runs rather than the
+  `/* ... */` block form the convention calls for once a comment
+  genuinely needs more than two lines.
+- **Why it matters**: matches the exact pattern D21 was adopted to
+  prevent -- comments that rot the moment the thing they compare against
+  is gone, or that don't visually signal "this is the rare long one."
+- **Resolution**: both historical references rewritten to state the
+  underlying physical/behavioral reason directly; the three long
+  comments converted to `/* ... */` blocks with their content unchanged.
+
+### AR-067 — No way to abort a running dose from the web app, only the physical BACK button
+- **Area**: web, firmware/dosing, firmware/network
+- **Status**: open -- needs-owner-input (a control-flow addition touching
+  live dosing/relay state, not something to add unilaterally without
+  agreeing on the interaction design first)
+- **Found**: 2026-09-13, product/UX review ("would a human love to use
+  this") -- grepped the webapp and firmware for any abort/cancel WS
+  message and found none; `DosingTask.cpp`'s only abort path is
+  `press.button == ButtonId::BACK` read from `g_button_press_q`, which
+  only a physical button press can populate.
+- **What**: the SPA's Live page can *start* a dose remotely (the "Request
+  a dose" form, `dose_request`), but there is no symmetric way to stop
+  one already running -- if something looks wrong mid-grind (wrong
+  weight typed, a jam, wanting to change your mind) while not standing at
+  the machine, the only recourse is walking over and pressing BACK.
+- **Why it matters**: directly relevant to "would a human love to use
+  it" -- a remote start with no remote stop is an asymmetric, slightly
+  unsettling interaction, and the gap is more likely to be felt the more
+  the web-based manual-dose feature actually gets used.
+- **Resolution**: not implemented here -- needs the owner's input on the
+  interaction design first (e.g. should a web abort require a confirm
+  step, given how much worse an accidental abort mid-grind is than an
+  accidental settings write? should it look identical to a physical BACK
+  press, or synthesize a slightly different code path?). Mechanically
+  straightforward once decided: a new `abort_request` WS message type,
+  `NetworkTask` forwarding it into the existing button-press machinery
+  (or a small new queue), and a "Stop" button on the Live page shown only
+  while a session is active.
+
+### AR-068 — Dev-mode SPA connects directly and silently to the real physical device, with only a small status dot as indication
+- **Area**: web, process
+- **Status**: open -- needs-owner-input (echoes AR-036's lesson; the risk
+  is real but the underlying capability -- testing UI changes against
+  live device data -- is legitimate and worth keeping)
+- **Found**: 2026-09-13, product/UX review -- `webapp/.env.local` hardcodes
+  `VITE_DEVICE_HOST=192.168.0.118` (the device's pre-`eureka.local`
+  address, itself stale per AR-020's finding about `platformio.ini`), so
+  `npm run dev` connects straight to the real grinder's `/ws`, not a mock.
+  Confirmed live during this review: the small green status dot and a
+  real weight readout were both genuinely reflecting the physical device.
+- **What**: nothing in the dev-mode UI distinguishes "you are looking at
+  a real, physical grinder that will actually run" from a disconnected/
+  mock state beyond that one small dot -- exactly the ambiguity AR-036
+  already flagged once for a "read-only" curl request that turned out to
+  trigger a real grind.
+- **Why it matters**: a developer (human or agent) casually testing a UI
+  change with `npm run dev` is one misclick on "Grind" or a WiFi-reset/
+  reboot button away from a real action on the physical machine, with no
+  prompt or confirmation gating it in dev mode specifically.
+- **Resolution**: not implemented here -- flagging for the owner to decide
+  the right mitigation (a persistent on-screen banner when
+  `import.meta.env.DEV` is true, a confirm-to-arm step before the first
+  write in a dev session, or simply accepting this as a documented risk
+  now that it's been named explicitly). This review's own browser-based
+  UI checks were done read-only for exactly this reason.
+
+### AR-069 — Tare baseline's raw ADC count shows real session-to-session inconsistency (~8.7% CV on the first 8 logged doses)
+- **Area**: firmware/scale, data-infra
+- **Status**: confirmed -- needs-owner-input (a physical/data question,
+  not a code bug; the new debug page did exactly what it was built for)
+- **Found**: 2026-09-13, live reading of the new `v2.tare_debug` table via
+  the Advanced > Tare calibration page (built this session, see AR-063's
+  sibling commit and `.agent/design/db-schema/002_tare_debug_stats.sql`):
+  8 doses so far, mean raw ADC at tare 624428.8, sd 54137.6, min 594990.0,
+  max 712171.0, range 117181.0.
+- **What**: the page's own stated premise is that the same physical
+  dosing cup should tare to roughly the same raw ADC count every time --
+  a coefficient of variation around 8.7% on the first real batch of data
+  says that's not holding, at least not yet with this few samples.
+- **Why it matters**: this is exactly the signal the tare-debug feature
+  was built to surface (per its own design-doc comment, investigating "a
+  final-weight discrepancy that turned out NOT to be a stability/settling
+  issue"), and it's already showing something worth a look -- possibly
+  normal thermal/mechanical drift, possibly a cup-seating or mounting
+  issue worth a physical check. Too few samples yet to conclude either
+  way.
+- **Resolution**: none yet -- needs more accumulated data (the page
+  supports filtering by raw-ADC range for exactly this kind of ongoing
+  monitoring) and the owner's read on whether the spread looks like
+  normal drift or a physical issue worth investigating by hand.
+
+### AR-070 — Minor code-quality items from this review pass, not yet acted on
+- **Area**: web
+- **Status**: open -- low priority, bundled rather than filed separately
+- **Found**: 2026-09-13, same review pass as AR-065.
+- **What**: (1) `Advanced.tsx`'s `subTabFromHash` and `App.tsx`'s
+  `tabFromHash` are near-duplicate hash-parsing helpers; worth a shared
+  helper if a third routing level ever appears, not urgent at two call
+  sites. (2) `Calibration.tsx` mixes three fairly independent concerns
+  (poll loop/ring buffer, chart rendering, calibration-point table/fit)
+  in one 390-line component -- no bug, but the one place in the new code
+  that diverges from `Settings.tsx`'s flatter, single-purpose-row style.
+  (3) `raw_read_request`/`raw_read` carry a `request_id` that nothing
+  actually checks on the reply side (`DeviceSocketContext.tsx` just
+  stores "whatever arrived most recently") -- harmless on today's
+  single-client WS, but the field is generated and sent for no effect.
+  (4) `TareCalibration.tsx` has no retry affordance on a PostgREST fetch
+  failure beyond switching tabs and back.
+- **Why it matters**: none of these are bugs today; logged so they aren't
+  silently lost, per this project's practice of tracking real findings
+  even at low urgency (cf. AR-020, AR-026, AR-027).
+- **Resolution**: —
