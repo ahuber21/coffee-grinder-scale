@@ -277,13 +277,15 @@ void handleGrindingSample(const ScaleSample &s) {
   double delta_weight = s.grams - g_grams_on_grind_start;
   g_main_grind_model->addSample(runtime_ms, delta_weight);
 
-  // addSample above is fed delta_weight (already relative to the tare
-  // baseline), so the target handed to the model must be in that same
-  // delta space -- g_target_grams_corrected alone, not reduced by the
-  // baseline again. That second subtraction is invisible whenever the
-  // baseline is near zero, but goes deeply wrong the moment it isn't
-  // (e.g. a dosing cup with real weight on it), predicting a near-zero
-  // stop time and cutting the main grind off almost immediately.
+  /*
+   * addSample above is fed delta_weight (already relative to the tare
+   * baseline), so the target handed to the model must be in that same
+   * delta space -- g_target_grams_corrected alone, not reduced by the
+   * baseline again. That second subtraction is invisible whenever the
+   * baseline is near zero, but goes deeply wrong the moment it isn't
+   * (e.g. a dosing cup with real weight on it), predicting a near-zero
+   * stop time and cutting the main grind off almost immediately.
+   */
   double coast_estimate = g_coast_model->currentCoastEstimate();
   double predicted_stop_ms = g_main_grind_model->predictStopTimeMsWithCoast(
       g_target_grams_corrected, coast_estimate);
@@ -312,10 +314,10 @@ void handleTopupSample(const ScaleSample &s) {
 
   switch (g_topup_phase) {
     case TopupPhase::DECIDING: {
-      // Every decision here needs a settled reading -- old firmware
-      // required stability before firing a pulse or declaring the dose
-      // done too. Bounded so a persistently noisy sensor can't stall
-      // every decision until the overall topup cutoff finally fires.
+      // Every decision here needs a settled reading -- a mid-transient
+      // sample could fire a pulse (or declare the dose done) on a value
+      // that's about to move. Bounded so a persistently noisy sensor
+      // can't stall every decision until the overall topup cutoff fires.
       bool settled = s.stable ||
                     s.millis - g_topup_deciding_entered_ms >= g_settings.stability_max_wait_ms;
       if (!settled) {
@@ -602,13 +604,15 @@ void dosingTaskFn(void *) {
           g_last_coffee_ms = millis();
           g_finalize_done = true;
         }
-        // Lifting the cup swings the absolute reading (and so the
-        // delta) by roughly the cup's own weight -- tens of grams at
-        // least -- which the fixed-width display layout was never sized
-        // for (a 3-digit, possibly-negative number overflows the line).
-        // Rather than redesign the layout for a case nobody needs to
-        // read, treat a swing this large as "the user picked up the
-        // cup, they've seen the result" and dismiss straight to IDLE.
+        /*
+         * Lifting the cup swings the absolute reading (and so the delta)
+         * by roughly the cup's own weight -- tens of grams at least --
+         * which the fixed-width display layout was never sized for (a
+         * 3-digit, possibly-negative number overflows the line). Rather
+         * than redesign the layout for a case nobody needs to read,
+         * treat a swing this large as "the user picked up the cup,
+         * they've seen the result" and dismiss straight to IDLE.
+         */
         constexpr float kCupLiftDeltaG = 3.0f;
         bool cupLifted =
             g_have_sample &&

@@ -94,11 +94,10 @@ TopupModelV1 makeDefaultTopupModel() {
   m.coast_weight_precision =
       1.0f / (TopupPriors::kCoastWeightSd * TopupPriors::kCoastWeightSd);
 
-  // Seeds every bucket from the historical slope/deadtime fit -- the
-  // same formula the earlier fitted-line model used to turn a target
-  // weight into a duration -- as a starting point for TopupModel's
-  // per-bucket online tuning (see TopupModel::recordPulse) to correct
-  // from real pulses.
+  // Seeds every bucket's duration from the historical slope/deadtime
+  // fit (duration = deadtime + aim_weight / slope) as a starting point
+  // for TopupModel's per-bucket online tuning (see
+  // TopupModel::recordPulse) to correct from real pulses.
   TopupModel::Config default_cfg;
   for (int i = 0; i < kTopupLutBuckets; ++i) {
     double bucket_upper = (i + 1) * kTopupLutBucketWidthG;

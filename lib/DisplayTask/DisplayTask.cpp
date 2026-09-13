@@ -848,14 +848,16 @@ void displayTaskFn(void *) {
   last.mode = DisplayMode::BOOT;
   renderMode(last, true);
 
-  // Dosing task's own boot gate (settings/scale/display ready) typically
-  // clears well under a second in -- long before the splash's wordmark and
-  // ripples have had any time to actually be seen -- and its first real
-  // command overwrites this single-slot mailbox immediately. Holding BOOT
-  // on screen for a minimum stretch regardless of what's already arrived
-  // is the only way the splash is ever visible rather than just flashed
-  // past; correctness of the FSM itself doesn't depend on this, only what
-  // gets drawn.
+  /*
+   * Dosing task's own boot gate (settings/scale/display ready) typically
+   * clears well under a second in -- long before the splash's wordmark
+   * and ripples have had any time to actually be seen -- and its first
+   * real command overwrites this single-slot mailbox immediately.
+   * Holding BOOT on screen for a minimum stretch regardless of what's
+   * already arrived is the only way the splash is ever visible rather
+   * than just flashed past; correctness of the FSM itself doesn't
+   * depend on this, only what gets drawn.
+   */
   constexpr uint32_t kMinBootSplashMs = 1800;
   uint32_t bootSplashStartMs = millis();
   bool havePendingCmd = false;
