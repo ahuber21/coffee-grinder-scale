@@ -25,9 +25,13 @@ interface RingStats {
 // buffer, "changing" (unstable) if any sample deviates from that mean by
 // more than 0.02% of the mean. Math.trunc, not JS's default float
 // division, to match the firmware's int32_t rawSum / ringBufferSize.
-function computeRingStats(buffer: number[]): RingStats | null {
+// Returns null until the buffer actually holds bufferSize samples -- the
+// firmware's own ring buffer never reports a mean/stability verdict on a
+// partially-filled window either, and doing so here would flash a
+// misleadingly confident "stable" after just one or two samples.
+function computeRingStats(buffer: number[], bufferSize: number): RingStats | null {
   const n = buffer.length;
-  if (n === 0) return null;
+  if (n < bufferSize) return null;
   const sum = buffer.reduce((a, b) => a + b, 0);
   const mean = Math.trunc(sum / n);
   const maxDelta = 0.0002 * mean;
@@ -66,7 +70,11 @@ function linearFit(points: CalibrationPoint[]): { slope: number; intercept: numb
 export default function CalibrationPage() {
   const { status, settings, send, nextRequestId, lastRawRead } = useDeviceSocket();
 
-  const [pollHz, setPollHz] = useState(5);
+  // Kept as a draft string, not a number, so an in-progress value like
+  // "0.5" doesn't get clamped/re-parsed (and its leading "0" snapped
+  // back to the fallback) after every single keystroke.
+  const [pollHzInput, setPollHzInput] = useState("5");
+  const pollHz = Math.max(0.1, parseFloat(pollHzInput) || 5);
   const [bufferSizeInput, setBufferSizeInput] = useState("12");
   const bufferSize = Math.max(1, Math.round(parseFloat(bufferSizeInput)) || 12);
 
@@ -114,7 +122,7 @@ export default function CalibrationPage() {
     const buf = bufferRef.current;
     buf.push(raw);
     if (buf.length > bufferSize) buf.splice(0, buf.length - bufferSize);
-    setRingStats(computeRingStats(buf));
+    setRingStats(computeRingStats(buf, bufferSize));
 
     scatterRef.current.push({ tSec: (performance.now() - startRef.current) / 1000, rawAdc: raw });
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -268,8 +276,8 @@ export default function CalibrationPage() {
               min="0.2"
               max="20"
               step="0.5"
-              value={pollHz}
-              onChange={(e) => setPollHz(Math.max(0.2, parseFloat(e.target.value) || 5))}
+              value={pollHzInput}
+              onChange={(e) => setPollHzInput(e.target.value)}
             />
           </div>
         </div>
@@ -308,7 +316,7 @@ export default function CalibrationPage() {
 
       <div className="panel">
         <h3>Record a calibration point</h3>
-        <div style={{ display: "flex", gap: "0.75rem", alignItems: "center" }}>
+        <div style={{ display: "flex", gap: "0.75rem", alignItems: "center", flexWrap: "wrap" }}>
           <input
             type="number"
             step="0.01"
@@ -365,7 +373,8 @@ export default function CalibrationPage() {
         {fit && (
           <div style={{ marginTop: "0.5rem" }}>
             <p>
-              Linear fit (weight vs raw ADC): <strong>{fit.slope}</strong> g/count, intercept{" "}
+              Linear fit (weight vs raw ADC): <strong>{fit.slope.toPrecision(6)}</strong> g/count,
+              intercept{" "}
               <strong>{fit.intercept.toFixed(3)}</strong> g -- a candidate calibration_factor
               from these points alone.
             </p>

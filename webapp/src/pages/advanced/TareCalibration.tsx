@@ -146,14 +146,24 @@ export default function TareCalibrationPage() {
 
   const allRawAdc = useMemo(() => samples?.map((s) => s.raw_adc) ?? [], [samples]);
 
-  const rawAdc = useMemo(() => {
-    const min = minFilter === "" ? -Infinity : Number(minFilter);
-    const max = maxFilter === "" ? Infinity : Number(maxFilter);
-    if (!Number.isFinite(min) && !Number.isFinite(max)) return allRawAdc;
-    return allRawAdc.filter((v) => v >= min && v <= max);
-  }, [allRawAdc, minFilter, maxFilter]);
+  // A field left empty means "no bound on this side"; a field with text
+  // that doesn't parse is a mistake, not "no bound" -- flagged separately
+  // below rather than silently falling back to unfiltered data (which
+  // would look identical to a correctly-applied filter) or to an always-
+  // empty result (Number.NaN compares false against everything, which
+  // would look identical to "nothing in range").
+  const minParsed = minFilter === "" ? null : Number(minFilter);
+  const maxParsed = maxFilter === "" ? null : Number(maxFilter);
+  const minInvalid = minParsed !== null && !Number.isFinite(minParsed);
+  const maxInvalid = maxParsed !== null && !Number.isFinite(maxParsed);
 
-  const filterActive = minFilter !== "" || maxFilter !== "";
+  const rawAdc = useMemo(() => {
+    const min = minParsed !== null && Number.isFinite(minParsed) ? minParsed : -Infinity;
+    const max = maxParsed !== null && Number.isFinite(maxParsed) ? maxParsed : Infinity;
+    return allRawAdc.filter((v) => v >= min && v <= max);
+  }, [allRawAdc, minParsed, maxParsed]);
+
+  const filterActive = (minFilter !== "" && !minInvalid) || (maxFilter !== "" && !maxInvalid);
   const stats = useMemo(() => computeStats(rawAdc), [rawAdc]);
   const buckets = useMemo(() => computeBuckets(rawAdc), [rawAdc]);
   const filledBuckets = useMemo(() => buckets?.filter((b) => b.count > 0) ?? [], [buckets]);
@@ -168,7 +178,7 @@ export default function TareCalibrationPage() {
         {samples && samples.length > 0 && (
           <div className="setting-row">
             <div className="label">Filter (raw ADC range)</div>
-            <div style={{ display: "flex", alignItems: "center", gap: "0.5em" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: "0.5em", flexWrap: "wrap" }}>
               <input
                 type="number"
                 placeholder="min"
@@ -189,12 +199,21 @@ export default function TareCalibrationPage() {
                   setMinFilter("");
                   setMaxFilter("");
                 }}
-                disabled={!filterActive}
+                disabled={minFilter === "" && maxFilter === ""}
               >
                 Clear
               </button>
             </div>
           </div>
+        )}
+        {(minInvalid || maxInvalid) && (
+          <p style={{ color: "var(--red)" }}>
+            {minInvalid && maxInvalid
+              ? "Min and max are not valid numbers -- ignored."
+              : minInvalid
+                ? "Min is not a valid number -- ignored."
+                : "Max is not a valid number -- ignored."}
+          </p>
         )}
         {filterActive && (
           <p className="muted">

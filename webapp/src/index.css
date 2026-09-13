@@ -190,6 +190,7 @@ nav.tabs a.active {
    secondary level of navigation, not the page's primary one. */
 nav.subtabs {
   display: inline-flex;
+  flex-wrap: wrap;
   gap: 2px;
   background: var(--bg-elevated-2);
   border-radius: var(--radius-md);
@@ -500,7 +501,11 @@ tr.session-row:hover {
   border-radius: var(--radius-sm);
   padding: 0.6em 0.8em;
   margin: 0.5em 0;
-  overflow-x: auto;
-  white-space: pre;
+  /* pre-wrap, not pre: these are single-line expressions with no columns
+     to keep aligned, so wrapping a long one onto a second line keeps it
+     fully readable at any width -- a horizontal scrollbar with no visual
+     cue that more content exists would silently hide the rest instead. */
+  white-space: pre-wrap;
+  word-break: break-word;
   color: var(--label);
 }

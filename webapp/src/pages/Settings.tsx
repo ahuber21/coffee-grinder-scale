@@ -8,9 +8,13 @@ interface NumberFieldProps {
   currentValue: number | null;
   step: string;
   unit?: string;
+  // Widens the input so a long value (e.g. calibration_factor_x1e6's
+  // ~10 significant digits) isn't clipped behind the default 8em width
+  // while the user is still typing it.
+  wide?: boolean;
 }
 
-function NumberSettingRow({ field, label, currentValue, step, unit }: NumberFieldProps) {
+function NumberSettingRow({ field, label, currentValue, step, unit, wide }: NumberFieldProps) {
   const { send, nextRequestId } = useDeviceSocket();
   const [draft, setDraft] = useState("");
 
@@ -31,6 +35,7 @@ function NumberSettingRow({ field, label, currentValue, step, unit }: NumberFiel
         <input
           type="number"
           step={step}
+          style={wide ? { width: "12em" } : undefined}
           placeholder={currentValue !== null ? String(currentValue) : "new value"}
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
@@ -166,6 +171,7 @@ export default function SettingsPage() {
           label="Calibration factor (×10⁻⁶)"
           currentValue={settings?.calibration_factor_x1e6 ?? null}
           step="0.000001"
+          wide
         />
         <p className="muted" style={{ fontSize: "0.85em" }}>
           Shown and set scaled by 1e6 (e.g. 924.583895, not 0.000924583895) -- the true factor
