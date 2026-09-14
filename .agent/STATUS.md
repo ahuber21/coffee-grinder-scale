@@ -9,12 +9,18 @@ vendored library's switch statement), corrected and redeployed in the
 same session. Separately, owner reported a dose landing 0.3g under
 target and, from physical first principles ("grounds drop in clumps,
 they have inertia, which reads high for a moment"), correctly guessed
-the mechanism: `handleGrindingSample`'s raw-weight fallback stop check
-had no stability gate (unlike every decision in `handleTopupSample`),
-so it could fire on `ADS1232::getRaw()`'s single-latest-sample value
-during a transient clump-impact spike, cutting the relay a moment
-before the reading actually settled (AR-072). Both fixed, rebuilt, and
-OTA-redeployed; neither yet confirmed against a live dose/visual check.
+the mechanism -- a raw scale sample used directly for a decision instead
+of a settled one. First fix only addressed the one instance pointed
+out (the raw-weight fallback stop check); the owner pushed back hard
+("you keep making the same mistake, fix it everywhere"), which was
+right -- a full sweep found the actual primary-path culprit
+(`MainGrindModel`'s `m_last_weight_g`, feeding `predictStopTimeMs`'s
+"have we reached target" check straight from every raw sample) plus two
+more unguarded instances (SCREENSAVER wake, FINALIZE cup-lift). All
+fixed, a new native test locks in the model-level fix, and the
+discipline is now a standing rule in `AGENTS.md` (AR-072). Both rounds
+rebuilt and OTA-deployed in the same session; neither yet confirmed
+against a live dose/visual check.
 
 *Last updated: 2026-09-13 — full-codebase review pass ("would a human
 love to use this scale?"), fanned out across parallel sub-agents.
@@ -66,9 +72,23 @@ no stability gate, unlike every decision in `handleTopupSample`, and
 `ADS1232::getRaw()` passes a single unfiltered sample straight through
 whenever the reading isn't stable. A clump's momentary impact spike
 could trip the fallback and cut the relay before the reading actually
-settled. Fixed by gating the fallback on `s.stable`, matching
-`handleTopupSample`'s own pattern (AR-072). Both fixes rebuilt and
-OTA-redeployed in the same session; neither yet confirmed live.
+settled. First fix only gated that one fallback on `s.stable` -- the
+owner pushed back immediately ("you keep making the same mistake, fix
+it everywhere"), correctly: a full sweep found the real primary-path
+culprit, `MainGrindModel::addSample` feeding every raw sample
+unconditionally into `m_last_weight_g`, which `predictStopTimeMs` uses
+directly to decide "have we reached target" -- upstream of the fallback
+already fixed, and a much more direct explanation for the reported
+undershoot. Added a symmetric `max_plausible_rise_g` bound (mirroring
+the model's existing drop-rejection from AR-049), plus gated two more
+previously-unguarded raw-sample checks (SCREENSAVER wake, FINALIZE
+cup-lift) on `sample.stable`. Verified `TopupModel`/`CoastModel` already
+had equivalent protection, no changes needed there. A new native test
+locks in the model-level fix (22/22 passing), and the underlying
+discipline is now a standing rule in `AGENTS.md`'s process expectations
+(AR-072) so it can't be reintroduced piecemeal again. Both rounds
+rebuilt and OTA-redeployed in the same session; neither yet confirmed
+live.
 
 **Full-codebase review pass (2026-09-13):** asked to review the whole
 codebase broadly (code, comments, text, design, style) against "would a

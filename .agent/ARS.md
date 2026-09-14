@@ -1797,15 +1797,44 @@ Format per entry:
   care about most, and specifically the failure mode the owner correctly
   intuited from physical first principles rather than from reading the
   code.
-- **Resolution**: `raw_weight_fallback_fired` now also requires
-  `s.stable`, matching `handleTopupSample`'s pattern. During genuinely
-  continuous grind flow the reading essentially never reports stable
-  anyway (a normal flow rate alone exceeds the ring buffer's stability
-  window), so in practice this fallback now only engages once flow has
-  actually slowed close to a stop -- exactly the slow-start/jam scenario
-  AR-011 built it for -- while `grinding_timeout_ms` remains as an
-  unconditional backstop regardless of stability. Fixed, rebuilt (21/21
-  native tests unaffected -- this logic lives in `DosingTask`, outside
-  the native-tested `DosingModel`), and OTA-redeployed alongside AR-071's
-  orientation fix in the same session. Not yet confirmed against a live
+- **Resolution**: first pass only gated `raw_weight_fallback_fired` on
+  `s.stable` -- **incomplete, per the owner's direct pushback**: "Are you
+  actually telling me that you are still using an unstable result for a
+  decision? You keep making the same mistake. Fix it. Fix it
+  everywhere." A full sweep of every scale-reading decision found three
+  more instances, including the one most likely responsible for the
+  actual reported undershoot:
+  - `MainGrindModel::addSample` fed every raw sample unconditionally
+    into `m_last_weight_g`, which `predictStopTimeMs` compares directly
+    against `target_weight_g` to decide "have we already reached it" --
+    on the **primary** (time-estimate) stop path, upstream of the
+    fallback the first pass fixed. A clump-impact spike here could stop
+    the main grind itself early. Fixed by adding a symmetric
+    `max_plausible_rise_g` bound (mirroring the model's existing
+    `max_plausible_drop_g` from AR-049), rejecting an implausible
+    single-sample rise the same way a sudden drop was already rejected
+    -- held at the last known-good value, not folded in. New native test
+    `test_main_grind_model_ignores_sudden_weight_spike` locks in the
+    exact scenario (22/22 native tests passing).
+  - SCREENSAVER's wake-on-weight-change check and FINALIZE's cup-lift
+    dismiss check both compared a raw sample against a threshold with no
+    stability gate. Both now require `sample.stable`/`g_last_sample.stable`
+    -- no bounded-timeout fallback needed for either, since an
+    independent unconditional exit already exists (a button press for
+    SCREENSAVER, `finalize_timeout_ms` for FINALIZE).
+  - Verified `TopupModel` and `CoastModel` already have equivalent
+    hard-bound plausibility rejection independent of the driver's
+    stability flag (`reject_hard_min/max_g`,
+    `min/max_plausible_coast_g`) -- no changes needed there.
+
+  Also recorded as a standing rule in `.agent/AGENTS.md`'s process
+  expectations (scale-reading decision discipline) so this class of bug
+  can't be reintroduced piecemeal again: gate one-shot decisions on
+  `sample.stable` with a bounded fallback where one is actually needed;
+  use magnitude/statistical plausibility rejection, not a stability
+  gate, for continuous streams feeding a regression model, since real
+  continuous flow is essentially never "stable" by the ADC driver's own
+  flag (gating `addSample` itself on `stable` would starve the model of
+  data during any real grind). Both passes fixed, rebuilt, and
+  OTA-deployed in the same session; not yet confirmed against a live
   dose.
