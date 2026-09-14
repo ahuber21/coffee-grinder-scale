@@ -166,12 +166,15 @@ void panelBegin() {
   // color meant to read as blue (low red, low-mid green, full blue)
   // rendered as orange (full red, low-mid green, low blue), exactly
   // what swapping red and blue on that value would produce. Re-issuing
-  // MADCTL with just the BGR bit set corrects every color in the file
-  // at the source, rather than swapping red/blue in every constant.
-  // setRotation(0) sets no MX/MY/MV bits for this tab type, so nothing
-  // else about the panel's orientation changes.
-  constexpr uint8_t kMadctlBgr = 0x08;  // ST7735_MADCTL_BGR
-  g_tft.sendCommand(ST77XX_MADCTL, &kMadctlBgr, 1);
+  // MADCTL corrects every color in the file at the source, rather than
+  // swapping red/blue in every constant. Must OR in the same MX|MY
+  // mirror bits setRotation(0) itself sets for this exact tab type
+  // (confirmed by reading the vendored library's setRotation() source)
+  // -- sending BGR alone clears them, which is what flipped the panel
+  // upside down on the first attempt at this fix.
+  constexpr uint8_t kMadctlRotation0Bgr =
+      ST77XX_MADCTL_MX | ST77XX_MADCTL_MY | ST7735_MADCTL_BGR;
+  g_tft.sendCommand(ST77XX_MADCTL, &kMadctlRotation0Bgr, 1);
   ledcAttachPin(DISPLAY_BACKLIGHT_PIN, 1);
   ledcSetup(1, 100, 8);
   backlightPercent(100);

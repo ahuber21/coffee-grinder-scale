@@ -293,8 +293,24 @@ void handleGrindingSample(const ScaleSample &s) {
   // Primary (time-estimate) and fallback (raw-weight) stop checks both
   // compare against the same canonical value, target_grams_corrected --
   // there is no second variable either could diverge from.
+  //
+  // The raw-weight fallback additionally requires a settled reading,
+  // same as every decision in handleTopupSample -- ADS1232::getRaw()
+  // reports the single latest raw sample (not the ring-buffer mean)
+  // whenever it isn't stable, and a falling clump's impact momentarily
+  // reads heavier than its true settled mass. An ungated fallback can
+  // trip on that transient spike and cut the relay a moment early, with
+  // the reading then decaying back down below target once the clump
+  // actually settles -- undershoot with no fault in the time estimate
+  // itself. During genuinely continuous flow the reading essentially
+  // never reports stable anyway (a normal grind's flow rate alone
+  // exceeds the stability window's threshold), so this fallback is
+  // only ever expected to engage once flow has actually slowed close to
+  // a stop -- exactly the slow-start/jam case it exists for -- and
+  // grinding_timeout_ms below remains as an unconditional backstop
+  // regardless of stability.
   bool time_estimate_fired = runtime_ms >= predicted_stop_ms;
-  bool raw_weight_fallback_fired = delta_weight >= g_target_grams_corrected;
+  bool raw_weight_fallback_fired = s.stable && delta_weight >= g_target_grams_corrected;
   bool safety_timeout_fired = runtime_ms >= g_settings.grinding_timeout_ms;
 
   if (time_estimate_fired || raw_weight_fallback_fired || safety_timeout_fired) {
