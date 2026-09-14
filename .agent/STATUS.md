@@ -1,5 +1,21 @@
 # Status
 
+*Last updated: 2026-09-14 — deployed the review pass's fixes live and
+caught two real issues from owner feedback while watching the device.
+First, OTA-deployed AR-063 through AR-071 (firmware + SPA). Owner then
+reported the panel came up upside-down -- AR-071's MADCTL fix had
+dropped the MX|MY mirror bits `setRotation(0)` needs (misread the
+vendored library's switch statement), corrected and redeployed in the
+same session. Separately, owner reported a dose landing 0.3g under
+target and, from physical first principles ("grounds drop in clumps,
+they have inertia, which reads high for a moment"), correctly guessed
+the mechanism: `handleGrindingSample`'s raw-weight fallback stop check
+had no stability gate (unlike every decision in `handleTopupSample`),
+so it could fire on `ADS1232::getRaw()`'s single-latest-sample value
+during a transient clump-impact spike, cutting the relay a moment
+before the reading actually settled (AR-072). Both fixed, rebuilt, and
+OTA-redeployed; neither yet confirmed against a live dose/visual check.
+
 *Last updated: 2026-09-13 — full-codebase review pass ("would a human
 love to use this scale?"), fanned out across parallel sub-agents.
 First committed a batch of uncommitted WIP found sitting in the tree at
@@ -28,8 +44,31 @@ summary.*
 
 Planning and design are done; implementation is underway. Branch
 `rewrite/rtos-fork`. Standing rules in `AGENTS.md`, full decision log in
-`DECISIONS.md` (D1-D23), all findings in `ARS.md` (AR-001-070, all
+`DECISIONS.md` (D1-D23), all findings in `ARS.md` (AR-001-072, all
 resolved or non-blocking), design docs in `.agent/design/`.
+
+**Live deploy of the review pass, plus two owner-caught bugs (2026-09-14):**
+OTA-deployed the full review pass (AR-063 through AR-071) to the
+physical device. Owner then reported two real issues from actually
+watching/using it. (1) The panel came up upside-down after the color
+fix -- root cause: fixing AR-071's BGR/RGB mismatch required re-issuing
+the ST7735's MADCTL register, and the first attempt sent only the BGR
+bit, silently dropping the `MX`/`MY` mirror bits `setRotation(0)` sets
+for this tab type (a misread of the vendored library's `setRotation()`
+switch statement -- confused a different rotation case's plain RGB
+value for rotation 0's actual `MX | MY | RGB`). Corrected to OR the BGR
+bit into the same `MX | MY` bits, redeployed. (2) A dose landed 0.3g
+under target (17.7g of 18.0g); the owner, reasoning from physical first
+principles rather than the code ("grounds drop in clumps, they have
+inertia, which reads high for a moment"), correctly guessed the
+mechanism -- `handleGrindingSample`'s raw-weight fallback stop check had
+no stability gate, unlike every decision in `handleTopupSample`, and
+`ADS1232::getRaw()` passes a single unfiltered sample straight through
+whenever the reading isn't stable. A clump's momentary impact spike
+could trip the fallback and cut the relay before the reading actually
+settled. Fixed by gating the fallback on `s.stable`, matching
+`handleTopupSample`'s own pattern (AR-072). Both fixes rebuilt and
+OTA-redeployed in the same session; neither yet confirmed live.
 
 **Full-codebase review pass (2026-09-13):** asked to review the whole
 codebase broadly (code, comments, text, design, style) against "would a

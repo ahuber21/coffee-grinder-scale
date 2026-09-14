@@ -1754,12 +1754,58 @@ Format per entry:
   full-screen animated liquid fill made the wrong hue undeniable. This
   had been live on the actual device since D22 shipped without anyone
   catching it.
-- **Resolution**: `panelBegin()` now re-issues `MADCTL` with just the BGR
-  bit set (`0x08`) immediately after `setRotation(0)`, correcting color
-  order at the source for every color drawn rather than swapping red/blue
-  in each of the file's hex constants individually. `setRotation(0)` sets
-  no `MX`/`MY`/`MV` bits for this tab type, so panel orientation is
-  unaffected. Fixed, rebuilt, and OTA-redeployed to the physical device
-  in the same session (owner's explicit go-ahead); awaiting the owner's
-  visual confirmation that the OTA screen (and, by extension, every other
-  blue element) now reads correctly.
+- **Resolution**: `panelBegin()` now re-issues `MADCTL` with the BGR bit
+  set, correcting color order at the source for every color drawn rather
+  than swapping red/blue in each of the file's hex constants
+  individually. **First attempt was wrong**: sent only the BGR bit
+  (`0x08`) on the theory that `setRotation(0)` sets no `MX`/`MY`/`MV`
+  bits for this tab type -- a misread of the vendored library's
+  `setRotation()` switch (confused rotation 2's plain
+  `ST77XX_MADCTL_RGB` value with rotation 0's actual
+  `MX | MY | ST77XX_MADCTL_RGB`), and OTA-deploying it flipped the whole
+  panel upside down, confirmed live by the owner immediately after that
+  deploy. Corrected to OR the BGR bit into the same `MX | MY` bits
+  rotation 0 actually needs; rebuilt and redeployed in the same session.
+  Colors confirmed correct live before the orientation regression was
+  caught; awaiting final confirmation that orientation is also back to
+  normal after the second deploy.
+
+### AR-072 — Main-grind raw-weight fallback could stop early on a clump-impact spike, causing undershoot
+- **Area**: firmware/dosing
+- **Status**: fixed
+- **Found**: 2026-09-14, owner report: a completed dose measured 17.7g
+  against a full 18g requested, asking whether the firmware might be
+  reacting to a momentary high reading -- "grounds drop in clumps, they
+  have inertia, which reads high for a moment."
+- **What**: `handleGrindingSample`'s raw-weight fallback
+  (`raw_weight_fallback_fired = delta_weight >= g_target_grams_corrected`)
+  had no stability gate, unlike every decision in `handleTopupSample`
+  (which explicitly requires `s.stable` -- see that function's own
+  comment, "every decision here needs a settled reading"). Tracing
+  `ADS1232::getRaw()`: whenever the ring buffer isn't self-consistent
+  (`changing == true`, i.e. `isStable == false`), it returns the single
+  *latest* raw sample rather than the buffer's mean -- so an unstable
+  reading passes a momentary spike straight through, filtered only by
+  `getUnits()`'s coarse >200g glitch guard. A falling clump's impact
+  registers as extra force for an instant before settling to its true
+  mass; if that transient spike happened to cross
+  `target_grams_corrected`, the ungated fallback could fire immediately
+  and cut the relay a moment early, with the reading then decaying back
+  down below target once the clump actually settled.
+- **Why it matters**: an early relay-off with no fault in the time-
+  estimate model itself, directly costing accuracy on the metric D7/D13
+  care about most, and specifically the failure mode the owner correctly
+  intuited from physical first principles rather than from reading the
+  code.
+- **Resolution**: `raw_weight_fallback_fired` now also requires
+  `s.stable`, matching `handleTopupSample`'s pattern. During genuinely
+  continuous grind flow the reading essentially never reports stable
+  anyway (a normal flow rate alone exceeds the ring buffer's stability
+  window), so in practice this fallback now only engages once flow has
+  actually slowed close to a stop -- exactly the slow-start/jam scenario
+  AR-011 built it for -- while `grinding_timeout_ms` remains as an
+  unconditional backstop regardless of stability. Fixed, rebuilt (21/21
+  native tests unaffected -- this logic lives in `DosingTask`, outside
+  the native-tested `DosingModel`), and OTA-redeployed alongside AR-071's
+  orientation fix in the same session. Not yet confirmed against a live
+  dose.
