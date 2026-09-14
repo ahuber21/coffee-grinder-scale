@@ -16,6 +16,7 @@ import {
   fetchSessionEvents,
   fetchSessionRawSamples,
   fetchCompletedDosesForMode,
+  patchReferenceWeight,
   type Session,
   type SessionEvent,
 } from "../lib/postgrest";
@@ -197,6 +198,109 @@ function DeltaHistogram({
 
 function formatTimestamp(iso: string): string {
   return new Date(iso).toLocaleString();
+}
+
+// Click-to-edit reference-scale reading (see 003_reference_weight.sql /
+// AR-073) -- entered by hand after weighing the finished dose separately
+// from the grinder's own load cell, so it can't arrive with the session
+// row and has to be editable after the fact.
+function ReferenceWeightCell({
+  session,
+  onSaved,
+}: {
+  session: Session;
+  onSaved: (value: number | null) => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState(false);
+  const inputRef = useRef<HTMLInputElement | null>(null);
+
+  useEffect(() => {
+    if (editing) inputRef.current?.focus();
+  }, [editing]);
+
+  function startEditing() {
+    setDraft(session.reference_weight_g?.toString() ?? "");
+    setError(false);
+    setEditing(true);
+  }
+
+  async function save() {
+    const trimmed = draft.trim();
+    const value = trimmed === "" ? null : Number(trimmed);
+    if (value !== null && (!Number.isFinite(value) || value <= 0)) {
+      setError(true);
+      return;
+    }
+    setSaving(true);
+    try {
+      await patchReferenceWeight(session.session_id, value);
+      onSaved(value);
+      setEditing(false);
+    } catch {
+      setError(true);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  if (editing) {
+    return (
+      <span style={{ display: "inline-flex", alignItems: "center", gap: "0.4em" }}>
+        <input
+          ref={inputRef}
+          type="number"
+          step="0.01"
+          inputMode="decimal"
+          value={draft}
+          disabled={saving}
+          onChange={(e) => setDraft(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") save();
+            if (e.key === "Escape") setEditing(false);
+          }}
+          onBlur={save}
+          onClick={(e) => e.stopPropagation()}
+          style={{ width: "5.5em", padding: "0.2em 0.4em" }}
+        />
+        {error && <span style={{ color: "var(--red)", fontSize: "0.85em" }}>invalid</span>}
+      </span>
+    );
+  }
+
+  const delta =
+    session.reference_weight_g !== null && session.final_weight_g !== null
+      ? session.reference_weight_g - session.final_weight_g
+      : null;
+
+  return (
+    <span
+      className="ref-weight-cell"
+      onClick={(e) => {
+        e.stopPropagation();
+        startEditing();
+      }}
+      title="Click to edit"
+      style={{ cursor: "pointer" }}
+    >
+      {session.reference_weight_g !== null ? (
+        <>
+          {session.reference_weight_g.toFixed(2)}g
+          {delta !== null && (
+            <span className="muted" style={{ fontSize: "0.85em" }}>
+              {" "}
+              (Δ{delta >= 0 ? "+" : ""}
+              {delta.toFixed(2)})
+            </span>
+          )}
+        </>
+      ) : (
+        <span className="muted">+ add</span>
+      )}
+    </span>
+  );
 }
 
 function SessionDetail({ session }: { session: Session }) {
@@ -419,6 +523,7 @@ export default function HistoryPage() {
                   <th>Mode</th>
                   <th>Target</th>
                   <th>Final</th>
+                  <th>Reference</th>
                   <th>Outcome</th>
                 </tr>
               </thead>
@@ -429,6 +534,22 @@ export default function HistoryPage() {
                     <td>{s.mode}</td>
                     <td>{s.requested_weight_g.toFixed(2)}g</td>
                     <td>{s.final_weight_g !== null ? `${s.final_weight_g.toFixed(2)}g` : "--"}</td>
+                    <td>
+                      <ReferenceWeightCell
+                        session={s}
+                        onSaved={(value) =>
+                          setSessions((prev) =>
+                            prev
+                              ? prev.map((row) =>
+                                  row.session_id === s.session_id
+                                    ? { ...row, reference_weight_g: value }
+                                    : row
+                                )
+                              : prev
+                          )
+                        }
+                      />
+                    </td>
                     <td>
                       <span className={`outcome ${s.outcome}`}>{s.outcome}</span>
                     </td>

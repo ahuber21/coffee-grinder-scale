@@ -12,6 +12,10 @@ export interface Session {
   requested_weight_g: number;
   target_weight_g: number;
   final_weight_g: number | null;
+  // Owner-entered independent reference-scale reading, separate from the
+  // grinder's own load cell -- see AR-073 in .agent/ARS.md. Null until
+  // entered from the History tab.
+  reference_weight_g: number | null;
   outcome: "in_progress" | "completed" | "aborted" | "timed_out";
   grind_setting: string | null;
   firmware_version: string;
@@ -51,8 +55,25 @@ async function get<T>(path: string): Promise<T> {
 
 export function fetchRecentSessions(limit = 50): Promise<Session[]> {
   return get<Session[]>(
-    `/sessions?order=started_at.desc&limit=${limit}&select=session_id,started_at,completed_at,mode,requested_weight_g,target_weight_g,final_weight_g,outcome,grind_setting,firmware_version`
+    `/sessions?order=started_at.desc&limit=${limit}&select=session_id,started_at,completed_at,mode,requested_weight_g,target_weight_g,final_weight_g,reference_weight_g,outcome,grind_setting,firmware_version`
   );
+}
+
+// PATCH-only column (see 003_reference_weight.sql) -- postgrest_anon has
+// no INSERT grant on it, matching every other "entered after the row
+// already exists" field on this table.
+export async function patchReferenceWeight(
+  sessionId: string,
+  referenceWeightG: number | null
+): Promise<void> {
+  const res = await fetch(`${postgrestBase}/sessions?session_id=eq.${sessionId}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ reference_weight_g: referenceWeightG }),
+  });
+  if (!res.ok) {
+    throw new Error(`PostgREST PATCH reference_weight_g -> ${res.status} ${res.statusText}`);
+  }
 }
 
 export interface DoseOutcome {
