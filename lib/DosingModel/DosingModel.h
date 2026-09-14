@@ -250,6 +250,15 @@ class MainGrindModel {
    */
   bool finalizeSession(int64_t now_epoch_s);
 
+  /**
+   * The most recent sample addSample() actually accepted (post drop/rise
+   * plausibility rejection) -- the model's own best estimate of current
+   * weight, safe to compare directly against a target even while the
+   * grind is continuously running, unlike a raw ScaleSample. 0 if no
+   * sample has been accepted yet this session.
+   */
+  double currentWeightEstimate() const { return m_last_weight_g; }
+
   double persistedRateHat() const { return m_rate_hat; }
   double persistedRatePrecision() const { return m_rate_precision; }
   uint32_t persistedRateNEffective() const { return m_rate_n_effective; }
