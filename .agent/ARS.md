@@ -1835,6 +1835,36 @@ Format per entry:
   gate, for continuous streams feeding a regression model, since real
   continuous flow is essentially never "stable" by the ADC driver's own
   flag (gating `addSample` itself on `stable` would starve the model of
-  data during any real grind). Both passes fixed, rebuilt, and
-  OTA-deployed in the same session; not yet confirmed against a live
-  dose.
+  data during any real grind).
+
+  **Third round, same session -- the second pass's own fix for the
+  GRINDING fallback was wrong.** Owner: "will it now run forever
+  because during grind, the scale will never report a stable weight? ...
+  our transition into topup will be driven by an unstable weight,
+  because a running grinder produces by definition an unstable weight.
+  Are you capable of auditing the logic with this in mind?" Correct:
+  gating `raw_weight_fallback_fired` on `s.stable` doesn't make it
+  safer, it makes it fire (if ever) only once flow has nearly stopped --
+  GRINDING holds the relay on continuously for its whole duration, so
+  the ADC's stability flag is essentially never true there by
+  definition. That silently disabled the fallback's actual purpose
+  (catching "the primary time estimate is wrong while flow is still
+  ongoing") and would have made the *opposite*, worse failure mode
+  (overshoot, running all the way to `grinding_timeout_ms`) more likely
+  in exchange for fixing a smaller undershoot risk -- backwards, given
+  D7's stated priority that overshoot is the worse outcome. Contrast
+  with `handleTopupSample`'s DECIDING/SETTLING phases, correctly gated
+  on stability because the relay is *off* between pulses -- the scale
+  genuinely can and does settle there; GRINDING has no equivalent quiet
+  moment. Fixed properly by protecting the *value* instead of gating the
+  *decision*: a new `MainGrindModel::currentWeightEstimate()` accessor
+  exposes `addSample`'s own last-accepted sample (already protected by
+  the second round's `max_plausible_rise_g`/`max_plausible_drop_g`
+  rejection), compared with no stability requirement at all, because
+  none is ever available while genuinely grinding. The AGENTS.md
+  standing rule from the second round was itself rewritten to spell out
+  this distinction explicitly (a continuously-active process vs. one
+  that can genuinely settle between checks) rather than presenting
+  "gate on stable" as a general-purpose fix. All three rounds fixed,
+  rebuilt (22/22 native tests), and OTA-deployed in the same session;
+  not yet confirmed against a live dose.

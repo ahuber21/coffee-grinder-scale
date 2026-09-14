@@ -16,11 +16,23 @@ out (the raw-weight fallback stop check); the owner pushed back hard
 right -- a full sweep found the actual primary-path culprit
 (`MainGrindModel`'s `m_last_weight_g`, feeding `predictStopTimeMs`'s
 "have we reached target" check straight from every raw sample) plus two
-more unguarded instances (SCREENSAVER wake, FINALIZE cup-lift). All
-fixed, a new native test locks in the model-level fix, and the
-discipline is now a standing rule in `AGENTS.md` (AR-072). Both rounds
-rebuilt and OTA-deployed in the same session; neither yet confirmed
-against a live dose/visual check.
+more unguarded instances (SCREENSAVER wake, FINALIZE cup-lift). That
+second pass's own fix for the GRINDING case was then also wrong --
+gating it on `s.stable` doesn't work for a *continuously active* state
+(relay held on for the whole grind, so the ADC's stability flag is
+essentially never true there by definition), and the owner caught it
+before it shipped a worse regression (silently disabling the fallback's
+real job -- catching a bad time estimate mid-flow -- in exchange for
+fixing a smaller undershoot risk, trading up to the worse failure mode,
+overshoot). Third pass fixed it properly: protect the *value*
+(`MainGrindModel::currentWeightEstimate()`, already spike-rejected) with
+no stability requirement, rather than gate the decision. TOPUP's
+DECIDING/SETTLING phases stay gated on stability correctly, since the
+relay is off between pulses and the scale genuinely can settle there.
+`AGENTS.md`'s standing rule (AR-072) now spells out that distinction
+explicitly. All three rounds rebuilt (22/22 native tests) and
+OTA-deployed in the same session; not yet confirmed against a live
+dose/visual check.
 
 *Last updated: 2026-09-13 — full-codebase review pass ("would a human
 love to use this scale?"), fanned out across parallel sub-agents.
@@ -84,11 +96,29 @@ the model's existing drop-rejection from AR-049), plus gated two more
 previously-unguarded raw-sample checks (SCREENSAVER wake, FINALIZE
 cup-lift) on `sample.stable`. Verified `TopupModel`/`CoastModel` already
 had equivalent protection, no changes needed there. A new native test
-locks in the model-level fix (22/22 passing), and the underlying
-discipline is now a standing rule in `AGENTS.md`'s process expectations
-(AR-072) so it can't be reintroduced piecemeal again. Both rounds
-rebuilt and OTA-redeployed in the same session; neither yet confirmed
-live.
+locks in the model-level fix (22/22 passing).
+
+That second pass's own fix for the GRINDING fallback was then also
+wrong, caught by the owner before it went unnoticed: "will it now run
+forever because during grind, the scale will never report a stable
+weight? ... our transition into topup will be driven by an unstable
+weight, because a running grinder produces by definition an unstable
+weight." Correct -- GRINDING holds the relay on continuously for its
+whole duration, so gating its fallback on `s.stable` doesn't add
+safety, it silently disables the fallback (catching "the time estimate
+is wrong while flow is still ongoing") for the entire time it's
+actually needed, trading a smaller undershoot risk for a much worse
+overshoot risk if the primary estimate ever misfires. Fixed properly in
+a third pass: a new `MainGrindModel::currentWeightEstimate()` accessor
+exposes the already-spike-rejected last-accepted sample, compared with
+no stability requirement at all (none is ever available while
+genuinely grinding); `handleTopupSample`'s DECIDING/SETTLING gate stays
+as-is, correctly, since the relay is off between pulses and the scale
+genuinely can settle there. `AGENTS.md`'s standing rule was rewritten
+to spell out that distinction (continuously-active vs. genuinely-
+settling process) rather than presenting "gate on stable" as a
+universal fix. All three rounds rebuilt (22/22 native tests) and
+OTA-deployed in the same session; not yet confirmed live.
 
 **Full-codebase review pass (2026-09-13):** asked to review the whole
 codebase broadly (code, comments, text, design, style) against "would a
