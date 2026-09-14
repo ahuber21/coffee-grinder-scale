@@ -289,6 +289,39 @@ void test_main_grind_model_ignores_sudden_weight_spike(void) {
   TEST_ASSERT_DOUBLE_WITHIN(0.05, rate, model.currentRateEstimate());
 }
 
+void test_main_grind_model_accepts_persistent_step_change_after_reject_window(void) {
+  // Unlike a momentary clump-impact spike, a reading that stays far from
+  // the last accepted sample for longer than max_reject_duration_ms is a
+  // real step change (a cup swap, a test weight placed by hand) -- the
+  // model must recover and track it, not stay blind for the rest of the
+  // session the way it would for a single-sample spike.
+  TopupModelV1 persisted = makeDefaultTopupModel();
+  MainGrindModel::Config cfg;
+  MainGrindModel model(persisted, cfg);
+  model.startSession();
+
+  const double rate = 1.0;
+  const double deadtime_s = 0.9;
+  double t_ms = 0.0;
+  for (; t_ms <= 5000.0; t_ms += 250.0) {
+    double t_s = t_ms / 1000.0;
+    double w = t_s < deadtime_s ? 0.0 : rate * (t_s - deadtime_s);
+    model.addSample(t_ms, w);
+  }
+  // last good sample: t=5000ms, weight ~= 1.0*(5-0.9) = 4.1g
+
+  // A step change lands and holds -- every sample here is still far from
+  // the last accepted 4.1g, so each is implausible on its own.
+  for (int i = 0; i < 3; ++i) {
+    t_ms += 250.0;
+    model.addSample(t_ms, 18.0);
+  }
+  // 750ms of persistent rejection is past max_reject_duration_ms (500ms
+  // by default) -- the model must have accepted the new value by now.
+  TEST_ASSERT_DOUBLE_WITHIN(0.01, 18.0, model.currentWeightEstimate());
+  TEST_ASSERT_TRUE(t_ms >= model.predictStopTimeMs(18.0));
+}
+
 void test_main_grind_model_nonpositive_rate_never_predicts_immediate_stop(void) {
   // A model with no session data and a pathological (non-positive)
   // persisted prior must never report "stop right now" -- that must defer
@@ -481,6 +514,7 @@ int main(int argc, char **argv) {
   RUN_TEST(test_main_grind_model_predicts_earlier_stop_time_with_coast);
   RUN_TEST(test_main_grind_model_ignores_sudden_weight_drop);
   RUN_TEST(test_main_grind_model_ignores_sudden_weight_spike);
+  RUN_TEST(test_main_grind_model_accepts_persistent_step_change_after_reject_window);
   RUN_TEST(test_main_grind_model_nonpositive_rate_never_predicts_immediate_stop);
 
   RUN_TEST(test_topup_model_rejects_hard_bound_outlier);

@@ -144,6 +144,12 @@ struct TelemetryEvent {
 struct DoseRequest {
   float requested_grams;
   uint32_t request_id;
+  // Runs the dose normally, but the session's model updates (main-grind
+  // rate, topup LUT, coast) never reach NVS or this boot's in-RAM models --
+  // for dev-time doses (a placed test weight, a deliberately abnormal
+  // grind) that would otherwise poison the estimates every real dose
+  // relies on.
+  bool discard_training;
 };
 
 /**

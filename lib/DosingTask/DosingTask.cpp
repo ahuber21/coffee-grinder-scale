@@ -34,6 +34,7 @@ ScaleSample g_last_sample{};
 bool g_have_sample = false;
 
 bool g_is_double = false;
+bool g_session_discard_training = false;  ///< This session's model updates never reach NVS/in-RAM models.
 ButtonId g_pending_confirm_button = ButtonId::LEFT;
 
 float g_target_grams = 0.0f;  ///< Full requested target.
@@ -324,7 +325,25 @@ void handleGrindingSample(const ScaleSample &s) {
   if (time_estimate_fired || raw_weight_fallback_fired || safety_timeout_fired) {
     grinderRelay(false);
     g_grinder_stopped_ms = s.millis;
-    g_weight_at_relay_off = s.grams;
+    {
+      // AR-073 diagnostic: which condition fired, and the model's state at
+      // that instant -- currently the only place this is ever visible.
+      // Sized to fit TelemetryEvent::log_line[96] -- sendLog() silently
+      // truncates anything longer, so this must stay short, not just fit
+      // this one call's worst case.
+      char line[96];
+      const char *reason = time_estimate_fired  ? "time"
+                            : raw_weight_fallback_fired ? "raw_fallback"
+                                                          : "timeout";
+      snprintf(line, sizeof(line), "GRIND stop:%s rt=%ums est=%.3fg tgt=%.3fg base=%.3fg",
+                reason, static_cast<unsigned>(runtime_ms),
+                g_main_grind_model->currentWeightEstimate(), g_target_grams_corrected,
+                g_grams_on_grind_start);
+      sendLog(line);
+    }
+    // currentWeightEstimate() (converted back to absolute), not s.grams --
+    // same plausibility protection as the fallback check above; this value trains CoastModel.
+    g_weight_at_relay_off = g_grams_on_grind_start + g_main_grind_model->currentWeightEstimate();
     g_main_grind_model->finalizeSession(nowEpochS());
     sendTelemetry(TelemetryType::PROGRESS, static_cast<float>(delta_weight), g_target_grams);
     transitionTo(DosingState::STOPPING);
@@ -348,6 +367,12 @@ void handleTopupSample(const ScaleSample &s) {
         break;
       }
       if (gap <= g_settings.min_topup_grams) {
+        // AR-073 diagnostic: distinguishes "closed the gap" from
+        // "declared close enough without ever firing a pulse".
+        char line[96];
+        snprintf(line, sizeof(line), "TOPUP: gap=%.4fg <= min_topup_grams, finalizing without a pulse",
+                  gap);
+        sendLog(line);
         sendTelemetry(TelemetryType::FINALIZE, delta_weight, g_target_grams);
         transitionTo(DosingState::FINALIZE);
         return;
@@ -470,6 +495,7 @@ void dosingTaskFn(void *) {
       if (g_state == DosingState::IDLE && dose.requested_grams > 0.0f &&
           dose.requested_grams <= 50.0f) {
         g_is_double = false;
+        g_session_discard_training = dose.discard_training;
         computeCorrectedTarget(dose.requested_grams, g_is_double, g_target_grams,
                                g_target_grams_corrected);
         transitionTo(DosingState::TARE);
@@ -525,6 +551,7 @@ void dosingTaskFn(void *) {
           if (press.button == g_pending_confirm_button) {
             float base = g_is_double ? g_settings.target_dose_double
                                       : g_settings.target_dose_single;
+            g_session_discard_training = false;  // a real physical dose always trains the model
             computeCorrectedTarget(base, g_is_double, g_target_grams,
                                    g_target_grams_corrected);
             transitionTo(DosingState::TARE);
@@ -577,6 +604,14 @@ void dosingTaskFn(void *) {
             static_cast<int32_t>(g_last_sample.sample_seq - g_tare_requested_after_seq) > 0;
         if (sample_postdates_retare && g_last_sample.stable) {
           g_grams_on_grind_start = g_last_sample.grams;  // software tare baseline
+          {
+            // AR-073 diagnostic: this baseline is held fixed for the whole
+            // session, so a wrong value here explains every later reading.
+            char line[96];
+            snprintf(line, sizeof(line), "TARE baseline latched: %.4fg (raw_adc=%ld)",
+                      g_grams_on_grind_start, static_cast<long>(g_last_sample.raw_adc));
+            sendLog(line);
+          }
           g_session_id = g_next_session_id++;
           g_main_grind_model->startSession();
           g_grinder_started_ms = millis();
@@ -628,23 +663,46 @@ void dosingTaskFn(void *) {
           // its full duration regardless of how long settling took.
           g_state_entered_ms = millis();
 
-          // Fold the three models' latest state into one blob and hand
-          // it to Settings task -- never a per-sample write.
-          TopupModelV1 blob = g_persisted_model;
-          blob = g_main_grind_model->dumpPersisted(blob);
-          blob = g_topup_model->dumpPersisted(blob);
-          blob = g_coast_model->dumpPersisted(blob);
-          g_persisted_model = blob;
-          sendModelStateTelemetry(g_persisted_model);
+          if (g_session_discard_training) {
+            // Rebuild all three models fresh from the untouched persisted
+            // blob -- throws away every recordPulse()/recordCoast()/
+            // addSample() mutation this session made to the in-RAM
+            // objects, not just skips the NVS write below.
+            delete g_main_grind_model;
+            delete g_topup_model;
+            delete g_coast_model;
+            g_main_grind_model = new MainGrindModel(g_persisted_model);
+            g_topup_model = new TopupModel(g_persisted_model);
+            g_coast_model = new CoastModel(g_persisted_model);
+            sendLog("FINALIZE: discard_training set, model left untouched");
+          } else {
+            // Fold the three models' latest state into one blob and hand
+            // it to Settings task -- never a per-sample write.
+            TopupModelV1 blob = g_persisted_model;
+            blob = g_main_grind_model->dumpPersisted(blob);
+            blob = g_topup_model->dumpPersisted(blob);
+            blob = g_coast_model->dumpPersisted(blob);
+            g_persisted_model = blob;
 
-          PersistRequest req{PersistBlobId::TOPUP_MODEL_V1, blob, g_session_id};
-          xQueueSend(g_persist_request_q, &req, 0);
+            PersistRequest req{PersistBlobId::TOPUP_MODEL_V1, blob, g_session_id};
+            xQueueSend(g_persist_request_q, &req, 0);
+          }
+          sendModelStateTelemetry(g_persisted_model);
 
           // final_weight_g must be comparable to requested_weight_g/
           // target_weight_g (both plain dose amounts) -- the absolute
           // reading includes whatever the cup itself weighs, which is
           // exactly the "3-digit number" bug.
           g_finalize_latched_delta = g_have_sample ? g_last_sample.grams - g_grams_on_grind_start : 0;
+          {
+            // AR-073 diagnostic: the two raw operands behind the reported
+            // final weight, not just their difference.
+            char line[128];
+            snprintf(line, sizeof(line), "FINALIZE latch: sample=%.4fg baseline=%.4fg delta=%.4fg",
+                      g_have_sample ? g_last_sample.grams : 0.0f, g_grams_on_grind_start,
+                      g_finalize_latched_delta);
+            sendLog(line);
+          }
           sendTelemetry(TelemetryType::COMPLETE, g_finalize_latched_delta, g_target_grams);
           g_last_coffee_ms = millis();
           g_finalize_done = true;

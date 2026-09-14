@@ -392,7 +392,8 @@ void handleWsMessage(AsyncWebSocketClient *client, const uint8_t *data, size_t l
       sendError(client, "grams out of range (0, 50]", request_id);
       return;
     }
-    DoseRequest req{grams, request_id != 0 ? request_id : g_next_dose_request_id++};
+    DoseRequest req{grams, request_id != 0 ? request_id : g_next_dose_request_id++,
+                     doc["discard_training"] | false};
     if (xQueueSend(g_dose_request_q, &req, 0) != pdTRUE) {
       sendError(client, "dose queue full, try again", request_id);
     }
@@ -586,7 +587,9 @@ void handleGetDosage(AsyncWebServerRequest *request) {
     return;
   }
 
-  DoseRequest req{grams, g_next_dose_request_id++};
+  bool discard_training = request->hasParam("discard_training") &&
+                           request->getParam("discard_training")->value() == "true";
+  DoseRequest req{grams, g_next_dose_request_id++, discard_training};
   if (xQueueSend(g_dose_request_q, &req, 0) != pdTRUE) {
     doc["error"] = "device busy, try again";
     serializeJson(doc, out);

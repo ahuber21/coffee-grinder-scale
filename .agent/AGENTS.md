@@ -22,12 +22,19 @@ transliterate blindly. Log anything questionable in `ARS.md`.
 
 ## Hard constraints — do not violate
 
-- **Never OTA-deploy to the physical device.** Building is always fine.
-  Flashing/deploying to the real grinder is the owner's call exclusively,
-  until he explicitly says otherwise. This applies to `pio run -t upload`,
-  `pio run -t uploadfs`, or anything that writes to the device at
-  `eureka.local` / its IP — CI-style "build and verify it compiles" is
-  fine and encouraged; touching the live device is not.
+- **The standing ~0.3g dosing-accuracy gap (`ARS.md` AR-073) is a
+  confirmed firmware/session-logic bug, not physical, not calibration,
+  not hardware.** The owner has directly ruled out all three (unchanged
+  hardware that used to be accurate, a restored + freshly recalibrated
+  `calibration_factor`, and a static reference weight reading correctly
+  outside a session) — read AR-073 in full before proposing a cause, and
+  do not re-propose physical/mechanical/calibration explanations; that
+  ground has already been covered and rejected, repeatedly, across
+  several sessions.
+- **OTA-deploying to the physical device is always allowed**, using this
+  repo's own toolchain (`pio run -t upload`/`uploadfs`, targeting
+  `eureka.local` / its IP). The owner lifted the earlier "ask first every
+  time" rule (2026-09-14) — no per-deploy confirmation needed.
 - **Hardware is fixed.** Same ESP32 (`az-delivery-devkit-v4` board id,
   ESP32-WROOM), same 80×160 ST7735 color TFT, same ADS1232 load-cell ADC,
   same 3 buttons + relay wiring. No hardware/case changes.

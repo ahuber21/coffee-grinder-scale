@@ -1868,3 +1868,107 @@ Format per entry:
   "gate on stable" as a general-purpose fix. All three rounds fixed,
   rebuilt (22/22 native tests), and OTA-deployed in the same session;
   not yet confirmed against a live dose.
+
+### AR-073 — Persistent ~0.3g dosing undershoot vs. an independent reference scale: firmware bug, confirmed NOT physical/calibration
+
+- **Area**: firmware/dosing
+- **Status**: probably resolved as a side effect of the rate_hat restore
+  below -- **not yet confirmed, do not close.** Two real coffee doses
+  after the restore (18g target -> 17.9g, 9.5g target -> 9.5g) both
+  landed within the owner's reference-scale accuracy, first time that's
+  happened since this AR was opened. Leading theory: repeated dev/test
+  sessions over this project's history (of which 2026-09-14's fake-
+  calibration-weight runs were the most recent and most acute instance)
+  have been slowly corrupting the persisted `MainGrindModel` rate via
+  exactly the mechanism found and fixed below -- not a single algorithmic
+  bug in the real-dose control loop, which is why AR-023/AR-052/AR-057/
+  AR-059/AR-072 (real, correct fixes to real, separate issues) never
+  closed it. Needs several more real doses over the coming days to
+  confirm before this is called fixed -- **read this whole entry
+  (including the update below) before proposing a cause**, and don't
+  declare it closed on two data points alone.
+- **What the owner has already ruled out, by direct test, more than
+  once** — do not re-suggest these:
+  - **Not physical/mechanical.** Hardware is unchanged (D1). The
+    pre-rewrite firmware landed on target almost exactly, on the same
+    hardware, run after run.
+  - **Not calibration.** The owner restored the old `calibration_factor`
+    and separately re-ran a full recalibration — neither changed the
+    ~0.3g gap at all.
+  - **Not the load cell's raw accuracy.** A known ~20g calibration
+    weight placed on the idle scale (no session running) reads correctly
+    -- ~19.9-20.0g, with normal small jump/noise -- confirmed directly on
+    the Advanced/raw-read page.
+- **The actual repro, and the key clue**: start a normal dose session (a
+  real button press or API request, real `TARE`/`GRINDING`/`TOPUP`/
+  `FINALIZE` flow) and place that same ~20g calibration weight in the cup
+  in place of real coffee. The session's own reported final weight comes
+  out ~19.5-19.7g — a ~0.3-0.5g shortfall against the *same physical
+  weight*, measured on the *same load cell*, that reads correctly outside
+  a session. This isolates the bug to somewhere in the session/FSM's own
+  weight bookkeeping (`DosingTask.cpp`'s delta-from-tare-baseline math,
+  or a stop condition that latches before settling, or similar) — not
+  the ADC, not `calFactor`, not the physical mechanism.
+- **Measurement method, since it wasn't logged data before**: the owner
+  weighs the finished dose on an independent kitchen/reference scale,
+  separate from the grinder's own load cell — not the firmware's
+  self-reported `final_weight_g`. `v2.sessions` has no column for this
+  independent reading; every fix attempt to date was validated only
+  against the firmware's own number, which is exactly the thing in
+  question. Getting the true reading logged per-session (even a manual
+  entry) is a prerequisite for confirming any future fix actually closes
+  the gap, rather than just agreeing with itself again.
+- **Next step**: instrument the exact repro above (calibration weight, a
+  real session) with `sendLog()`/WS "log"-channel lines at each of: the
+  latched `g_grams_on_grind_start` right after `TARE` completes, which
+  `GRINDING` stop condition actually fires and
+  `MainGrindModel::currentWeightEstimate()`'s value at that instant,
+  whether/how many `TOPUP` pulses fire, and the exact `g_last_sample.grams`
+  vs. `g_grams_on_grind_start` at the moment `FINALIZE` latches --
+  watched live, not guessed at from static reading. Do not propose a fix
+  without having traced that specific run.
+- **2026-09-14 update -- instrumentation added, first repro run
+  inconclusive, and it surfaced a second, separate, real bug.** The
+  `sendLog()` lines above were added and deployed. The owner's first
+  repro run (an abruptly-placed calibration weight standing in for
+  coffee, no dosing cup, several sessions in a row at 9.5g/18g targets)
+  showed every `GRINDING` stop firing on `time` or `timeout`, never on
+  weight -- `currentWeightEstimate()` read ~0g at the stop instant every
+  time. Root cause: an abrupt weight placement is a single-sample jump
+  far larger than `max_plausible_rise_g` (1.0g, added earlier this same
+  session in AR-072's second round), which `MainGrindModel::addSample()`
+  rejected -- and then kept rejecting forever, since every later sample
+  was *also* compared against the same now-stale last-accepted value.
+  This means the repro method (an abrupt static weight) doesn't exercise
+  the same code path real, gradual coffee flow does, so it could not by
+  itself diagnose the original gap -- but it is a real bug, introduced
+  today, independent of AR-073's original question. Two things followed:
+  - **`addSample()` hardened**: an implausible reading that persists past
+    a new `max_reject_duration_ms` (500ms) is now accepted as a genuine
+    step change rather than rejected forever (`test_main_grind_model_accepts_persistent_step_change_after_reject_window`).
+    A momentary clump-impact spike self-reverts well inside that window
+    and is still rejected as before.
+  - **The persisted main-grind rate got corrupted by the test itself**:
+    each stuck session fit a confidently-flat near-zero slope (many
+    identical near-zero samples, very low variance) that dominated the
+    Bayesian blend into the cross-session prior --
+    `rate_hat_g_s` fell from 0.9596 to 0.3759 g/s across 5 sessions,
+    live on the device, biasing every real dose's stop-time prediction
+    until noticed. Restored via a one-time boot-time patch (added,
+    confirmed applied and persisted to NVS across a reboot, then
+    removed the same session) back to the pre-test values
+    (`rate_hat=0.959576`, `rate_sd=0.000075`, `n_effective=137310`,
+    captured live moments before the corrupting runs). A new
+    `DoseRequest::discard_training` flag (API-only, `dose_request`'s
+    `"discard_training": true` over WS, or `?discard_training=true` over
+    HTTP) now lets a dev/test dose run normally without any of it
+    reaching NVS or this boot's in-RAM models -- at `FINALIZE`, a
+    discard-flagged session's `MainGrindModel`/`TopupModel`/`CoastModel`
+    are rebuilt fresh from the untouched persisted blob instead of being
+    blended and persisted. Real physical-button doses always train
+    normally; the flag only exists over the API.
+  - **Real-coffee re-run, same session, after the restore**: two doses
+    (18g target -> 17.9g, 9.5g target -> 9.5g) both landed within the
+    owner's reference-scale accuracy -- see the status line above. Good
+    sign, not yet confirmation; needs more doses over more sessions
+    before this AR is actually closed.

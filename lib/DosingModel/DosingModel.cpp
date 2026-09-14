@@ -124,14 +124,25 @@ MainGrindModel::MainGrindModel(const TopupModelV1 &persisted, Config cfg)
 void MainGrindModel::startSession() {
   m_session_fit.reset();
   m_have_last_sample = false;
+  m_rejecting = false;
 }
 
 void MainGrindModel::addSample(double runtime_ms, double weight_g) {
   if (m_have_last_sample) {
     double delta = weight_g - m_last_weight_g;
-    if (delta < -m_cfg.max_plausible_drop_g || delta > m_cfg.max_plausible_rise_g) {
-      return;
+    bool implausible = delta < -m_cfg.max_plausible_drop_g || delta > m_cfg.max_plausible_rise_g;
+    if (implausible) {
+      if (!m_rejecting) {
+        m_rejecting = true;
+        m_reject_started_ms = runtime_ms;
+      }
+      if (runtime_ms - m_reject_started_ms < m_cfg.max_reject_duration_ms) {
+        return;
+      }
+      // Implausible for too long to be a transient spike -- fall through
+      // and accept it as the new real weight.
     }
+    m_rejecting = false;
   }
 
   m_have_last_sample = true;

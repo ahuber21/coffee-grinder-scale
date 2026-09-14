@@ -1,5 +1,22 @@
 # Status
 
+*Last updated: 2026-09-14 (later same day) — AR-073, the long-standing
+~0.3g dosing gap vs. an independent reference scale, is probably fixed.
+Root cause: repeated dev/test sessions across this project's history
+had been slowly corrupting the persisted `MainGrindModel` grind-rate
+estimate; a batch of fake-calibration-weight test doses run to try to
+repro AR-073 made this acute and visible live (`rate_hat_g_s` dropped
+0.9596 -> 0.3759 across 5 sessions), got caught via new diagnostic log
+lines, restored to the pre-test value (verified persisted across a
+reboot), and two real coffee doses right after landed within the
+owner's reference-scale accuracy (18g target -> 17.9g, 9.5g -> 9.5g) --
+first time since AR-073 was opened. Also hardened: `addSample()` no
+longer gets permanently stuck after one implausible jump (accepts a
+step change past 500ms), and a new `discard_training` API flag keeps
+future dev-time doses from poisoning the persisted model. See AR-073 in
+`ARS.md` for full detail -- not yet closed, needs more real doses to
+confirm.
+
 *Last updated: 2026-09-14 — deployed the review pass's fixes live and
 caught two real issues from owner feedback while watching the device.
 First, OTA-deployed AR-063 through AR-071 (firmware + SPA). Owner then

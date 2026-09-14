@@ -203,6 +203,12 @@ class MainGrindModel {
     // target_weight_g to decide "have we already reached it," so an
     // unrejected spike here can stop the grind a moment early.
     double max_plausible_rise_g = 1.0;
+    // A transient clump-impact spike self-reverts within a sample or two;
+    // a reading that stays implausible for at least this long is a real
+    // step change (a cup swap, a test weight placed by hand) rather than
+    // a glitch, and gets accepted instead of leaving the model blind to
+    // the true weight for the rest of the session.
+    double max_reject_duration_ms = 500.0;
   };
 
   // Two overloads, rather than a `Config cfg = Config()` default
@@ -278,6 +284,8 @@ class MainGrindModel {
   bool m_have_last_sample = false;
   double m_last_runtime_ms = 0.0;
   double m_last_weight_g = 0.0;
+  bool m_rejecting = false;
+  double m_reject_started_ms = 0.0;
 
   double sessionPrecision() const;
 };
