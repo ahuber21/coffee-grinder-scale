@@ -127,8 +127,11 @@ void MainGrindModel::startSession() {
 }
 
 void MainGrindModel::addSample(double runtime_ms, double weight_g) {
-  if (m_have_last_sample && weight_g < m_last_weight_g - m_cfg.max_plausible_drop_g) {
-    return;
+  if (m_have_last_sample) {
+    double delta = weight_g - m_last_weight_g;
+    if (delta < -m_cfg.max_plausible_drop_g || delta > m_cfg.max_plausible_rise_g) {
+      return;
+    }
   }
 
   m_have_last_sample = true;

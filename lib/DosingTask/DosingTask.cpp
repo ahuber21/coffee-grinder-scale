@@ -442,9 +442,15 @@ void dosingTaskFn(void *) {
       } else if (g_state == DosingState::SCREENSAVER) {
         // Someone approaching/using the machine (placing or removing a
         // cup, dosing manually) shouldn't have to press a button first
-        // to wake the display.
+        // to wake the display. Requires a settled reading -- an
+        // in-progress placement/removal reads unstable while it's
+        // actually happening, and a bare threshold on an unstable
+        // sample risks waking on a passing vibration rather than a
+        // real, settled weight change. No bounded fallback needed here
+        // (unlike a dosing decision): any button press independently
+        // dismisses SCREENSAVER regardless of the scale.
         float delta = fabsf(sample.grams - g_screensaver_baseline_grams);
-        if (delta > g_settings.screensaver_wake_weight_delta_g) {
+        if (sample.stable && delta > g_settings.screensaver_wake_weight_delta_g) {
           transitionTo(DosingState::IDLE);
         }
       }
@@ -644,9 +650,16 @@ void dosingTaskFn(void *) {
          * treat a swing this large as "the user picked up the cup,
          * they've seen the result" and dismiss straight to IDLE.
          */
+        // Requires a settled reading, same discipline as every other
+        // decision in this file -- lifting the cup reads unstable while
+        // actually in motion, and a mid-lift transient is exactly the
+        // kind of single-sample spike this check must not act on
+        // directly. No bounded fallback needed: finalize_timeout_ms
+        // below is the existing, independent backstop if the reading
+        // never settles.
         constexpr float kCupLiftDeltaG = 3.0f;
         bool cupLifted =
-            g_have_sample &&
+            g_have_sample && g_last_sample.stable &&
             fabsf((g_last_sample.grams - g_grams_on_grind_start) - g_finalize_latched_delta) >=
                 kCupLiftDeltaG;
         if (g_finalize_done &&

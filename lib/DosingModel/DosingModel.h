@@ -192,6 +192,17 @@ class MainGrindModel {
     // glitch (e.g. the cup lifted off the scale mid-grind), not data --
     // held at the last known-good sample instead of folded in.
     double max_plausible_drop_g = 1.0;
+    // Symmetric to the drop bound above: a falling clump of grounds has
+    // inertia, so its impact on the pan reads as extra force -- heavier
+    // than its true settled mass -- for an instant before decaying back
+    // down. A single-sample rise bigger than this since the last
+    // accepted one is that transient, not real accumulated mass, and is
+    // rejected the same way: held at the last known-good sample rather
+    // than folded in. This matters beyond the fit itself --
+    // m_last_weight_g is also what predictStopTimeMs() compares against
+    // target_weight_g to decide "have we already reached it," so an
+    // unrejected spike here can stop the grind a moment early.
+    double max_plausible_rise_g = 1.0;
   };
 
   // Two overloads, rather than a `Config cfg = Config()` default

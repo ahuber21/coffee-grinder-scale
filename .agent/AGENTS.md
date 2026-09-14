@@ -158,3 +158,40 @@ source of truth.
   state the justification itself (the physical/behavioral reason),
   not where the number was previously copied from. That kind of
   before/after narrative belongs in the commit message, not the file.
+- **Never let a single raw/unstable scale reading directly trigger a
+  decision.** A falling clump of grounds has inertia — its impact reads
+  heavier than its true settled mass for an instant — and
+  `ADS1232::getRaw()` passes a single unfiltered sample straight through
+  (not the ring-buffer mean) whenever it isn't stable. A bare threshold
+  check on a raw `ScaleSample` (`if (sample.grams >= target) { ... }`,
+  a weight-delta wake/dismiss check, anything that fires a one-shot,
+  hard-to-reverse action) is exactly the shape of bug this project keeps
+  reintroducing (AR-072 found three separate instances of it in one
+  pass: the main-grind stop fallback, the SCREENSAVER wake check, and
+  the FINALIZE cup-lift check — after AR-011 and AR-049 had already
+  flagged/fixed earlier instances of the same underlying mistake). Two
+  correct patterns, and when to use which:
+  - **A one-shot state transition** (stop the grind, wake the display,
+    dismiss a screen): gate on `sample.stable`. If the transition must
+    not be able to stall forever, bound it with an explicit elapsed-time
+    fallback (`stable || elapsed >= stability_max_wait_ms`) — see
+    `handleTopupSample`'s DECIDING/SETTLING phases for the reference
+    pattern. If an independent, unconditional exit already exists (a
+    button press, an overall timeout), no bounded fallback is needed on
+    top of it.
+  - **A continuous stream feeding a regression/model** (`MainGrindModel::
+    addSample`, called every sample during an active grind): gating this
+    on `sample.stable` doesn't work and must not be attempted — during
+    real, continuous flow the reading is essentially *never* stable (the
+    flow rate alone exceeds the ring buffer's self-consistency
+    threshold), so a `stable`-gated feed would starve the model of
+    almost all its data. Instead, apply a magnitude/statistical
+    plausibility check independent of the driver's own stability flag —
+    e.g. `MainGrindModel`'s `max_plausible_drop_g`/`max_plausible_rise_g`,
+    `TopupModel`'s hard bounds, `CoastModel`'s plausibility bounds — and
+    hold the last known-good value instead of folding a rejected sample
+    in. Never assume the ADS1232 driver's own `stable`/`isChanging` flag
+    is a sufficient, trustworthy signal by itself in a tight real-time
+    loop — see AR-050, which found the same flag unreliable as a direct
+    switching trigger for a different feature; treat it as one input to
+    corroborate, not as proof.

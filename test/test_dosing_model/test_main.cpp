@@ -247,6 +247,48 @@ void test_main_grind_model_ignores_sudden_weight_drop(void) {
   TEST_ASSERT_DOUBLE_WITHIN(0.05, rate, model.currentRateEstimate());
 }
 
+void test_main_grind_model_ignores_sudden_weight_spike(void) {
+  // A falling clump's momentary impact reads heavier than its true
+  // settled mass for an instant -- addSample() must hold the last
+  // known-good sample rather than fold in the spike, otherwise
+  // predictStopTimeMs() can see "already at/past target" one sample
+  // early and stop the grind before the true (lower, settled) weight
+  // actually gets there.
+  TopupModelV1 persisted = makeDefaultTopupModel();
+  MainGrindModel model(persisted);
+  model.startSession();
+
+  const double rate = 1.0;
+  const double deadtime_s = 0.9;
+  double t_ms = 0.0;
+  for (; t_ms <= 5000.0; t_ms += 250.0) {
+    double t_s = t_ms / 1000.0;
+    double w = t_s < deadtime_s ? 0.0 : rate * (t_s - deadtime_s);
+    model.addSample(t_ms, w);
+  }
+  // last good sample: t=5000ms, weight ~= 1.0*(5-0.9) = 4.1g
+
+  double predicted_before = model.predictStopTimeMs(18.0);
+
+  // Simulate a clump-impact spike: weight momentarily jumps far above
+  // the true trajectory (here, straight to target -- exactly the case
+  // that would otherwise make predictStopTimeMs() report "stop now").
+  model.addSample(t_ms + 250.0, 18.0);
+
+  double predicted_after = model.predictStopTimeMs(18.0);
+  TEST_ASSERT_DOUBLE_WITHIN(1.0, predicted_before, predicted_after);
+  TEST_ASSERT_FALSE(t_ms + 250.0 >= predicted_after);  // must not say "stop now"
+
+  // Real samples resume at the pre-glitch trajectory -- the rate estimate
+  // should still reflect them, not the rejected outlier.
+  for (t_ms += 500.0; t_ms <= 10000.0; t_ms += 250.0) {
+    double t_s = t_ms / 1000.0;
+    double w = t_s < deadtime_s ? 0.0 : rate * (t_s - deadtime_s);
+    model.addSample(t_ms, w);
+  }
+  TEST_ASSERT_DOUBLE_WITHIN(0.05, rate, model.currentRateEstimate());
+}
+
 void test_main_grind_model_nonpositive_rate_never_predicts_immediate_stop(void) {
   // A model with no session data and a pathological (non-positive)
   // persisted prior must never report "stop right now" -- that must defer
@@ -438,6 +480,7 @@ int main(int argc, char **argv) {
   RUN_TEST(test_main_grind_model_predicts_sane_stop_time);
   RUN_TEST(test_main_grind_model_predicts_earlier_stop_time_with_coast);
   RUN_TEST(test_main_grind_model_ignores_sudden_weight_drop);
+  RUN_TEST(test_main_grind_model_ignores_sudden_weight_spike);
   RUN_TEST(test_main_grind_model_nonpositive_rate_never_predicts_immediate_stop);
 
   RUN_TEST(test_topup_model_rejects_hard_bound_outlier);
