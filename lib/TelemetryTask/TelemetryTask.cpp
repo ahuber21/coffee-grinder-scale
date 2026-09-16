@@ -181,35 +181,64 @@ void postSessionStart(const TelemetryEvent &ev) {
   postgrestRequest("POST", "/sessions", String(body));
 }
 
-/** PROGRESS -> POST /events: the main-grind row, complete in one call. */
+/** Maps a GrindStopReason to the text value v2.events.stop_reason expects. */
+const char *stopReasonToString(GrindStopReason reason) {
+  switch (reason) {
+    case GrindStopReason::TIME_ESTIMATE: return "TIME_ESTIMATE";
+    case GrindStopReason::RAW_WEIGHT_FALLBACK: return "RAW_WEIGHT_FALLBACK";
+    case GrindStopReason::SAFETY_TIMEOUT: return "SAFETY_TIMEOUT";
+  }
+  return "UNKNOWN";
+}
+
+/**
+ * PROGRESS -> POST /events: the main-grind row, complete in one call.
+ * stop_reason/weight_estimate_g exist purely for post-mortem (AR-074) --
+ * a completed session's own final_weight_g can never reveal after the
+ * fact which stop condition fired or what the model believed at that
+ * instant.
+ */
 void postMainGrindEvent(const TelemetryEvent &ev) {
   if (!g_session_open) return;  // stray PROGRESS with no open session
 
-  char body[256];
+  char body[320];
   snprintf(body, sizeof(body),
            "{\"session_id\":\"%s\",\"event_type\":\"MAIN_GRIND\",\"pulse_index\":0,"
            "\"relay_on_at_ms\":0,\"relay_off_at_ms\":%u,"
-           "\"weight_before_g\":%.4f,\"weight_after_g\":%.4f}",
+           "\"weight_before_g\":%.4f,\"weight_after_g\":%.4f,"
+           "\"stop_reason\":\"%s\",\"weight_estimate_g\":%.4f}",
            g_session_uuid, static_cast<unsigned>(ev.runtime_ms),
-           g_main_grind_weight_before, ev.grams);
+           g_main_grind_weight_before, ev.grams,
+           stopReasonToString(ev.stop_reason), ev.weight_estimate_g);
 
   postgrestRequest("POST", "/events", String(body));
 }
 
-/** TOPUP_PULSE -> POST /events: one topup pulse's row, complete in one call. */
+/**
+ * TOPUP_PULSE -> POST /events: one topup pulse's row, complete in one
+ * call. topup_bucket/topup_aim_weight_g/topup_commanded_duration_ms are
+ * this pulse's own inputs at fire time (AR-074) -- TopupModel keeps
+ * retuning each bucket's duration from every later pulse that lands in
+ * it, so the value at this exact moment isn't recoverable afterward any
+ * other way.
+ */
 void postTopupPulseEvent(const TelemetryEvent &ev) {
   if (!g_session_open) return;
 
   g_pulse_index++;
   float weight_before = ev.grams - ev.delta_grams;
 
-  char body[256];
+  char body[384];
   snprintf(body, sizeof(body),
            "{\"session_id\":\"%s\",\"event_type\":\"TOPUP\",\"pulse_index\":%d,"
            "\"relay_on_at_ms\":%u,\"relay_off_at_ms\":%u,"
-           "\"weight_before_g\":%.4f,\"weight_after_g\":%.4f}",
+           "\"weight_before_g\":%.4f,\"weight_after_g\":%.4f,"
+           "\"topup_bucket\":%u,\"topup_aim_weight_g\":%.4f,"
+           "\"topup_commanded_duration_ms\":%u}",
            g_session_uuid, g_pulse_index, static_cast<unsigned>(ev.runtime_ms),
-           static_cast<unsigned>(ev.runtime_ms), weight_before, ev.grams);
+           static_cast<unsigned>(ev.runtime_ms), weight_before, ev.grams,
+           static_cast<unsigned>(ev.topup_bucket), ev.topup_aim_weight_g,
+           static_cast<unsigned>(ev.topup_commanded_duration_ms));
 
   postgrestRequest("POST", "/events", String(body));
 }

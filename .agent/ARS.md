@@ -1972,3 +1972,64 @@ Format per entry:
     owner's reference-scale accuracy -- see the status line above. Good
     sign, not yet confirmation; needs more doses over more sessions
     before this AR is actually closed.
+
+### AR-074 — 9.5g dose landed at 10.4g: one topup pulse overshot ~4.5x; the WS-log diagnostics from AR-073 were ephemeral and missed it
+
+- **Area**: firmware/dosing, telemetry
+- **Status**: root cause found and confirmed from persisted data alone;
+  post-mortem capability gap fixed.
+- **Found**: 2026-09-16, owner report: a 9.5g dose finished at 10.4g
+  (+0.9g, far outside normal noise), asking what happened and whether it
+  could be diagnosed from the device, or whether post-mortem capability
+  needed adding.
+- **What happened (from `v2.sessions`/`v2.events`/`v2.tare_debug` alone,
+  no live listener needed)**: `TARE` baseline was a clean 0g. `MAIN_GRIND`
+  behaved normally, stopping at 8.8316g -- appropriately short of the
+  9.0g corrected target, anticipating coast. Coast added +0.4346g (9.2662g),
+  close to the persisted `coast_weight_hat` (~0.34g), unremarkable. Then
+  exactly **one** `TOPUP` pulse fired for a 0.234g gap (bucket 2, aim
+  ~0.255g) and delivered **1.1576g** -- 4.5x its own aim. Cross-checked
+  against `model_state` broadcasts bracketing that session: bucket 2's
+  learned duration was **1335ms**, sitting between neighboring buckets 1
+  and 3 at ~650-680ms each -- a clear outlier for a bucket with a healthy
+  n=18 samples, not a fresh/undertrained one. TopupModel's only
+  safeguards are absolute hygiene bounds (350-5000ms), which 1335ms
+  comfortably satisfies -- nothing constrains a bucket's duration
+  relative to its neighbors. By the time this was investigated (two days
+  later), bucket 2 had already self-corrected down to ~820ms via the
+  asymmetric online learning rule (real subsequent pulses in that bucket
+  pulling it back toward sane), consistent with a genuine, if slow,
+  self-healing learned-value anomaly rather than a permanent bug --
+  root cause is data-quality in the learned LUT, not a logic defect.
+- **Why the owner couldn't get this from a live listener**: AR-073's
+  `sendLog()` diagnostics (TARE baseline / GRIND stop reason / TOPUP
+  decision / FINALIZE latch) only ever go out over WS broadcast + Serial
+  -- nothing persists them. Confirmed directly: the WS listener used for
+  AR-073 was in a "network unreachable" gap (laptop off the LAN) spanning
+  exactly this session's runtime, so even the *existing* instrumentation
+  was silently lost. Post-mortem was still possible here only because
+  `weight_before_g`/`weight_after_g` on the persisted `events` rows
+  happened to be enough to localize the overshoot to one specific pulse
+  -- it was NOT possible to know from persisted data alone (before this
+  fix) *why* that pulse was commanded for 1335ms, only that it was.
+- **Fix**: `v2.events` gets five new nullable columns
+  (`004_stop_diagnostics.sql`, applied live) -- `stop_reason`/
+  `weight_estimate_g` on `MAIN_GRIND` rows (which of the three stop
+  conditions fired, and `MainGrindModel::currentWeightEstimate()` at that
+  instant), `topup_bucket`/`topup_aim_weight_g`/
+  `topup_commanded_duration_ms` on `TOPUP` rows (this pulse's own inputs
+  at fire time, captured before `recordPulse()` retunes that bucket for
+  the next one). `DosingTask.cpp` now builds these two events directly
+  (`sendProgressTelemetry`/`sendTopupPulseTelemetry`) instead of through
+  the generic `sendTelemetry()` helper; `TelemetryTask.cpp` posts them to
+  PostgREST. This makes every future anomaly diagnosable from the
+  database at any time afterward, with no dependency on a live WS
+  listener catching it in the moment. Verified end-to-end with a
+  synthetic PostgREST round-trip using this exact incident's real
+  numbers (not yet confirmed against a live real dose). Firmware builds
+  clean, 23/23 native tests pass, OTA-deployed.
+- **Not fixed, and not this AR's job**: bucket 2's duration drifting to
+  an outlier in the first place. `TopupModel::recordPulse()`'s per-bucket
+  independent update has no cross-bucket smoothness constraint; whether
+  it should is an open question for whoever next has real multi-bucket
+  drift data to look at, not acted on here.

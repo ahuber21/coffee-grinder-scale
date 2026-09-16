@@ -55,6 +55,8 @@ uint32_t g_topup_pulse_start_ms = 0;
 uint32_t g_topup_pulse_duration_ms = 0;
 float g_topup_weight_before_pulse = 0.0f;
 float g_topup_gap_at_fire = 0.0f;  ///< Gap at DECIDING time, for recordPulse's bucket lookup.
+int g_topup_bucket_at_fire = -1;          ///< This pulse's bucket, for TOPUP_PULSE telemetry.
+double g_topup_aim_weight_at_fire_g = 0.0;  ///< This pulse's aim, for TOPUP_PULSE telemetry.
 
 uint32_t g_tare_requested_after_seq = 0;  ///< sample_seq at TareRequest send -- see TARE's own wait.
 
@@ -247,6 +249,49 @@ void sendTelemetry(TelemetryType type, float grams = 0, float target = 0,
   xQueueSend(g_telemetry_q, &ev, 0);
 }
 
+/**
+ * Sends PROGRESS telemetry with the two fields no other event carries:
+ * which GRINDING stop condition fired, and the model's own weight
+ * estimate at that instant -- see AR-074, the post-mortem gap a session's
+ * final_weight_g alone can never fill in after the fact.
+ */
+void sendProgressTelemetry(GrindStopReason reason, float delta_weight, double weight_estimate_g) {
+  TelemetryEvent ev{};
+  ev.type = TelemetryType::PROGRESS;
+  ev.session_id = g_session_id;
+  ev.runtime_ms = g_grinder_started_ms ? (millis() - g_grinder_started_ms) : 0;
+  ev.grams = delta_weight;
+  ev.target_grams = g_target_grams;
+  ev.raw_adc = g_have_sample ? g_last_sample.raw_adc : 0;
+  ev.stable = g_have_sample ? g_last_sample.stable : false;
+  ev.stop_reason = reason;
+  ev.weight_estimate_g = static_cast<float>(weight_estimate_g);
+  xQueueSend(g_telemetry_q, &ev, 0);
+}
+
+/**
+ * Sends TOPUP_PULSE telemetry with this pulse's own decision inputs,
+ * captured at fire time -- see AR-074. topup_commanded_duration_ms
+ * especially can't be recovered later: TopupModel keeps retuning each
+ * bucket's duration from every pulse that lands in it.
+ */
+void sendTopupPulseTelemetry(float delta_weight, float weight_added, int bucket,
+                              double aim_weight_g, uint32_t commanded_duration_ms) {
+  TelemetryEvent ev{};
+  ev.type = TelemetryType::TOPUP_PULSE;
+  ev.session_id = g_session_id;
+  ev.runtime_ms = g_grinder_started_ms ? (millis() - g_grinder_started_ms) : 0;
+  ev.grams = delta_weight;
+  ev.target_grams = g_target_grams;
+  ev.delta_grams = weight_added;
+  ev.raw_adc = g_have_sample ? g_last_sample.raw_adc : 0;
+  ev.stable = g_have_sample ? g_last_sample.stable : false;
+  ev.topup_bucket = static_cast<uint8_t>(bucket);
+  ev.topup_aim_weight_g = static_cast<float>(aim_weight_g);
+  ev.topup_commanded_duration_ms = commanded_duration_ms;
+  xQueueSend(g_telemetry_q, &ev, 0);
+}
+
 /** Converts a precision (inverse variance) to a standard deviation, 0 if unset. */
 float sdFromPrecision(float precision) {
   return precision > 0.0f ? 1.0f / sqrtf(precision) : 0.0f;
@@ -344,8 +389,12 @@ void handleGrindingSample(const ScaleSample &s) {
     // currentWeightEstimate() (converted back to absolute), not s.grams --
     // same plausibility protection as the fallback check above; this value trains CoastModel.
     g_weight_at_relay_off = g_grams_on_grind_start + g_main_grind_model->currentWeightEstimate();
+    GrindStopReason stop_reason = time_estimate_fired  ? GrindStopReason::TIME_ESTIMATE
+                                   : raw_weight_fallback_fired ? GrindStopReason::RAW_WEIGHT_FALLBACK
+                                                                 : GrindStopReason::SAFETY_TIMEOUT;
+    double weight_estimate = g_main_grind_model->currentWeightEstimate();
     g_main_grind_model->finalizeSession(nowEpochS());
-    sendTelemetry(TelemetryType::PROGRESS, static_cast<float>(delta_weight), g_target_grams);
+    sendProgressTelemetry(stop_reason, static_cast<float>(delta_weight), weight_estimate);
     transitionTo(DosingState::STOPPING);
   }
 }
@@ -386,6 +435,8 @@ void handleTopupSample(const ScaleSample &s) {
         return;
       }
       g_topup_gap_at_fire = gap;
+      g_topup_bucket_at_fire = decision.bucket;
+      g_topup_aim_weight_at_fire_g = decision.aim_weight_g;
       g_topup_weight_before_pulse = s.grams;
       g_topup_pulse_start_ms = s.millis;
       g_topup_pulse_duration_ms = decision.duration_ms;
@@ -412,8 +463,9 @@ void handleTopupSample(const ScaleSample &s) {
       if (minWaitElapsed && settled) {
         double weight_added = s.grams - g_topup_weight_before_pulse;
         g_topup_model->recordPulse(g_topup_gap_at_fire, weight_added);
-        sendTelemetry(TelemetryType::TOPUP_PULSE, s.grams - g_grams_on_grind_start,
-                      g_target_grams, static_cast<float>(weight_added));
+        sendTopupPulseTelemetry(s.grams - g_grams_on_grind_start, static_cast<float>(weight_added),
+                                 g_topup_bucket_at_fire, g_topup_aim_weight_at_fire_g,
+                                 g_topup_pulse_duration_ms);
         g_topup_phase = TopupPhase::DECIDING;
         g_topup_deciding_entered_ms = s.millis;
       }

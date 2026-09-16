@@ -107,9 +107,17 @@ String buildTelemetryJson(const TelemetryEvent &ev) {
       doc["grams"] = ev.grams;
       doc["delta_grams"] = ev.delta_grams;
       doc["target_grams"] = ev.target_grams;
+      doc["topup_bucket"] = ev.topup_bucket;
+      doc["topup_aim_weight_g"] = ev.topup_aim_weight_g;
+      doc["topup_commanded_duration_ms"] = ev.topup_commanded_duration_ms;
+      break;
+    case TelemetryType::PROGRESS:
+      doc["grams"] = ev.grams;
+      doc["target_grams"] = ev.target_grams;
+      doc["weight_estimate_g"] = ev.weight_estimate_g;
+      doc["stop_reason"] = static_cast<uint8_t>(ev.stop_reason);
       break;
     case TelemetryType::TARGET:
-    case TelemetryType::PROGRESS:
     case TelemetryType::FINALIZE:
     case TelemetryType::COMPLETE:
       doc["grams"] = ev.grams;

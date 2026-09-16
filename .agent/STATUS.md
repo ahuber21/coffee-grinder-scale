@@ -1,5 +1,22 @@
 # Status
 
+*Last updated: 2026-09-16 — AR-074: a 9.5g dose landed at 10.4g. Fully
+diagnosed from persisted `sessions`/`events`/`tare_debug` data alone: one
+TOPUP pulse (bucket 2) overshot its own 0.255g aim by 4.5x, commanded at
+an outlier 1335ms duration versus ~650-680ms for neighboring buckets --
+a genuine (self-correcting) drift in the learned per-bucket LUT, not a
+logic bug. The live WS listener that would have shown this directly via
+AR-073's `sendLog()` diagnostics was in a network-unreachable gap for
+exactly this session, which is what actually prompted the fix: those
+diagnostics were never persisted anywhere. `v2.events` now has five new
+columns (`004_stop_diagnostics.sql`) — `stop_reason`/`weight_estimate_g`
+on MAIN_GRIND rows, `topup_bucket`/`topup_aim_weight_g`/
+`topup_commanded_duration_ms` on TOPUP rows — so any future anomaly is
+diagnosable from the database alone, no live listener required. Verified
+via a synthetic PostgREST round-trip with this incident's real numbers;
+firmware OTA-deployed, 23/23 native tests pass, not yet confirmed
+against a live real dose. See AR-074 in `ARS.md` for full detail.*
+
 *Last updated: 2026-09-14 (later same day) — AR-073, the long-standing
 ~0.3g dosing gap vs. an independent reference scale, is probably fixed.
 Root cause: repeated dev/test sessions across this project's history

@@ -97,6 +97,9 @@ enum class TelemetryType : uint8_t {
   TARE_DEBUG,
 };
 
+/** Which of GRINDING's three stop conditions actually fired -- PROGRESS only. */
+enum class GrindStopReason : uint8_t { TIME_ESTIMATE, RAW_WEIGHT_FALLBACK, SAFETY_TIMEOUT };
+
 /**
  * One telemetry event, forwarded to PostgREST and the WS broadcast
  * queue. Field usage varies by `type` -- see the per-field comments
@@ -122,6 +125,27 @@ struct TelemetryEvent {
    */
   bool is_double;
   float target_grams_corrected;
+
+  /*
+   * PROGRESS only -- what a completed session's own final_weight_g can
+   * never reveal after the fact: which stop condition actually fired,
+   * and MainGrindModel's plausibility-protected weight estimate (delta
+   * space, matching `grams` above) at that exact instant. See AR-074.
+   */
+  GrindStopReason stop_reason;
+  float weight_estimate_g;
+
+  /*
+   * TOPUP_PULSE only -- this specific pulse's own inputs, captured at
+   * fire time. Not reconstructable after the fact the way gap_at_fire_g
+   * is (from weight_before_g/target_grams): topup_commanded_duration_ms
+   * reflects TopupModel's online-learned per-bucket duration at that
+   * exact moment, which keeps changing as later pulses retrain it. See
+   * AR-074.
+   */
+  uint8_t topup_bucket;
+  float topup_aim_weight_g;
+  uint32_t topup_commanded_duration_ms;
 
   /*
    * MODEL_STATE only -- lib/DosingModel's current persisted parameters
