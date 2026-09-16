@@ -2250,3 +2250,40 @@ Format per entry:
   clean (`tsc --noEmit && vite build`).
 - OTA-deployed: firmware (`pio run -e esp_wroom_02_ota -t upload`) and
   the LittleFS SPA image (`-t uploadfs`), both against `eureka.local`.
+
+### AR-080 — button_debounce_ms fully wired but never consumed
+
+- **Area**: firmware/input, Settings task, NetworkTask, webapp
+- **Status**: fixed, OTA-deployed
+- **Found**: 2026-09-16, coupling/code-smell sweep of the whole firmware
+  tree (a follow-up to the comment-style pass) plus a check of the
+  webapp against firmware behavior.
+- **What**: `button_debounce_ms` was a real `SettingsSnapshot` field --
+  validated, persisted to NVS, broadcast over WS, writable via
+  `settings_write`, and exposed in the webapp's Settings page as its own
+  "Button debounce" control (separate panel from "Button min hold") --
+  but `InputTask.cpp` never read it. Only `button_min_hold_ms` (a
+  different field) was consumed, as the hold-time confirmation window.
+  Dragging "Button debounce" in the SPA changed a value nothing acted on.
+- **Why it matters**: a user-facing control that silently does nothing
+  is worse than not having it -- it invites chasing a phantom variable
+  while debugging real button flakiness. Root cause: every
+  `SettingsSnapshot` field requires manual sync across ~6 places
+  (`Messages.h`'s struct + `SettingsFieldId`, `NetworkTask.cpp`'s
+  name-mapping + JSON broadcast, `SettingsTask.cpp`'s validator/switch +
+  NVS load/save) with nothing enforcing they all get a real consumer --
+  this field got 5 of the 6 wired up and nobody noticed the 6th was
+  missing.
+- **Resolution**: wired it in as an edge-to-edge debounce gate in
+  `InputTask.cpp`, ahead of the existing hold-time check --
+  per-button `g_last_edge_ms`/`g_have_last_edge` track the last accepted
+  edge; any further edge within `button_debounce_ms` of it is dropped as
+  contact bounce before it can touch `DebounceState`. `g_min_hold_ms`
+  (from `button_min_hold_ms`) still separately verifies an accepted
+  press stays held. `applySettings()` now refreshes both fields.
+  Firmware builds clean for `esp_wroom_02`. No native test covers
+  `InputTask` (ISR/FreeRTOS-only, not part of the host-buildable
+  suite) -- not visually/physically confirmed on the real buttons yet.
+- OTA-deployed: firmware only (`pio run -e esp_wroom_02_ota -t upload`);
+  no webapp change needed (both controls were already correctly wired
+  on the SPA side).

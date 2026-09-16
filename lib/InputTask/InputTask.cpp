@@ -42,13 +42,21 @@ struct DebounceState {
 
 DebounceState g_debounce[3];  ///< Indexed by ButtonId.
 
-uint32_t g_min_hold_ms = 20;  ///< Overwritten from settings once loaded.
+/// Last edge (press or release, any button) accepted past the debounce
+/// gate below -- separate from DebounceState, which only tracks a
+/// press candidate awaiting hold-time verification.
+uint32_t g_last_edge_ms[3] = {0, 0, 0};
+bool g_have_last_edge[3] = {false, false, false};
 
-/** Refreshes g_min_hold_ms from the latest settings snapshot, if any. */
+uint32_t g_min_hold_ms = 20;       ///< Overwritten from settings once loaded.
+uint32_t g_button_debounce_ms = 150;  ///< Overwritten from settings once loaded.
+
+/** Refreshes g_min_hold_ms/g_button_debounce_ms from the latest settings snapshot, if any. */
 void applySettings() {
   SettingsSnapshot snap;
   if (xQueuePeek(g_settings_mailbox_input, &snap, 0) == pdTRUE) {
     g_min_hold_ms = snap.button_min_hold_ms;
+    g_button_debounce_ms = snap.button_debounce_ms;
   }
 }
 
@@ -74,7 +82,20 @@ void inputTaskFn(void *) {
 
     // Drain every pending edge (queue depth 8, human-timescale bursts only).
     while (xQueueReceive(g_button_edge_q, &edge, 0) == pdTRUE) {
-      DebounceState &d = g_debounce[static_cast<uint8_t>(edge.button)];
+      uint8_t idx = static_cast<uint8_t>(edge.button);
+      // Debounce gate: an edge arriving within button_debounce_ms of the
+      // last accepted edge on this same button is contact bounce, not a
+      // real transition -- dropped before it can touch the hold-time
+      // candidate below. Separate from g_min_hold_ms, which verifies an
+      // already-accepted press stays held, not whether the edge itself
+      // was real.
+      if (g_have_last_edge[idx] && edge.millis - g_last_edge_ms[idx] < g_button_debounce_ms) {
+        continue;
+      }
+      g_have_last_edge[idx] = true;
+      g_last_edge_ms[idx] = edge.millis;
+
+      DebounceState &d = g_debounce[idx];
       if (edge.level) {
         // Candidate press: remember it, verify after the hold time.
         d.pending = true;

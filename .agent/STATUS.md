@@ -1,6 +1,17 @@
 # Status
 
-*Last updated: 2026-09-16 (latest) — owner asked for two new Settings-page
+*Last updated: 2026-09-16 (latest) — coupling/code-smell sweep of the
+firmware tree (comment style was already covered in an earlier pass)
+found `button_debounce_ms` was a fully wired-but-dead setting: validated,
+persisted, broadcast, writable, and its own "Button debounce" control in
+the webapp Settings page, but `InputTask.cpp` never read it -- only the
+separate `button_min_hold_ms` did anything. Fixed by wiring it in as an
+edge-to-edge debounce gate in `InputTask.cpp`, ahead of the existing
+hold-time check (`g_min_hold_ms`, unchanged). Firmware builds clean;
+OTA-deployed. Not yet confirmed against the real buttons. See AR-080 in
+`ARS.md`.*
+
+*Last updated: 2026-09-16 (earlier) — owner asked for two new Settings-page
 knobs, "pixel density" and "gravity", to tune the falling-clumps animation
 (GRINDING family + OTA_UPDATE) without reflashing. Added
 `display_clump_density`/`display_clump_gravity` through the full settings
