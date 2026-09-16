@@ -1,5 +1,20 @@
 # Status
 
+*Last updated: 2026-09-16 (latest) — owner asked for two new Settings-page
+knobs, "pixel density" and "gravity", to tune the falling-clumps animation
+(GRINDING family + OTA_UPDATE) without reflashing. Added
+`display_clump_density`/`display_clump_gravity` through the full settings
+pipeline (NVS, NetworkTask WS field/JSON, a new `g_settings_mailbox_display`
+-- Display task had no settings subscription at all before this) plus a
+Settings page panel with debounced sliders. DisplayTask's clump array is
+now a fixed 42-slot pool (was a compile-time 14); density picks how many
+are active, gravity scales fall speed, both re-read once per ~16ms display
+frame so a drag reaches the real screen in about a frame. Verified with a
+scratch host-side harness sweeping both knobs (clump count and fall
+distance both track correctly and independently); firmware + native tests
++ webapp typecheck all pass. OTA-deployed (firmware and the LittleFS SPA
+image both), not yet visually confirmed by the owner. See AR-079.*
+
 *Last updated: 2026-09-16 (even later) — owner reported "still
 substantial flicker" after AR-077. Root cause: `drawGrindingBlock`
 (current weight/target/time text) was blanking its whole field with a

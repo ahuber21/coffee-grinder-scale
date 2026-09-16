@@ -2199,3 +2199,54 @@ Format per entry:
   needs the owner watching the real device to confirm.
 - Firmware builds clean (`pio run -e esp_wroom_02`), OTA-deployed
   (`esp_wroom_02_ota`).
+
+### AR-079 — Live-tunable pixel density/gravity for the falling-clumps animation
+
+- **Area**: firmware/display, Settings task, NetworkTask, webapp
+- **Status**: implemented, OTA-deployed (firmware + SPA filesystem image),
+  not yet visually confirmed.
+- **What**: owner wants to tune the falling-clumps animation (GRINDING
+  family + OTA_UPDATE, shared code since AR-075/AR-076) without
+  reflashing to see each change. Added two new settings,
+  `display_clump_density` and `display_clump_gravity` (both multipliers,
+  default 1.0 = today's look), threaded through the full pipeline:
+  `SettingsSnapshot` + `SettingsFieldId`, NVS load/save with the usual
+  per-field validators, `NetworkTask`'s WS field-name mapping and
+  `buildSettingsJson`, and a new Settings page panel using debounced
+  `<input type="range">` sliders (drag updates the shown number
+  immediately; the actual `settings_write` is debounced 200ms so
+  dragging doesn't flood the settings-write queue or force an NVS flash
+  write on every intermediate tick).
+- **Display task had no settings subscription at all before this** --
+  added `g_settings_mailbox_display` (Queues.h/.cpp,
+  `SettingsTask::broadcastSnapshot`) and an `applyDisplaySettings()`
+  peek, called once per display-task frame (~16ms), so a Settings page
+  write reaches the real screen within about one frame.
+- **DisplayTask.cpp**: the clump array (`g_clumpField.items`) is now a
+  fixed 42-slot pool (`kMaxCount`) instead of a compile-time 14
+  (`kDefaultCount`, still what density=1.0 resolves to); `activeCount`
+  tracks how many of the pool, from index 0, are currently
+  falling/drawn. Growing the active count seeds only the newly-activated
+  slots (they've been sitting inert, not invisibly falling, so there's
+  no stale position to resume from); shrinking erases the dropped slots'
+  last footprint once, immediately (reusing the same erase logic the
+  per-frame fall animation already needed, factored out as
+  `eraseClump()`), rather than leaving a stray pixel on screen forever.
+  Gravity is applied at the point of use (`c.y += c.speed * g_clumpGravity
+  * ...`), not baked into each clump's speed at seed time, so a gravity
+  change takes effect on every currently-falling clump immediately
+  rather than only on the next reseed.
+- **Verification**: no unit test covers this (it's a visual/animation
+  parameter, not logic), so verified with a scratch host-side harness
+  (not committed) that set `g_clumpDensity`/`g_clumpGravity` directly and
+  rendered short GRINDING sequences -- clump count matched the density
+  knob (0/0.3/1.0/2.5 -> 0/~4/14/35 visible clumps) and average fall
+  distance over a fixed 500ms window tracked the gravity knob correctly
+  and monotonically (slow 0.3x: avgY=-77 < default 1.0x: avgY=-44 < fast
+  3.0x: avgY=+38), confirming both knobs work correctly and
+  independently. Firmware builds clean for `esp_wroom_02` (RAM +464B for
+  the larger pool, Flash +1.5KB), 23/23 native tests pass (unaffected --
+  DisplayTask isn't part of that suite), webapp typechecks and builds
+  clean (`tsc --noEmit && vite build`).
+- OTA-deployed: firmware (`pio run -e esp_wroom_02_ota -t upload`) and
+  the LittleFS SPA image (`-t uploadfs`), both against `eureka.local`.
