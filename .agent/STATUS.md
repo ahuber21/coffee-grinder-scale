@@ -1,5 +1,26 @@
 # Status
 
+*Last updated: 2026-09-16 (even later) — owner reported "still
+substantial flicker" after AR-077. Root cause: `drawGrindingBlock`
+(current weight/target/time text) was blanking its whole field with a
+full-width `fillRect` before every single redraw, then printing
+transparent-background text on top -- and at GRINDING's ~500Hz scale
+sample rate this blank-then-redraw pair fired on nearly every frame the
+weight ticked up, not just the ~14fps clump animation. Fixed to
+overwrite in place with an opaque text background whenever the redraw
+is a plain value tick (no animation tick due, pile boundary not
+currently inside that field's rows) -- safe because every field here is
+anchored so a wider redraw always fully covers the narrower one it
+replaces (current weight via AR-077's running-max filter, restricted to
+GRINDING specifically since only that mode guarantees non-shrinking
+width). Verified pixel-identical against the original across
+`tools/display_sim`'s full scripted scenario (0/384 dose frames differ)
+and a temporary instrumentation pass showed 29% fewer pixels repainted
+during the scripted GRINDING segment -- neither is a direct flicker
+measurement, since the offline framebuffer only captures completed
+frames, not SPI transfer timing. OTA-deployed; needs the owner watching
+the real device to confirm the flicker is actually gone. See AR-078.*
+
 *Last updated: 2026-09-16 (later still) — two follow-ups from watching
 AR-076's simulator captures (AR-077): removed the top progress bar
 (redundant with the pile fill + falling clumps, all three showing the

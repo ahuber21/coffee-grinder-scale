@@ -2150,3 +2150,52 @@ Format per entry:
   strictly non-decreasing across 1841 noisy samples spanning the whole
   GRINDING segment.
 - Firmware builds clean, 23/23 native tests pass, OTA-deployed.
+
+### AR-078 — GRINDING's weight/target/time text was blanking the whole field before every redraw, at up to ~500Hz; fixed to overwrite in place when safe
+
+- **Area**: firmware/display
+- **Status**: implemented, OTA-deployed, not yet visually confirmed.
+- **What**: owner reported "still substantial flicker on the screen during
+  grind" after AR-077. Root cause, found by reading `drawGrindingBlock`
+  rather than from the simulator (an offline framebuffer capture can't
+  show this -- see below): every redraw of the current-weight/target/time
+  fields called `fillGrindBackground` (a full-width `fillRect` over the
+  whole field) unconditionally, then printed the new text with a
+  *transparent*-background font on top. Scale samples arrive at ~500Hz
+  and drive `sendDisplayCommand()` on nearly every Dosing task tick while
+  GRINDING, so this blank-then-redraw pair was firing on essentially
+  every frame the displayed weight ticked up (not just the ~14fps clump
+  animation) -- a real black-flash-then-text flicker over the most
+  prominent element on screen, unlike `drawIdleLayout`'s already
+  flicker-free diffed redraw.
+- **Fix**: each field now redraws independently (gated on its own
+  `*Changed` flag, not one shared `valueChanged` covering all three), and
+  when a field is redrawn purely because its value changed -- no
+  animation tick, and the pile boundary (`g_clumpField.pileTopY`) not
+  currently passing through that field's rows -- it overwrites in place
+  with an *opaque* text background instead of blanking first. This is
+  only safe because every field here is centered/right-anchored and
+  formatted to only grow in on-screen width as its value rises (current
+  weight via AR-077's running-max filter, elapsed time because it only
+  moves forward, target because it's fixed for the whole dose), the same
+  reasoning `drawIdleLayout`'s `intStartX` tracking already relies on for
+  its own left-growing field. The current-weight field additionally
+  restricts the fast path to `DisplayMode::GRINDING` specifically: only
+  GRINDING's running-max filter guarantees non-shrinking width --
+  TOPUP/STOPPING/FINALIZE intentionally show the real, non-monotonic
+  reading (AR-077), and `display_sim`'s own injected jitter for those
+  modes reproduced stale leftover digit pixels the first time this was
+  tried without the guard.
+- **Verification**: `tools/display_sim`'s full scripted BOOT/dose/OTA
+  scenario renders pixel-identical output before and after (0 of 384
+  `dose.dsim` frames differ) -- confirms the optimization changes no
+  final rendered content, including through TOPUP's noisy segment that
+  initially caught the missing mode guard. A separate `fillRect`
+  instrumentation pass (temporary, not committed) showed total pixels
+  repainted during the scripted 9.2s GRINDING segment drop 29% (1.50M ->
+  1.07M). Neither of those is a direct flicker measurement -- the
+  offline framebuffer captures only completed frames, not SPI transfer
+  timing, so it cannot reproduce or disprove the flicker itself; this
+  needs the owner watching the real device to confirm.
+- Firmware builds clean (`pio run -e esp_wroom_02`), OTA-deployed
+  (`esp_wroom_02_ota`).
