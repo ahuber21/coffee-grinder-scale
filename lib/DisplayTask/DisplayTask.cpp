@@ -80,7 +80,6 @@ FakeCanvas g_tft;
 // --- Accent palette (RGB565), matched to iOS system colors ------------------
 
 constexpr uint16_t kColorSecondary = 0x9CD3;      ///< #98989D -- supporting text.
-constexpr uint16_t kColorTrack = 0x39C7;          ///< #3A3A3C -- progress bar track.
 constexpr uint16_t kColorAccentBlue = 0x0C3F;     ///< #0A84FF -- active/primary action.
 constexpr uint16_t kColorAccentGreen = 0x368B;    ///< #30D158 -- success/finalize.
 constexpr uint16_t kColorOtaTrack = 0x0842;       ///< Near-black navy -- OTA screen's unfilled region.
@@ -102,34 +101,6 @@ uint16_t lerpColor565(uint16_t a, uint16_t b, float t) {
   return static_cast<uint16_t>((r << 11) | (g << 5) | bl);
 }
 
-/** Cache of the top-of-screen progress bar's last-drawn width/color. */
-struct { int16_t lastWidth = -1; uint16_t lastColor = 0; } g_progress;
-
-/**
- * Draws (or skips, if unchanged) a thin progress bar across the top of the
- * screen -- `frac` (0..1, clamped) of `color` over a dim track.
- */
-void drawProgressBar(float frac, uint16_t color, bool force) {
-  constexpr int16_t barH = 3;
-  if (frac < 0.0f) frac = 0.0f;
-  if (frac > 1.0f) frac = 1.0f;
-  int16_t width = static_cast<int16_t>(frac * kW + 0.5f);
-
-  if (!force && width == g_progress.lastWidth && color == g_progress.lastColor) {
-    return;
-  }
-  if (force || color != g_progress.lastColor) {
-    g_tft.fillRect(0, 0, kW, barH, kColorTrack);
-    g_tft.fillRect(0, 0, width, barH, color);
-  } else if (width > g_progress.lastWidth) {
-    g_tft.fillRect(g_progress.lastWidth, 0, width - g_progress.lastWidth, barH, color);
-  } else if (width < g_progress.lastWidth) {
-    g_tft.fillRect(width, 0, g_progress.lastWidth - width, barH, kColorTrack);
-  }
-  g_progress.lastWidth = width;
-  g_progress.lastColor = color;
-}
-
 // --- Shared falling-clumps background: GRINDING family + OTA_UPDATE --------
 // Small squares fall from the top and disappear into a solid pile rising
 // from the bottom as `frac` climbs -- coffee grounds landing in the cup.
@@ -139,10 +110,11 @@ void drawProgressBar(float frac, uint16_t color, bool force) {
 // frame from the continuously-changing fill height, so integer truncation
 // made the topmost (lightest) band's rendered height jitter by a pixel
 // between adjacent frames -- the flicker the owner flagged. This has no
-// bands: the pile is one flat, diffed fill (exactly `drawProgressBar`'s
-// technique), and the only per-frame motion is a handful of independent
-// falling squares with their own float positions -- nothing here is
-// recomputed from a size that changes underneath it.
+// bands: the pile is one flat fill, diffed against its own last-drawn
+// boundary so only the newly (un)filled band is ever repainted, and the
+// only per-frame motion is a handful of independent falling squares with
+// their own float positions -- nothing here is recomputed from a size
+// that changes underneath it.
 namespace clumps {
 constexpr uint8_t kCount = 14;
 constexpr int16_t kSize = 2;
@@ -496,6 +468,11 @@ struct {
   uint16_t timeColor = 0xFFFF;
 } g_grind;
 
+// GRINDING's own running-max display filter (see drawGrindingBlock) --
+// separate from g_grind since it must survive across the TOPUP/STOPPING/
+// FINALIZE modes that share this same function but don't use it.
+float g_grindDisplayMaxGrams = 0.0f;
+
 /**
  * Draws the GRINDING-family layout. The falling-clumps background now
  * animates continuously (see drawClumpField), so -- like drawOtaLayout --
@@ -505,14 +482,37 @@ struct {
  * tick or a real value change, so a genuinely idle screen (holding on
  * FINALIZE, say) still costs nothing between ticks.
  */
-void drawGrindingBlock(float currentGrams, float targetGrams, float seconds,
+void drawGrindingBlock(DisplayMode mode, float currentGrams, float targetGrams, float seconds,
                        uint16_t currentColor, uint16_t targetColor,
                        uint16_t timeColor, uint16_t connColor, bool force) {
   if (force) {
     g_grind = {};
+    if (mode == DisplayMode::GRINDING) g_grindDisplayMaxGrams = 0.0f;
   }
 
   float displayGrams = cleanZero(currentGrams);
+  /*
+   * GRINDING only: the real reading is genuinely noisy (load-cell jitter,
+   * a falling clump's momentary extra force) and showing it directly reads
+   * as a jumpy, non-monotonic number for a quantity that only ever
+   * physically increases while grinding. TOPUP/STOPPING/FINALIZE keep
+   * showing the real reading unfiltered -- those are the numbers the
+   * stop/topup decisions actually acted on, and hiding a real settle or
+   * cup-lift there would be actively misleading, not just less pretty.
+   * Same plausibility bound as MainGrindModel's own addSample() (a
+   * clump's impact reads heavier than its true settled mass for an
+   * instant), reused here for the same physical reason -- this is a
+   * separate, display-only filter that affects no real stop/topup
+   * decision, not a change to that one.
+   */
+  if (mode == DisplayMode::GRINDING) {
+    constexpr float kMaxPlausibleJumpG = 1.0f;
+    if (displayGrams > g_grindDisplayMaxGrams &&
+        displayGrams - g_grindDisplayMaxGrams <= kMaxPlausibleJumpG) {
+      g_grindDisplayMaxGrams = displayGrams;
+    }
+    displayGrams = g_grindDisplayMaxGrams;
+  }
   float frac = targetGrams > 0.0f ? displayGrams / targetGrams : 0.0f;
 
   bool bgTick = drawClumpField(frac, kColorCoffeePile, ST7735_BLACK, kColorCoffeeLight, force);
@@ -615,7 +615,6 @@ void drawGrindingBlock(float currentGrams, float targetGrams, float seconds,
   g_grind.targetColor = targetColor;
   g_grind.timeColor = timeColor;
 
-  drawProgressBar(frac, currentColor, force);
   drawConnectionIndicator(connColor);
 }
 
@@ -923,7 +922,7 @@ void renderMode(const DisplayCommand &cmd, bool force) {
       uint16_t current = cmd.current_color != 0 ? cmd.current_color : defCurrent;
       uint16_t target = cmd.target_color != 0 ? cmd.target_color : defTarget;
       uint16_t time = cmd.time_color != 0 ? cmd.time_color : defTime;
-      drawGrindingBlock(cmd.current_grams, cmd.target_grams, cmd.elapsed_s, current,
+      drawGrindingBlock(cmd.mode, cmd.current_grams, cmd.target_grams, cmd.elapsed_s, current,
                         target, time, cmd.connection_indicator_color, force);
       break;
     }

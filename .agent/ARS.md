@@ -2118,3 +2118,35 @@ Format per entry:
   still isn't part of that suite -- this is a visualization tool, not a
   pass/fail check; whether it's worth golden-frame regression assertions
   later is an open question, not attempted here).
+
+### AR-077 — Removed the redundant top progress bar; GRINDING now shows a smoothed, outlier-bounded running-max weight
+
+- **Area**: firmware/display
+- **Status**: implemented, OTA-deployed, not yet visually confirmed.
+- **What**: reviewing AR-076's simulator captures, the owner asked for
+  two follow-up changes. (1) The thin top-of-screen progress bar
+  (`drawProgressBar`) overlapped visually with the pile fill and the
+  falling clumps -- all three represented the same `frac`, redundantly.
+  Removed outright (function, its `g_progress` cache, and the now-unused
+  `kColorTrack` constant) rather than kept dark/hidden. (2) The real
+  weight reading is genuinely noisy; showing it directly during GRINDING
+  read as jumpy for a quantity that only ever physically increases.
+  `drawGrindingBlock` now tracks a running max (bounded by the same
+  plausibility check `MainGrindModel::addSample` already uses -- reject
+  a single-tick rise over 1.0g as a clump-impact spike, not real
+  accumulated weight) and displays that instead, but **only in
+  `DisplayMode::GRINDING`** -- TOPUP/STOPPING/FINALIZE still show the
+  real, unfiltered reading, per the owner's explicit ask ("to not
+  confuse me as the user"), since those are the numbers the actual
+  stop/topup decisions acted on.
+- This is display-only: no control-loop code was touched, and nothing
+  about what the firmware decides (when to stop grinding, whether to
+  fire a topup pulse) changed -- only what the screen shows during
+  GRINDING specifically.
+- `tools/display_sim`'s dose scenario now injects synthetic sensor noise
+  during GRINDING/STOPPING/TOPUP specifically to exercise this (a clean
+  linear ramp would look identical whether the filter existed or not);
+  verified via a temporary debug build that the displayed value is
+  strictly non-decreasing across 1841 noisy samples spanning the whole
+  GRINDING segment.
+- Firmware builds clean, 23/23 native tests pass, OTA-deployed.

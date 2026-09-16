@@ -1,5 +1,14 @@
 # Status
 
+*Last updated: 2026-09-16 (later still) — two follow-ups from watching
+AR-076's simulator captures (AR-077): removed the top progress bar
+(redundant with the pile fill + falling clumps, all three showing the
+same `frac`), and GRINDING now displays a smoothed running-max weight
+(outlier-bounded, same plausibility check as `MainGrindModel::addSample`)
+instead of the real noisy reading -- display-only, no control-loop
+change. TOPUP/STOPPING/FINALIZE still show the real, unfiltered reading
+on purpose. OTA-deployed. See AR-077.*
+
 *Last updated: 2026-09-16 (later same day) — added `tools/display_sim`
 (AR-076): `DisplayTask.cpp`'s real rendering code now also compiles
 host-side (no ESP32, no physical panel) against an in-memory framebuffer

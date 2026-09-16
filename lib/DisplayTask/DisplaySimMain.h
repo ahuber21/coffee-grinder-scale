@@ -22,6 +22,7 @@
  */
 
 #include <cstdio>
+#include <cstdlib>
 #include <string>
 #include <vector>
 
@@ -75,8 +76,16 @@ float lerp(float a, float b, float t) { return a + (b - a) * t; }
  * `durationMs`, in `kStepMs` increments -- interpolating current_grams/
  * elapsed_s linearly, holding every other field at `to`'s value -- and
  * captures a frame every `1000/kCaptureFps` ms of simulated time.
+ *
+ * `noiseG`, when nonzero, adds continuous small jitter (uniform,
+ * +-noiseG) to current_grams every step, plus an occasional larger
+ * spike (~1/40 steps, 6x noiseG) -- a stand-in for load-cell jitter and
+ * a falling clump's momentary extra force, so a capture can actually
+ * show drawGrindingBlock's running-max display filter smoothing the
+ * former and rejecting the latter.
  */
-void runSegment(FrameDump &dump, DisplayCommand &last, DisplayCommand to, uint32_t durationMs) {
+void runSegment(FrameDump &dump, DisplayCommand &last, DisplayCommand to, uint32_t durationMs,
+                 float noiseG = 0.0f) {
   constexpr uint32_t kStepMs = 5;      // finer than drawClumpField's ~70ms tick
   constexpr uint32_t kCaptureFps = 24;
   constexpr uint32_t kCaptureEveryMs = 1000 / kCaptureFps;
@@ -90,6 +99,10 @@ void runSegment(FrameDump &dump, DisplayCommand &last, DisplayCommand to, uint32
     DisplayCommand cmd = to;
     cmd.current_grams = lerp(from.current_grams, to.current_grams, t);
     cmd.elapsed_s = lerp(from.elapsed_s, to.elapsed_s, t);
+    if (noiseG > 0.0f) {
+      cmd.current_grams += ((std::rand() % 2001) / 1000.0f - 1.0f) * noiseG;
+      if (std::rand() % 40 == 0) cmd.current_grams += noiseG * 6.0f;
+    }
 
     if (elapsed > 0) simMillisRef() += kStepMs;
     applyModeChange(last, cmd);
@@ -144,30 +157,35 @@ int main(int argc, char **argv) {
 
     // GRINDING: main grind stops a bit short of the corrected target,
     // anticipating coast -- matches real behavior (see AR-072/AR-073).
+    // Noisy on purpose (see runSegment's noiseG) -- this is what actually
+    // exercises drawGrindingBlock's running-max display filter; a clean
+    // linear ramp would look identical whether the filter existed or not.
     DisplayCommand grinding{};
     grinding.mode = DisplayMode::GRINDING;
     grinding.target_grams = 9.5f;
     grinding.current_grams = 8.8f;
     grinding.elapsed_s = 9.2f;
-    runSegment(doseDump, last, grinding, 9200);
+    runSegment(doseDump, last, grinding, 9200, 0.15f);
 
     DisplayCommand stopping{};
     stopping.mode = DisplayMode::STOPPING;
     stopping.target_grams = 9.5f;
     stopping.current_grams = 9.27f;  // coast lands it close to the corrected target
     stopping.elapsed_s = 10.7f;
-    runSegment(doseDump, last, stopping, 1500);
+    runSegment(doseDump, last, stopping, 1500, 0.1f);
 
-    // TOPUP: one pulse (fast jump), then its settle wait.
+    // TOPUP: one pulse (fast jump), then its settle wait. Noisy too, to
+    // show this mode deliberately does NOT get the running-max filter --
+    // the owner wants the real (settling) reading here, not smoothed.
     DisplayCommand pulseEnd{};
     pulseEnd.mode = DisplayMode::TOPUP;
     pulseEnd.target_grams = 9.5f;
     pulseEnd.current_grams = 9.48f;
     pulseEnd.elapsed_s = 11.0f;
-    runSegment(doseDump, last, pulseEnd, 300);
+    runSegment(doseDump, last, pulseEnd, 300, 0.1f);
     DisplayCommand settle = pulseEnd;
     settle.elapsed_s = 12.0f;
-    runSegment(doseDump, last, settle, 1000);
+    runSegment(doseDump, last, settle, 1000, 0.1f);
 
     DisplayCommand finalize = settle;
     finalize.mode = DisplayMode::FINALIZE;
