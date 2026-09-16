@@ -24,13 +24,8 @@ Preferences g_prefs;
 
 constexpr const char *kNvsNamespace = "settings";
 
-/*
- * Bumped only when SettingsSnapshot's on-NVS shape changes in a way old
- * data can't be safely reinterpreted as. History: 1->2 forced a stale
- * NVS blob (written by an early migration pass that shipped without
- * gain/speed/read_samples) to fall back to compiled-in defaults and
- * reload correctly, once that gap was found and fixed.
- */
+// Bumped when SettingsSnapshot's on-NVS layout changes in a way that requires
+// old data to reload from compiled-in defaults instead of a stale NVS blob.
 constexpr uint32_t kSettingsSchemaVersion = 2;
 
 constexpr const char *kKeySchemaVer = "schema_ver";

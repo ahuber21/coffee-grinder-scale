@@ -125,9 +125,8 @@ bool postgrestRequest(const char *method, const String &path, const String &body
   http.begin(url);
   http.setTimeout(kHttpTimeoutMs);
   http.addHeader("Content-Type", "application/json");
-  // Harmless for the all-in-one-call rows this task actually sends
-  // today; would matter if a future pulse-level PATCH needed event_id
-  // back from the insert.
+  // Harmless for the current all-in-one-call format; would matter if a
+  // future pulse-level PATCH needed event_id back from the insert.
   http.addHeader("Prefer", "return=representation");
 
   int code;

@@ -67,14 +67,8 @@ uint32_t g_last_activity_ms = 0;  ///< Last button press or IDLE entry -- drives
 float g_screensaver_baseline_grams = 0.0f;  ///< Weight at SCREENSAVER entry, for the wake check.
 uint32_t g_last_coffee_ms = 0;    ///< When the last session completed; 0 == none yet this boot.
 
-/*
- * lib/DosingModel integration: hot, running model state lives here as
- * plain task-local state, updated on every ScaleSample this task
- * already receives while GRINDING/TOPUP -- no queue hop on the
- * per-sample path. The persisted cold copy is loaded once from
- * Settings task before this task leaves BOOT, and written back only
- * when a session finishes.
- */
+// DosingModel: hot state is task-local, updated per-sample while GRINDING/TOPUP.
+// Persisted copy loaded from Settings at BOOT, written back when session finishes.
 
 TopupModelV1 g_persisted_model;
 MainGrindModel *g_main_grind_model = nullptr;
@@ -323,45 +317,15 @@ void handleGrindingSample(const ScaleSample &s) {
   double delta_weight = s.grams - g_grams_on_grind_start;
   g_main_grind_model->addSample(runtime_ms, delta_weight);
 
-  /*
-   * addSample above is fed delta_weight (already relative to the tare
-   * baseline), so the target handed to the model must be in that same
-   * delta space -- g_target_grams_corrected alone, not reduced by the
-   * baseline again. That second subtraction is invisible whenever the
-   * baseline is near zero, but goes deeply wrong the moment it isn't
-   * (e.g. a dosing cup with real weight on it), predicting a near-zero
-   * stop time and cutting the main grind off almost immediately.
-   */
+  // addSample is fed delta_weight (relative to baseline), so the target
+  // must also be in delta space (g_target_grams_corrected, not subtracted again).
   double coast_estimate = g_coast_model->currentCoastEstimate();
   double predicted_stop_ms = g_main_grind_model->predictStopTimeMsWithCoast(
       g_target_grams_corrected, coast_estimate);
 
-  /*
-   * Primary (time-estimate) and fallback (raw-weight) stop checks both
-   * compare against the same canonical value, target_grams_corrected --
-   * there is no second variable either could diverge from.
-   *
-   * The fallback compares g_main_grind_model->currentWeightEstimate(),
-   * not the raw sample directly -- and deliberately does NOT gate on
-   * s.stable. GRINDING is a continuously active state (relay on, coffee
-   * constantly falling) for its whole duration, so the ADC's own
-   * stability flag is essentially never true here by definition -- it
-   * only reports stable once flow has genuinely stopped or nearly so.
-   * Gating this fallback on s.stable (tried first, and wrong) doesn't
-   * make it safer, it makes it fire only in a near-jam scenario,
-   * silently disabling the case it exists for: catching an already-at-
-   * target reading while the primary time estimate is wrong and flow is
-   * still ongoing. Without this fallback able to fire promptly in that
-   * case, the grind would run all the way to grinding_timeout_ms
-   * (tens of seconds) before stopping -- a much worse failure (large
-   * overshoot) than the transient-spike undershoot this fallback was
-   * protecting against. The correct fix is protecting the *value*, not
-   * gating the *decision*: currentWeightEstimate() is
-   * MainGrindModel::addSample's own last-accepted sample, already
-   * rejecting an implausible single-sample rise or drop (a falling
-   * clump's momentary impact reads heavier than its true settled mass
-   * for an instant) before it can be compared against anything.
-   */
+  // Both primary and fallback stops use the same canonical target value;
+  // currentWeightEstimate() is already filtered by addSample's plausibility check.
+  // Fallback deliberately does NOT gate on s.stable (relay is always on here).
   bool time_estimate_fired = runtime_ms >= predicted_stop_ms;
   bool raw_weight_fallback_fired =
       g_main_grind_model->currentWeightEstimate() >= g_target_grams_corrected;
@@ -496,8 +460,8 @@ void dosingTaskFn(void *) {
   if (xQueueReceive(g_topup_model_mailbox, &g_persisted_model, portMAX_DELAY) != pdTRUE) {
     g_persisted_model = makeDefaultTopupModel();
   }
-  // Put it back for anyone else that might peek it later (there is no
-  // other reader today, but this keeps the mailbox non-empty).
+  // Restore the model mailbox so any future reader can peek it without
+  // needing to check g_persisted_model directly.
   xQueueOverwrite(g_topup_model_mailbox, &g_persisted_model);
 
   g_main_grind_model = new MainGrindModel(g_persisted_model);

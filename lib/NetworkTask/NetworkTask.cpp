@@ -51,13 +51,8 @@ uint32_t g_next_dose_request_id = 1;
 bool g_have_model_state = false;
 TelemetryEvent g_last_model_state{};
 
-/*
- * One multiplexed WS channel, not several separate sockets: every
- * message is {"type": <discriminator>, ...fields}. Each TelemetryType
- * maps to one envelope "type" string, plus "settings" for the
- * SettingsSnapshot broadcast and "error" for a per-client rejection
- * reply.
- */
+// One multiplexed WS channel: each message is {"type": <discriminator>, ...}.
+// TelemetryType maps to "type" string; "settings" and "error" are reserved.
 
 /** Maps a TelemetryType to its WS envelope "type" string. */
 const char *telemetryTypeToString(TelemetryType t) {
@@ -143,21 +138,8 @@ String buildTelemetryJson(const TelemetryEvent &ev) {
   return out;
 }
 
-/*
- * ArduinoJson's double serializer (TextFormatter::writeFloat) always
- * prints a fixed 9 places after the decimal point, not 9 significant
- * digits -- for a value with calibration_factor's real magnitude
- * (~1e-4 to ~1e-3), 3-4 of those 9 places are wasted on leading zeros,
- * so only ~6 significant digits ever survive the round trip to the
- * browser and back, no matter how precisely it's stored internally
- * (verified: SettingsSnapshot/NVS/ADS1232::calFactor already carry the
- * full double precision correctly -- only the JSON text was lossy).
- * Multiplying by 1e6 for the wire only moves the value's magnitude up
- * near 1-1000, where those same 9 decimal places are all genuinely
- * significant. The wire field is named calibration_factor_x1e6, not
- * calibration_factor, specifically so this scaling can never be missed
- * or silently reapplied on top of itself.
- */
+// ArduinoJson prints 9 decimal places (not significant digits); for values
+// ~1e-4, this loses precision. Scale to 1e6 for the wire so 9 decimals matter.
 constexpr double CALIBRATION_FACTOR_WIRE_SCALE = 1e6;
 
 /** Serializes the broadcast subset of SettingsSnapshot into WS envelope JSON. */
@@ -467,22 +449,8 @@ void onWsEvent(AsyncWebSocket *server, AsyncWebSocketClient *client, AwsEventTyp
   }
 }
 
-/*
- * OTA is refused outright while a grind is in progress, never aborted
- * mid-flash. ArduinoOTA's public callback surface doesn't give a way to
- * refuse *before* Update.begin() runs -- its handle() only calls
- * onStart() after Update.begin() has already erased the target
- * partition. The actual "refuse before it starts" gate is therefore in
- * networkTaskFn's loop below: ArduinoOTA.handle() is simply never
- * pumped while otaSafeToStart() is false, so the initial UDP handshake
- * that would begin an update never happens -- the espota client just
- * doesn't get a response until Dosing task leaves its active states, at
- * which point a flash proceeds normally and no grind is ever
- * interrupted. onStart() re-checks and aborts as a narrow backstop for
- * the sub-millisecond race between a handshake completing and the next
- * handle() call -- if that race is lost, the worst case is a wasted
- * partition erase, never a disturbed grind.
- */
+// OTA refusal happens at the networkTaskFn loop (not calling handle() while
+// grinding), not in onStart() -- onStart() fires after Update.begin() erases.
 
 /** ArduinoOTA onStart callback: refuses (backstop only, see above) or begins. */
 void handleOtaStart() {
