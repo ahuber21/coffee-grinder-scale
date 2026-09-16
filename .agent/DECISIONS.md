@@ -330,3 +330,19 @@ form onto physically discrete behavior. See ARS.md AR-059 for the full
 technical detail and the real side effect (the version bump this
 required also reset `MainGrindModel`/`CoastModel`'s accumulated
 confidence, not just the topup fields).
+
+**D24 — Relaxes D13's "spot on" accuracy target from Δ<0.05g to
+Δ<0.1g; 95%/Δ0.2g and the ≤0.3g overshoot cap are unchanged.** D13
+deliberately held the line at 0.05g after AR-022 found the topup
+mechanism's own physical granularity (relay-actuation clumping,
+~0.15-0.2g minimum controllable increment) coarser than that tolerance
+by 3-4x, reasoning the main-grind stop estimate (not topup precision)
+was the path to it. Real session data since (AR-072 through AR-077's
+work, live dosing across several days) showed 0.05g asking for
+consistency this hardware doesn't actually deliver even with a good
+main-grind estimate -- the owner reviewed that data and concluded 0.05g
+wasn't a meaningful target to keep measuring against, not that the
+firmware itself regressed. Recorded here since D13 explicitly declined
+this exact relaxation once already; this doesn't reopen the overshoot-
+vs-undershoot asymmetry or the 95%/0.2g target, only the single number.
+Applied in `webapp/src/pages/History.tsx` (`SPOT_ON_THRESHOLD_G`).

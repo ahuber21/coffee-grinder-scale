@@ -35,6 +35,9 @@ Chart.register(
 
 const HISTOGRAM_RANGE_G = 0.5;
 const HISTOGRAM_BIN_WIDTH_G = 0.05;
+// D24 relaxed this from 0.05g -- real session data showed 0.05g wasn't a
+// meaningful target given the topup mechanism's own physical granularity.
+const SPOT_ON_THRESHOLD_G = 0.1;
 
 function fmt(n: number, digits = 3): string {
   return n.toFixed(digits);
@@ -468,7 +471,7 @@ export default function HistoryPage() {
     const completed = sessions.filter((s) => s.outcome === "completed" && s.final_weight_g !== null);
     if (completed.length === 0) return null;
     const errors = completed.map((s) => Math.abs(s.final_weight_g! - s.requested_weight_g));
-    const withinSpot = errors.filter((e) => e < 0.05).length;
+    const withinSpot = errors.filter((e) => e < SPOT_ON_THRESHOLD_G).length;
     const within02 = errors.filter((e) => e < 0.2).length;
     return {
       n: completed.length,
@@ -479,13 +482,15 @@ export default function HistoryPage() {
 
   return (
     <>
-      {/* The project's accuracy targets (80% within 0.05g, 95% within 0.2g),
-          computed live from whatever real sessions exist so far. */}
+      {/* The project's accuracy targets (80% within SPOT_ON_THRESHOLD_G,
+          95% within 0.2g), computed live from whatever real sessions
+          exist so far. */}
       {stats && (
         <div className="panel">
           <h3>Accuracy (last {stats.n} completed sessions)</h3>
           <p>
-            <strong>{stats.spotOnPct.toFixed(0)}%</strong> spot on (Δ&lt;0.05g, target 80%) ·{" "}
+            <strong>{stats.spotOnPct.toFixed(0)}%</strong> spot on (Δ&lt;
+            {SPOT_ON_THRESHOLD_G.toFixed(2)}g, target 80%) ·{" "}
             <strong>{stats.within02Pct.toFixed(0)}%</strong> within 0.2g (target 95%)
           </p>
         </div>

@@ -80,11 +80,13 @@ transliterate blindly. Log anything questionable in `ARS.md`.
   fitted, recency-weighted model built from `topup(runtime_ms →
   weight_increment)` and `progress(runtime_ms → weight)` history (7,647 /
   121,847 rows respectively as of the audit). Neither needs the missing
-  target linkage to be useful. Targets: "spot on" = |error| < 0.05g for
-  80% of sessions, 95% within Δ0.2g, remaining 5% outliers tolerated;
-  **overshoot hard-capped at ≤0.3g** and weighted as more critical to avoid
-  than undershoot (undershoot → annoying-but-fine topup loop; overshoot →
-  manually discarding ground coffee).
+  target linkage to be useful. Targets: "spot on" = |error| < 0.1g for
+  80% of sessions (relaxed from 0.05g by D24 -- real session data showed
+  0.05g wasn't a meaningful target given the topup mechanism's own
+  physical granularity), 95% within Δ0.2g, remaining 5% outliers
+  tolerated; **overshoot hard-capped at ≤0.3g** and weighted as more
+  critical to avoid than undershoot (undershoot → annoying-but-fine
+  topup loop; overshoot → manually discarding ground coffee).
 
 ## Infrastructure access
 
