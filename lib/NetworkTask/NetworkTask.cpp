@@ -187,6 +187,8 @@ String buildSettingsJson(const SettingsSnapshot &s) {
   doc["min_topup_runtime_ms"] = s.min_topup_runtime_ms;
   doc["min_topup_interval_ms"] = s.min_topup_interval_ms;
   doc["button_min_hold_ms"] = s.button_min_hold_ms;
+  doc["display_clump_density"] = s.display_clump_density;
+  doc["display_clump_gravity"] = s.display_clump_gravity;
   String out;
   serializeJson(doc, out);
   return out;
@@ -322,6 +324,14 @@ bool settingsFieldFromName(const char *name, SettingsFieldId &out) {
     out = SettingsFieldId::BUTTON_MIN_HOLD_MS;
     return true;
   }
+  if (strcmp(name, "display_clump_density") == 0) {
+    out = SettingsFieldId::DISPLAY_CLUMP_DENSITY;
+    return true;
+  }
+  if (strcmp(name, "display_clump_gravity") == 0) {
+    out = SettingsFieldId::DISPLAY_CLUMP_GRAVITY;
+    return true;
+  }
   return false;
 }
 
@@ -368,7 +378,9 @@ void handleWsMessage(AsyncWebSocketClient *client, const uint8_t *data, size_t l
                fieldId == SettingsFieldId::TOP_UP_MARGIN_DOUBLE ||
                fieldId == SettingsFieldId::MIN_TOPUP_GRAMS ||
                fieldId == SettingsFieldId::RATE_CALCULATION_PERCENTAGE ||
-               fieldId == SettingsFieldId::SCREENSAVER_WAKE_WEIGHT_DELTA_G) {
+               fieldId == SettingsFieldId::SCREENSAVER_WAKE_WEIGHT_DELTA_G ||
+               fieldId == SettingsFieldId::DISPLAY_CLUMP_DENSITY ||
+               fieldId == SettingsFieldId::DISPLAY_CLUMP_GRAVITY) {
       // static_cast<double>, not the bare NAN macro (which is float-typed)
       // -- ArduinoJson's operator| deduces its parse target type from the
       // fallback's type, so a float fallback here would parse (and

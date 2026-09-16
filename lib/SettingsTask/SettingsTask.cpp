@@ -56,6 +56,8 @@ constexpr const char *kKeySsTimeoutS = "ss_timeout_s";
 constexpr const char *kKeySsWakeDeltaG = "ss_wake_delta";
 constexpr const char *kKeyBtnDebounce = "btn_debounce";
 constexpr const char *kKeyBtnHoldMs = "btn_hold_ms";
+constexpr const char *kKeyClumpDensity = "clump_density";
+constexpr const char *kKeyClumpGravity = "clump_gravity";
 constexpr const char *kKeyWifiReset = "wifi_reset";
 constexpr const char *kKeyWifiReboot = "wifi_reboot";
 constexpr const char *kKeyTopupModel = "topup_model";
@@ -90,6 +92,10 @@ bool validTimeoutMs(uint32_t v) { return v > 0 && v <= 600000UL; }
 bool validScreensaverTimeoutS(uint32_t v) { return v > 0 && v <= 86400UL; }
 /** A wake-on-weight-change threshold plausible for a kitchen scale. */
 bool validScreensaverWakeWeightDeltaG(float v) { return std::isfinite(v) && v > 0.0f && v <= 500.0f; }
+/** Clump-count multiplier: 0 (animation off) up to 3x the default -- see kMaxCount in DisplayTask.cpp. */
+bool validClumpDensity(float v) { return std::isfinite(v) && v >= 0.0f && v <= 3.0f; }
+/** Clump fall-speed multiplier: must stay positive, or clumps freeze in place forever. */
+bool validClumpGravity(float v) { return std::isfinite(v) && v > 0.0f && v <= 5.0f; }
 
 /**
  * Loads SettingsSnapshot from NVS. Returns false (leaving `out`
@@ -276,6 +282,20 @@ bool loadSettingsFromNvs(SettingsSnapshot &out) {
     Serial.println("[Settings] NVS button_min_hold_ms invalid -- using default");
   }
 
+  float clump_density = g_prefs.getFloat(kKeyClumpDensity, defaults.display_clump_density);
+  if (validClumpDensity(clump_density)) {
+    out.display_clump_density = clump_density;
+  } else {
+    Serial.println("[Settings] NVS display_clump_density invalid -- using default");
+  }
+
+  float clump_gravity = g_prefs.getFloat(kKeyClumpGravity, defaults.display_clump_gravity);
+  if (validClumpGravity(clump_gravity)) {
+    out.display_clump_gravity = clump_gravity;
+  } else {
+    Serial.println("[Settings] NVS display_clump_gravity invalid -- using default");
+  }
+
   // Flags have no illegal state -- any stored bool is trusted as-is.
   out.wifi_reset_flag = g_prefs.getBool(kKeyWifiReset, defaults.wifi_reset_flag);
   out.wifi_reboot_flag = g_prefs.getBool(kKeyWifiReboot, defaults.wifi_reboot_flag);
@@ -318,6 +338,8 @@ void saveSettingsToNvs(const SettingsSnapshot &snap) {
   g_prefs.putFloat(kKeySsWakeDeltaG, snap.screensaver_wake_weight_delta_g);
   g_prefs.putUInt(kKeyBtnDebounce, snap.button_debounce_ms);
   g_prefs.putUInt(kKeyBtnHoldMs, snap.button_min_hold_ms);
+  g_prefs.putFloat(kKeyClumpDensity, snap.display_clump_density);
+  g_prefs.putFloat(kKeyClumpGravity, snap.display_clump_gravity);
   g_prefs.putBool(kKeyWifiReset, snap.wifi_reset_flag);
   g_prefs.putBool(kKeyWifiReboot, snap.wifi_reboot_flag);
 
@@ -372,6 +394,7 @@ void broadcastSnapshot() {
   xQueueOverwrite(g_settings_mailbox_dosing, &g_settings);
   xQueueOverwrite(g_settings_mailbox_input, &g_settings);
   xQueueOverwrite(g_settings_mailbox_network, &g_settings);
+  xQueueOverwrite(g_settings_mailbox_display, &g_settings);
 }
 
 /**
@@ -474,6 +497,14 @@ bool applyWrite(const SettingsWriteRequest &req) {
     case SettingsFieldId::BUTTON_MIN_HOLD_MS:
       if (!validTimeoutMs(req.value.u)) return false;
       g_settings.button_min_hold_ms = req.value.u;
+      return true;
+    case SettingsFieldId::DISPLAY_CLUMP_DENSITY:
+      if (!validClumpDensity(req.value.f)) return false;
+      g_settings.display_clump_density = req.value.f;
+      return true;
+    case SettingsFieldId::DISPLAY_CLUMP_GRAVITY:
+      if (!validClumpGravity(req.value.f)) return false;
+      g_settings.display_clump_gravity = req.value.f;
       return true;
   }
   return false;

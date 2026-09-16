@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useDeviceSocket } from "../lib/DeviceSocketContext";
 import type { WritableSettingsField } from "../lib/types";
 
@@ -87,6 +87,67 @@ export function SelectSettingRow({ field, label, currentValue, options, unit }: 
             </option>
           ))}
         </select>
+      </div>
+    </div>
+  );
+}
+
+interface SliderFieldProps {
+  field: WritableSettingsField;
+  label: string;
+  currentValue: number | null;
+  min: number;
+  max: number;
+  step: number;
+  unit?: string;
+}
+
+// For a value meant to be dialed in by eye against the live device (the
+// falling-clumps animation's density/gravity) rather than typed and
+// submitted -- dragging updates the on-screen number immediately, but the
+// actual write is debounced so mid-drag doesn't flood the device's
+// settings-write queue (depth 4) or force an NVS flash write on every
+// intermediate tick; only the value the user actually settles on gets
+// persisted.
+function SliderSettingRow({ field, label, currentValue, min, max, step, unit }: SliderFieldProps) {
+  const { send, nextRequestId } = useDeviceSocket();
+  const [draft, setDraft] = useState<number | null>(null);
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+
+  useEffect(() => () => clearTimeout(debounceRef.current), []);
+  // Once the device's own settings broadcast catches up (whether it's our
+  // debounced write landing, or someone else's), let it take back over --
+  // otherwise this slider would show a stale local draft forever after the
+  // first drag.
+  useEffect(() => setDraft(null), [currentValue]);
+
+  function onDrag(value: number) {
+    setDraft(value);
+    clearTimeout(debounceRef.current);
+    debounceRef.current = setTimeout(() => {
+      send({ type: "settings_write", field, value, request_id: nextRequestId() });
+    }, 200);
+  }
+
+  const shown = draft ?? currentValue;
+
+  return (
+    <div className="setting-row">
+      <div className="label">{label}</div>
+      <div style={{ display: "flex", alignItems: "center", gap: "0.5em" }}>
+        <input
+          type="range"
+          min={min}
+          max={max}
+          step={step}
+          value={shown ?? min}
+          disabled={currentValue === null}
+          onChange={(e) => onDrag(parseFloat(e.target.value))}
+          style={{ flex: 1 }}
+        />
+        <span className="current" style={{ minWidth: "3.5em", textAlign: "right" }}>
+          {shown !== null ? `${shown}${unit ?? ""}` : "not reported yet"}
+        </span>
       </div>
     </div>
   );
@@ -190,6 +251,32 @@ export default function SettingsPage() {
           step="10"
           unit=" ms"
         />
+      </div>
+
+      <div className="panel">
+        <h3>Display animation</h3>
+        <SliderSettingRow
+          field="display_clump_density"
+          label="Pixel density"
+          currentValue={settings?.display_clump_density ?? null}
+          min={0}
+          max={3}
+          step={0.1}
+        />
+        <SliderSettingRow
+          field="display_clump_gravity"
+          label="Gravity"
+          currentValue={settings?.display_clump_gravity ?? null}
+          min={0.1}
+          max={5}
+          step={0.1}
+        />
+        <p className="muted" style={{ fontSize: "0.85em" }}>
+          Tunes the falling-grounds animation on the GRINDING and firmware-update screens --
+          density scales how many pieces fall at once (0 turns the animation off), gravity
+          scales how fast they fall. Drag and watch the device; each change reaches the screen
+          within about a frame.
+        </p>
       </div>
 
       <div className="panel">

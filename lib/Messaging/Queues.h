@@ -61,6 +61,7 @@ extern QueueHandle_t g_settings_mailbox_scale;
 extern QueueHandle_t g_settings_mailbox_dosing;
 extern QueueHandle_t g_settings_mailbox_input;
 extern QueueHandle_t g_settings_mailbox_network;
+extern QueueHandle_t g_settings_mailbox_display;
 
 // Settings write path: Network -> Settings.
 constexpr UBaseType_t kSettingsWriteQueueDepth = 4;

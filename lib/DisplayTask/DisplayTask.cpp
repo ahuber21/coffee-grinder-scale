@@ -114,23 +114,46 @@ uint16_t lerpColor565(uint16_t a, uint16_t b, float t) {
 // boundary so only the newly (un)filled band is ever repainted, and the
 // only per-frame motion is a handful of independent falling squares with
 // their own float positions -- nothing here is recomputed from a size
-// that changes underneath it.
+// that changes underneath it. How many fall at once and how fast are both
+// live-tunable from the Settings page (display_clump_density/_gravity,
+// see g_clumpDensity/g_clumpGravity below) rather than fixed constants --
+// "does this look nice" is a matter of taste the owner can dial in against
+// the real panel, not something worth guessing at and reflashing to check.
 namespace clumps {
-constexpr uint8_t kCount = 14;
+// kDefaultCount is what a density multiplier of 1.0 (today's default look)
+// resolves to; kMaxCount is the array's fixed capacity, generous headroom
+// above that so g_clumpDensity can be turned up live (see
+// applyDisplaySettings) without ever needing a reflash to raise a
+// compile-time array size.
+constexpr uint8_t kDefaultCount = 14;
+constexpr uint8_t kMaxCount = 42;
 constexpr int16_t kSize = 2;
 constexpr uint32_t kFrameMs = 70;  // ~14fps for animation-only ticks.
 
 struct Clump {
   float x = 0.0f;
   float y = 0.0f;
-  float speed = 1.0f;  ///< px per kFrameMs tick.
+  float speed = 1.0f;  ///< px per kFrameMs tick, before g_clumpGravity scales it.
   bool lightShade = false;
 };
 }  // namespace clumps
 
+/*
+ * Live-tunable multipliers for the falling-clumps animation, refreshed from
+ * SettingsSnapshot once per display-task frame (see applyDisplaySettings,
+ * ARDUINO-only) -- so dialing these in from the Settings page shows up on
+ * the real screen within about one frame, no reflash needed to see the
+ * effect of a change. Defined unconditionally at their 1.0 (unchanged)
+ * default so the native/display_sim build, which has no settings mailbox,
+ * still compiles and renders exactly as before.
+ */
+float g_clumpDensity = 1.0f;  ///< Multiplies kDefaultCount, clamped into [0, kMaxCount].
+float g_clumpGravity = 1.0f;  ///< Multiplies every clump's fall speed.
+
 /** Cache of the shared clump field's animation state -- one screen uses it at a time. */
 struct {
-  clumps::Clump items[clumps::kCount];
+  clumps::Clump items[clumps::kMaxCount];
+  uint8_t activeCount = 0;  ///< How many of `items`, from index 0, are currently falling/drawn.
   bool seeded = false;
   int16_t pileTopY = kH;  ///< Current pile surface, y=0 at the top of the screen.
   uint32_t lastDrawMs = 0;
@@ -142,6 +165,23 @@ void seedClump(clumps::Clump &c) {
   c.y = static_cast<float>(random(-kH, 0));
   c.speed = random(70, 160) / 100.0f;
   c.lightShade = random(0, 2) == 0;
+}
+
+/**
+ * Erases one clump's last-drawn footprint, clipped to the track (the pile
+ * repaint elsewhere already owns anything now inside it). Shared by the
+ * per-frame fall animation and by g_clumpDensity shrinking -- a clump
+ * dropping out of the active set needs exactly this same one-time cleanup
+ * so it doesn't leave a stray pixel sitting on screen forever.
+ */
+void eraseClump(const clumps::Clump &c, int16_t pileTopY, uint16_t trackColor) {
+  int16_t oldY = static_cast<int16_t>(c.y);
+  int16_t eraseTop = oldY > 0 ? oldY : 0;
+  int16_t eraseBottom = oldY + clumps::kSize < pileTopY ? oldY + clumps::kSize : pileTopY;
+  if (eraseBottom > eraseTop) {
+    g_tft.fillRect(static_cast<int16_t>(c.x), eraseTop, clumps::kSize, eraseBottom - eraseTop,
+                    trackColor);
+  }
 }
 
 /**
@@ -169,16 +209,51 @@ bool drawClumpField(float frac, uint16_t pileColor, uint16_t trackColor,
   if (frac > 1.0f) frac = 1.0f;
   int16_t pileTopY = kH - static_cast<int16_t>(frac * kH + 0.5f);
 
+  // g_clumpDensity is refreshed once per display-task frame (see
+  // applyDisplaySettings), so a Settings page write reaches this within a
+  // frame.
+  long wantedCount = lroundf(clumps::kDefaultCount * g_clumpDensity);
+  if (wantedCount < 0) wantedCount = 0;
+  if (wantedCount > clumps::kMaxCount) wantedCount = clumps::kMaxCount;
+  uint8_t wantCount = static_cast<uint8_t>(wantedCount);
+
+  bool densityShrunk = false;
   if (force || !g_clumpField.seeded) {
+    // Every slot gets a fresh position here, active or not -- an inactive
+    // one simply won't be drawn until density later grows to include it,
+    // at which point it's already sitting at a plausible spot rather than
+    // needing a second, redundant seed right below.
     for (auto &c : g_clumpField.items) seedClump(c);
     g_clumpField.seeded = true;
+    g_clumpField.activeCount = wantCount;
     g_clumpField.pileTopY = kH;  // forces the full pile band below to repaint
+  } else if (wantCount > g_clumpField.activeCount) {
+    // Growing seeds only the newly-activated slots fresh -- they've been
+    // sitting inert, not invisibly falling, so there's no stale position
+    // to resume from.
+    for (uint8_t i = g_clumpField.activeCount; i < wantCount; ++i) {
+      seedClump(g_clumpField.items[i]);
+    }
+    g_clumpField.activeCount = wantCount;
+  } else if (wantCount < g_clumpField.activeCount) {
+    // Shrinking erases the slots being dropped once, immediately, rather
+    // than leaving their last footprint on screen forever. Only this
+    // branch actually paints anything (the erase below) -- growth just
+    // arms slots for the next animTick's own draw. Tracked separately from
+    // animTick/pileMoved so this function's "did I touch the screen"
+    // return value (callers redraw text on top when true) stays honest
+    // even on a frame where nothing else would otherwise have drawn.
+    densityShrunk = true;
+    for (uint8_t i = wantCount; i < g_clumpField.activeCount; ++i) {
+      eraseClump(g_clumpField.items[i], g_clumpField.pileTopY, trackColor);
+    }
+    g_clumpField.activeCount = wantCount;
   }
 
   uint32_t now = millis();
   bool animTick = force || (now - g_clumpField.lastDrawMs) >= clumps::kFrameMs;
   bool pileMoved = force || pileTopY != g_clumpField.pileTopY;
-  if (!animTick && !pileMoved) {
+  if (!animTick && !pileMoved && !densityShrunk) {
     return false;
   }
   // Only advance the animation clock on a real animation tick -- pileMoved
@@ -204,18 +279,13 @@ bool drawClumpField(float frac, uint16_t pileColor, uint16_t trackColor,
   }
 
   if (animTick) {
-    for (auto &c : g_clumpField.items) {
-      int16_t oldY = static_cast<int16_t>(c.y);
+    for (uint8_t i = 0; i < g_clumpField.activeCount; ++i) {
+      clumps::Clump &c = g_clumpField.items[i];
       // Erase the old footprint only where it's still in the track --
       // the pile repaint above already overwrote anything now inside it.
-      int16_t eraseTop = oldY > 0 ? oldY : 0;
-      int16_t eraseBottom = oldY + clumps::kSize < pileTopY ? oldY + clumps::kSize : pileTopY;
-      if (eraseBottom > eraseTop) {
-        g_tft.fillRect(static_cast<int16_t>(c.x), eraseTop, clumps::kSize,
-                        eraseBottom - eraseTop, trackColor);
-      }
+      eraseClump(c, pileTopY, trackColor);
 
-      c.y += c.speed * (static_cast<float>(clumps::kFrameMs) / 16.0f);
+      c.y += c.speed * g_clumpGravity * (static_cast<float>(clumps::kFrameMs) / 16.0f);
       if (static_cast<int16_t>(c.y) + clumps::kSize >= pileTopY) {
         seedClump(c);
         continue;
@@ -292,6 +362,22 @@ void panelBegin() {
   ledcSetup(1, 100, 8);
   backlightPercent(100);
   g_tft.fillScreen(ST7735_BLACK);
+}
+
+/**
+ * Refreshes g_clumpDensity/g_clumpGravity from the latest settings
+ * snapshot, if any -- called once per display-task frame (~60fps floor)
+ * so a Settings page write reaches the falling-clumps animation within
+ * about one frame, letting the owner tune "does this look nice" live
+ * against the real panel instead of guessing a value and reflashing to
+ * find out.
+ */
+void applyDisplaySettings() {
+  SettingsSnapshot snap;
+  if (xQueuePeek(g_settings_mailbox_display, &snap, 0) == pdTRUE) {
+    g_clumpDensity = snap.display_clump_density;
+    g_clumpGravity = snap.display_clump_gravity;
+  }
 }
 #endif  // ARDUINO
 
@@ -1045,6 +1131,8 @@ void displayTaskFn(void *) {
   TickType_t lastFrame = xTaskGetTickCount();
 
   for (;;) {
+    applyDisplaySettings();
+
     DisplayCommand cmd;
     bool holdingBoot =
         last.mode == DisplayMode::BOOT && (millis() - bootSplashStartMs) < kMinBootSplashMs;

@@ -105,6 +105,8 @@ export interface SettingsMessage {
   min_topup_runtime_ms: number;
   min_topup_interval_ms: number;
   button_min_hold_ms: number;
+  display_clump_density: number;
+  display_clump_gravity: number;
 }
 
 export interface ErrorMessage {
@@ -143,7 +145,9 @@ export type WritableSettingsField =
   | "min_topup_interval_ms"
   | "screensaver_timeout_s"
   | "screensaver_wake_weight_delta_g"
-  | "button_min_hold_ms";
+  | "button_min_hold_ms"
+  | "display_clump_density"
+  | "display_clump_gravity";
 
 export interface SettingsWriteOutbound {
   type: "settings_write";

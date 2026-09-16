@@ -258,6 +258,13 @@ struct SettingsSnapshot {
   uint32_t button_debounce_ms = 150;
   uint32_t button_min_hold_ms = 20;
 
+  // Display task's slice -- both tune the shared falling-clumps animation
+  // (GRINDING family + OTA_UPDATE screens). Multipliers, not raw counts/
+  // speeds, so 1.0 always means "today's default look" regardless of what
+  // that default happens to be tuned to later.
+  float display_clump_density = 1.0f;  ///< Scales how many clumps fall at once.
+  float display_clump_gravity = 1.0f;  ///< Scales how fast each clump falls.
+
   // Network task's slice.
   bool wifi_reset_flag = false;
   bool wifi_reboot_flag = false;
@@ -294,6 +301,8 @@ enum class SettingsFieldId : uint16_t {
   SCREENSAVER_TIMEOUT_S,
   SCREENSAVER_WAKE_WEIGHT_DELTA_G,
   BUTTON_MIN_HOLD_MS,
+  DISPLAY_CLUMP_DENSITY,
+  DISPLAY_CLUMP_GRAVITY,
 };
 
 /** A single validated field write, sent from Network task to Settings task. */

@@ -13,6 +13,7 @@ QueueHandle_t g_settings_mailbox_scale = nullptr;
 QueueHandle_t g_settings_mailbox_dosing = nullptr;
 QueueHandle_t g_settings_mailbox_input = nullptr;
 QueueHandle_t g_settings_mailbox_network = nullptr;
+QueueHandle_t g_settings_mailbox_display = nullptr;
 QueueHandle_t g_settings_write_q = nullptr;
 QueueHandle_t g_topup_model_mailbox = nullptr;
 QueueHandle_t g_persist_request_q = nullptr;
@@ -39,6 +40,7 @@ void initQueuesAndEvents() {
   g_settings_mailbox_dosing = xQueueCreate(1, sizeof(SettingsSnapshot));
   g_settings_mailbox_input = xQueueCreate(1, sizeof(SettingsSnapshot));
   g_settings_mailbox_network = xQueueCreate(1, sizeof(SettingsSnapshot));
+  g_settings_mailbox_display = xQueueCreate(1, sizeof(SettingsSnapshot));
 
   g_settings_write_q = xQueueCreate(kSettingsWriteQueueDepth, sizeof(SettingsWriteRequest));
 
@@ -54,6 +56,7 @@ void initQueuesAndEvents() {
                g_dose_request_q && g_tare_request_q && g_tare_result_q &&
                g_settings_mailbox_scale && g_settings_mailbox_dosing &&
                g_settings_mailbox_input && g_settings_mailbox_network &&
+               g_settings_mailbox_display &&
                g_settings_write_q && g_topup_model_mailbox && g_persist_request_q &&
                g_ws_broadcast_q && g_sys_events);
 }
