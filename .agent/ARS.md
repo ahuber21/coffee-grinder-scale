@@ -2033,3 +2033,43 @@ Format per entry:
   independent update has no cross-bucket smoothness constraint; whether
   it should is an open question for whoever next has real multi-bucket
   drift data to look at, not acted on here.
+
+### AR-075 — Falling-clumps animation replaces OTA's liquid fill, shared with GRINDING
+
+- **Area**: firmware/display
+- **Status**: implemented, OTA-deployed, not yet visually confirmed (no
+  camera/screen access from this side -- needs the owner to look at the
+  physical device).
+- **What**: owner reported the OTA liquid-fill animation flickered, with
+  the topmost (lightest) band's height visibly changing frame to frame.
+  Root cause: `bandH = filled / kBands` was recomputed fresh every frame
+  from `filled`, which itself changes continuously -- integer truncation
+  landed differently often enough to jitter the last band's rendered
+  height by a pixel. Rather than patch the banding math, replaced the
+  whole effect per the owner's request: small squares ("coffee
+  clumps"/snow) fall continuously and disappear into a solid pile rising
+  from the bottom, reused as a single shared `drawClumpField()` for both
+  `OTA_UPDATE` and the whole GRINDING/TOPUP/STOPPING/FINALIZE family (the
+  owner's own ask, "to harmonize things a little"). The pile itself is a
+  flat, diffed fill (same technique as `drawProgressBar`) -- no bands, so
+  no per-frame recomputed height to jitter.
+- **A real bug caught before deploying, not by testing** (no way to
+  flash-and-watch a TFT from here): the first draft reset the clump
+  field's animation clock on *any* redraw, including one triggered only
+  by the pile boundary moving -- and GRINDING's weight display changes
+  far more often than the intended ~70ms animation tick. That would have
+  let frequent weight updates starve the clump animation almost
+  entirely. Fixed to only advance the clock on an actual animation tick.
+- **Also changed**: GRINDING's per-field "skip redraw if this string
+  didn't change" optimization is gone -- with a continuously-animating
+  background, a skipped field could leave stale clump pixels showing
+  through it. All three text fields now redraw together whenever the
+  clump field drew anything, or a real value changed (still nothing
+  redrawn between ticks if truly idle). The pile color changed from
+  literal white to a dark roast brown (`#3E2723`) rather than the more
+  "coffee-with-milk" tan first drafted -- the existing gray/accent text
+  colors were tuned against black and would have washed out against a
+  light pile; dark roast is also just what ground coffee actually looks
+  like.
+- Firmware builds clean, 23/23 native tests pass (unaffected --
+  `DisplayTask` isn't part of that suite), OTA-deployed.

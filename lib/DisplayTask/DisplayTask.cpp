@@ -60,6 +60,11 @@ constexpr uint16_t kColorAccentBlue = 0x0C3F;     ///< #0A84FF -- active/primary
 constexpr uint16_t kColorAccentGreen = 0x368B;    ///< #30D158 -- success/finalize.
 constexpr uint16_t kColorOtaTrack = 0x0842;       ///< Near-black navy -- OTA screen's unfilled region.
 constexpr uint16_t kColorOtaBlue = 0x0B7F;        ///< Richer, more saturated blue than kColorAccentBlue -- this screen's own accent, not the shared UI one.
+// Dark roast, not a light tan: kColorSecondary's gray reads fine on this
+// (it was already tuned for a black background) but would wash out
+// against anything lighter, and real ground coffee is dark anyway.
+constexpr uint16_t kColorCoffeePile = 0x4144;     ///< #3E2723 -- GRINDING's rising pile.
+constexpr uint16_t kColorCoffeeLight = 0x6A67;    ///< #6F4E37 -- lighter roast, half the falling clumps.
 
 /** Linearly interpolates two RGB565 colors by `t` (clamped to 0..1). */
 uint16_t lerpColor565(uint16_t a, uint16_t b, float t) {
@@ -100,50 +105,134 @@ void drawProgressBar(float frac, uint16_t color, bool force) {
   g_progress.lastColor = color;
 }
 
-/** Cache of the grind screen's bottom-up fill boundary, in rows filled from the bottom. */
-struct { int16_t lastFilled = -1; } g_grindFill;
+// --- Shared falling-clumps background: GRINDING family + OTA_UPDATE --------
+// Small squares fall from the top and disappear into a solid pile rising
+// from the bottom as `frac` climbs -- coffee grounds landing in the cup.
+// Reused for OTA_UPDATE (both screens are fundamentally "one number
+// climbing to its target/100%"), replacing that screen's old banded-liquid
+// fill: each band's height was `filled / kBands` recomputed fresh every
+// frame from the continuously-changing fill height, so integer truncation
+// made the topmost (lightest) band's rendered height jitter by a pixel
+// between adjacent frames -- the flicker the owner flagged. This has no
+// bands: the pile is one flat, diffed fill (exactly `drawProgressBar`'s
+// technique), and the only per-frame motion is a handful of independent
+// falling squares with their own float positions -- nothing here is
+// recomputed from a size that changes underneath it.
+namespace clumps {
+constexpr uint8_t kCount = 14;
+constexpr int16_t kSize = 2;
+constexpr uint32_t kFrameMs = 70;  // ~14fps for animation-only ticks.
+
+struct Clump {
+  float x = 0.0f;
+  float y = 0.0f;
+  float speed = 1.0f;  ///< px per kFrameMs tick.
+  bool lightShade = false;
+};
+}  // namespace clumps
+
+/** Cache of the shared clump field's animation state -- one screen uses it at a time. */
+struct {
+  clumps::Clump items[clumps::kCount];
+  bool seeded = false;
+  int16_t pileTopY = kH;  ///< Current pile surface, y=0 at the top of the screen.
+  uint32_t lastDrawMs = 0;
+} g_clumpField;
+
+/** (Re)spawns one clump at a random x, staggered above the screen so falls don't sync up. */
+void seedClump(clumps::Clump &c) {
+  c.x = static_cast<float>(random(0, kW - clumps::kSize));
+  c.y = static_cast<float>(random(-kH, 0));
+  c.speed = random(70, 160) / 100.0f;
+  c.lightShade = random(0, 2) == 0;
+}
 
 /**
- * Fills the grind screen's background from the bottom up as `frac` (0..1,
- * clamped) of the dose completes -- solid white below the rising boundary,
- * solid black above it. Only the newly (un)filled band is repainted, same
- * style as `drawProgressBar`. Returns true if the boundary actually moved
- * (or `force` was set): that band was just painted straight over whatever
- * was drawn there before, so callers must force any text sitting in it to
- * redraw this frame.
+ * Draws (or advances) the falling-clumps background. `pileColor`/
+ * `trackColor` are this mode's own palette (a flat coffee brown for
+ * GRINDING, the existing frac-driven blue->green lerp for OTA);
+ * `clumpLightColor` tints half the falling clumps for a bit of texture,
+ * the other half drawn in `pileColor` itself. Returns true if it drew
+ * anything this call (the pile boundary moved, or an animation tick was
+ * due) -- callers must redraw anything they draw on top when this is
+ * true, since either could have just painted over it.
  */
-bool drawGrindFill(float frac, bool force) {
+bool drawClumpField(float frac, uint16_t pileColor, uint16_t trackColor,
+                    uint16_t clumpLightColor, bool force) {
   if (frac < 0.0f) frac = 0.0f;
   if (frac > 1.0f) frac = 1.0f;
-  int16_t filled = static_cast<int16_t>(frac * kH + 0.5f);
+  int16_t pileTopY = kH - static_cast<int16_t>(frac * kH + 0.5f);
 
-  if (!force && filled == g_grindFill.lastFilled) {
+  if (force || !g_clumpField.seeded) {
+    for (auto &c : g_clumpField.items) seedClump(c);
+    g_clumpField.seeded = true;
+    g_clumpField.pileTopY = kH;  // forces the full pile band below to repaint
+  }
+
+  uint32_t now = millis();
+  bool animTick = force || (now - g_clumpField.lastDrawMs) >= clumps::kFrameMs;
+  bool pileMoved = force || pileTopY != g_clumpField.pileTopY;
+  if (!animTick && !pileMoved) {
     return false;
   }
-
-  int16_t prevFilled = force ? 0 : g_grindFill.lastFilled;
-  if (prevFilled < 0) prevFilled = 0;
-
-  if (filled > prevFilled) {
-    g_tft.fillRect(0, kH - filled, kW, filled - prevFilled, ST7735_WHITE);
-  } else if (filled < prevFilled) {
-    g_tft.fillRect(0, kH - prevFilled, kW, prevFilled - filled, ST7735_BLACK);
+  // Only advance the animation clock on a real animation tick -- pileMoved
+  // alone (the weight display updates far more often than every kFrameMs)
+  // must not reset it, or frequent weight-only redraws would keep pushing
+  // the next actual clump tick back and starve the animation entirely.
+  if (animTick) {
+    g_clumpField.lastDrawMs = now;
   }
-  g_grindFill.lastFilled = filled;
+
+  if (pileMoved) {
+    int16_t prevTopY = force ? kH : g_clumpField.pileTopY;
+    if (pileTopY < prevTopY) {
+      g_tft.fillRect(0, pileTopY, kW, prevTopY - pileTopY, pileColor);
+    } else if (pileTopY > prevTopY) {
+      g_tft.fillRect(0, prevTopY, kW, pileTopY - prevTopY, trackColor);
+    }
+    g_clumpField.pileTopY = pileTopY;
+  }
+
+  if (animTick) {
+    for (auto &c : g_clumpField.items) {
+      int16_t oldY = static_cast<int16_t>(c.y);
+      // Erase the old footprint only where it's still in the track --
+      // the pile repaint above already overwrote anything now inside it.
+      int16_t eraseTop = oldY > 0 ? oldY : 0;
+      int16_t eraseBottom = oldY + clumps::kSize < pileTopY ? oldY + clumps::kSize : pileTopY;
+      if (eraseBottom > eraseTop) {
+        g_tft.fillRect(static_cast<int16_t>(c.x), eraseTop, clumps::kSize,
+                        eraseBottom - eraseTop, trackColor);
+      }
+
+      c.y += c.speed * (static_cast<float>(clumps::kFrameMs) / 16.0f);
+      if (static_cast<int16_t>(c.y) + clumps::kSize >= pileTopY) {
+        seedClump(c);
+        continue;
+      }
+      int16_t newTop = static_cast<int16_t>(c.y) > 0 ? static_cast<int16_t>(c.y) : 0;
+      int16_t newBottom = static_cast<int16_t>(c.y) + clumps::kSize;
+      if (newBottom > newTop) {
+        g_tft.fillRect(static_cast<int16_t>(c.x), newTop, clumps::kSize, newBottom - newTop,
+                        c.lightShade ? clumpLightColor : pileColor);
+      }
+    }
+  }
   return true;
 }
 
 /**
- * Repaints rows [y, y+h) split at the current grind-fill boundary -- black
- * above it, white below -- so a redrawn text field's own background stays
- * consistent with the fill instead of punching an opaque black box through it.
+ * Repaints rows [y, y+h) split at the clump field's current pile boundary
+ * -- trackColor above it, pileColor below -- so a text field redrawn on
+ * top stays consistent with the background instead of punching an opaque
+ * box through it.
  */
-void fillGrindBackground(int16_t y, int16_t h) {
-  int16_t whiteTopY = kH - g_grindFill.lastFilled;
-  int16_t blackEnd = whiteTopY < y ? y : (whiteTopY > y + h ? y + h : whiteTopY);
-  int16_t blackH = blackEnd - y;
-  if (blackH > 0) g_tft.fillRect(0, y, kW, blackH, ST7735_BLACK);
-  if (h - blackH > 0) g_tft.fillRect(0, y + blackH, kW, h - blackH, ST7735_WHITE);
+void fillGrindBackground(int16_t y, int16_t h, uint16_t pileColor, uint16_t trackColor) {
+  int16_t pileTopY = g_clumpField.pileTopY;
+  int16_t trackEnd = pileTopY < y ? y : (pileTopY > y + h ? y + h : pileTopY);
+  int16_t trackH = trackEnd - y;
+  if (trackH > 0) g_tft.fillRect(0, y, kW, trackH, trackColor);
+  if (h - trackH > 0) g_tft.fillRect(0, y + trackH, kW, h - trackH, pileColor);
 }
 
 // --- Panel bring-up ----------------------------------------------------------
@@ -367,7 +456,15 @@ struct {
   uint16_t timeColor = 0xFFFF;
 } g_grind;
 
-/** Draws (or skips, per-field, if unchanged) the GRINDING-family layout. */
+/**
+ * Draws the GRINDING-family layout. The falling-clumps background now
+ * animates continuously (see drawClumpField), so -- like drawOtaLayout --
+ * this no longer skips a field just because its own string didn't change:
+ * the clumps behind it may have, and with them the exact pixels a
+ * skipped field would leave stale. Still gated overall on an animation
+ * tick or a real value change, so a genuinely idle screen (holding on
+ * FINALIZE, say) still costs nothing between ticks.
+ */
 void drawGrindingBlock(float currentGrams, float targetGrams, float seconds,
                        uint16_t currentColor, uint16_t targetColor,
                        uint16_t timeColor, uint16_t connColor, bool force) {
@@ -378,10 +475,7 @@ void drawGrindingBlock(float currentGrams, float targetGrams, float seconds,
   float displayGrams = cleanZero(currentGrams);
   float frac = targetGrams > 0.0f ? displayGrams / targetGrams : 0.0f;
 
-  // A moved fill boundary just painted over whatever text pixels were
-  // sitting in its band, so every field must redraw this frame even if its
-  // string value didn't change.
-  const bool bgChanged = drawGrindFill(frac, force);
+  bool bgTick = drawClumpField(frac, kColorCoffeePile, ST7735_BLACK, kColorCoffeeLight, force);
 
   char currentStr[16];
   char targetStr[16];
@@ -390,14 +484,13 @@ void drawGrindingBlock(float currentGrams, float targetGrams, float seconds,
   snprintf(targetStr, sizeof(targetStr), "/%4.1f", targetGrams);
   snprintf(timeStr, sizeof(timeStr), "%4.1fs", seconds);
 
-  const bool sameCurrent = !bgChanged && strcmp(currentStr, g_grind.currentStr) == 0 &&
-                           currentColor == g_grind.currentColor;
-  const bool sameTarget = !bgChanged && strcmp(targetStr, g_grind.targetStr) == 0 &&
-                          targetColor == g_grind.targetColor;
-  const bool sameTime = !bgChanged && strcmp(timeStr, g_grind.timeStr) == 0 &&
-                        timeColor == g_grind.timeColor;
+  bool valueChanged = strcmp(currentStr, g_grind.currentStr) != 0 ||
+                      strcmp(targetStr, g_grind.targetStr) != 0 ||
+                      strcmp(timeStr, g_grind.timeStr) != 0 ||
+                      currentColor != g_grind.currentColor ||
+                      targetColor != g_grind.targetColor || timeColor != g_grind.timeColor;
 
-  if (!force && sameCurrent && sameTarget && sameTime) {
+  if (!force && !bgTick && !valueChanged) {
     drawConnectionIndicator(connColor);
     return;
   }
@@ -408,7 +501,7 @@ void drawGrindingBlock(float currentGrams, float targetGrams, float seconds,
   constexpr uint8_t dotSize = 2;
   constexpr int16_t currentY = 38;
 
-  if (!sameCurrent) {
+  {
     char intStr[10];
     char decStr[5];
     bool isNegative;
@@ -422,7 +515,7 @@ void drawGrindingBlock(float currentGrams, float targetGrams, float seconds,
     int16_t totalWidth = minusWidth + intWidth + dotWidth + decWidth;
     int16_t currentX = (kW - totalWidth) / 2;
 
-    fillGrindBackground(currentY, 32);
+    fillGrindBackground(currentY, 32, kColorCoffeePile, ST7735_BLACK);
 
     g_tft.setTextColor(currentColor);
 
@@ -456,12 +549,10 @@ void drawGrindingBlock(float currentGrams, float targetGrams, float seconds,
   g_tft.getTextBounds(targetStr, 0, 0, &x, &y, &w, &h);
   const int16_t targetY = currentY + 32 + 10;
 
-  if (!sameTarget) {
-    fillGrindBackground(targetY, h);
-    g_tft.setCursor((kW - w) / 2, targetY);
-    g_tft.setTextColor(targetColor);
-    g_tft.print(targetStr);
-  }
+  fillGrindBackground(targetY, h, kColorCoffeePile, ST7735_BLACK);
+  g_tft.setCursor((kW - w) / 2, targetY);
+  g_tft.setTextColor(targetColor);
+  g_tft.print(targetStr);
 
   // Time, at the bottom.
   constexpr uint8_t timeSize = 2;
@@ -469,12 +560,10 @@ void drawGrindingBlock(float currentGrams, float targetGrams, float seconds,
   g_tft.getTextBounds(timeStr, 0, 0, &x, &y, &w, &h);
   const int16_t timeY = targetY + h + 20;
 
-  if (!sameTime) {
-    fillGrindBackground(timeY, h);
-    g_tft.setCursor((kW - w) / 2, timeY);
-    g_tft.setTextColor(timeColor);
-    g_tft.print(timeStr);
-  }
+  fillGrindBackground(timeY, h, kColorCoffeePile, ST7735_BLACK);
+  g_tft.setCursor((kW - w) / 2, timeY);
+  g_tft.setTextColor(timeColor);
+  g_tft.print(timeStr);
 
   strncpy(g_grind.currentStr, currentStr, sizeof(g_grind.currentStr) - 1);
   g_grind.currentStr[sizeof(g_grind.currentStr) - 1] = '\0';
@@ -635,81 +724,41 @@ void drawDebugLayout(const char *ip, int32_t rawAdc, bool stable, bool force) {
   g_debug.haveAny = true;
 }
 
-// --- OTA_UPDATE layout: liquid-fill progress, blue rising to green ---------
+// --- OTA_UPDATE layout: falling clumps, blue rising to green ---------------
 
-/** Cache of the OTA screen's animation clock and last real redraw. */
-struct {
-  uint8_t percent = 0xFF;
-  uint32_t startMs = 0;
-  uint32_t lastDrawMs = 0;
-} g_ota;
+/** Cache of the OTA screen's last-drawn percent. */
+struct { uint8_t percent = 0xFF; } g_ota;
 
 /**
- * Full-screen "liquid fill" OTA progress: a blue-to-green gradient rises
- * from the bottom as `percent` climbs, banded for a sense of depth, with
- * a soft highlight that sweeps upward through the fill on a loop so the
+ * OTA progress on the same falling-clumps background as GRINDING (see
+ * drawClumpField) -- a blue-to-green pile rises from the bottom as
+ * `percent` climbs, with clumps continuously falling into it so the
  * screen keeps visibly moving between the relatively infrequent progress
- * callbacks ArduinoOTA actually delivers. Redrawn in full every call
- * (unlike this file's other layouts) rather than diffed -- animation-only
- * ticks need a fresh frame regardless of whether `percent` changed, and a
- * full repaint of this screen is cheap enough on this panel not to matter.
+ * callbacks ArduinoOTA actually delivers. Replaces this screen's old
+ * banded-liquid fill, whose band height was recomputed from the
+ * continuously-changing fill height every frame -- integer truncation
+ * made the topmost band's rendered height jitter by a pixel between
+ * adjacent frames, the flicker the owner flagged. drawClumpField owns
+ * the animation throttle; this only redraws the percent/label text when
+ * it actually drew something, or `percent` itself changed.
  */
 void drawOtaLayout(uint8_t percent, bool force) {
-  uint32_t now = millis();
-  if (force || g_ota.percent == 0xFF) {
-    g_ota.startMs = now;
-  }
-  // Throttles actual SPI work to ~11fps for animation-only ticks (the
-  // display task itself still polls at ~60fps); a real percent change
-  // or a mode-entry force always redraws immediately.
-  constexpr uint32_t kAnimFrameMs = 90;
-  if (!force && percent == g_ota.percent && (now - g_ota.lastDrawMs) < kAnimFrameMs) {
-    return;
-  }
+  bool percentChanged = force || percent != g_ota.percent;
   g_ota.percent = percent;
-  g_ota.lastDrawMs = now;
 
   float frac = percent / 100.0f;
-  int16_t filled = static_cast<int16_t>(frac * kH + 0.5f);
-  // Biased toward frac^2.2 rather than frac itself, so the fill reads as
+  // Biased toward frac^2.2 rather than frac itself, so the pile reads as
   // a rich blue for most of the update and only turns green in the last
   // stretch -- a straight linear blend started looking teal by the
   // midpoint, which read as muddy rather than "getting close."
-  uint16_t baseColor = lerpColor565(kColorOtaBlue, kColorAccentGreen, powf(frac, 2.2f));
+  uint16_t pileColor = lerpColor565(kColorOtaBlue, kColorAccentGreen, powf(frac, 2.2f));
+  // Toward a cool cyan-white, not neutral white, so falling clumps stay in
+  // the same blue family instead of looking washed out.
+  uint16_t clumpLightColor = lerpColor565(pileColor, 0xAFFF, 0.5f);
+  bool bgTick = drawClumpField(frac, pileColor, kColorOtaTrack, clumpLightColor, force);
 
-  // Unfilled region, top of screen.
-  if (filled < kH) {
-    g_tft.fillRect(0, 0, kW, kH - filled, kColorOtaTrack);
-  }
-
-  // Filled region in horizontal bands, lightest at the rising surface and
-  // darkening slightly with depth, plus a brighter band riding through it
-  // that sweeps bottom-to-top every ~1.6s.
-  if (filled > 0) {
-    constexpr int16_t kBands = 10;
-    constexpr uint32_t kShimmerPeriodMs = 1600;
-    float shimmerPhase = fmodf(static_cast<float>(now - g_ota.startMs), kShimmerPeriodMs) /
-                          kShimmerPeriodMs;
-    int16_t shimmerY = kH - static_cast<int16_t>(shimmerPhase * filled);
-    constexpr int16_t kShimmerHalfH = 6;
-
-    int16_t bandH = filled / kBands;
-    if (bandH < 1) bandH = 1;
-    for (int16_t i = 0; i < kBands && i * bandH < filled; ++i) {
-      int16_t y = kH - filled + i * bandH;
-      int16_t h = (i == kBands - 1) ? (filled - i * bandH) : bandH;
-      if (h <= 0) continue;
-      // A light touch -- enough to read as depth without muddying most
-      // of the fill toward the near-black track color.
-      float depth = static_cast<float>(i) / kBands;
-      uint16_t bandColor = lerpColor565(baseColor, kColorOtaTrack, depth * 0.12f);
-      if (y + h > shimmerY - kShimmerHalfH && y < shimmerY + kShimmerHalfH) {
-        // Toward a cool cyan-white, not neutral white, so the highlight
-        // stays in the same blue family instead of looking washed out.
-        bandColor = lerpColor565(bandColor, 0xAFFF, 0.4f);
-      }
-      g_tft.fillRect(0, y, kW, h, bandColor);
-    }
+  if (!percentChanged && !bgTick) {
+    return;
   }
 
   // Big centered percent, white-on-black-shadow so it reads over any band.
