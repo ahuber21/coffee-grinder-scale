@@ -1,5 +1,18 @@
 # Status
 
+*Last updated: 2026-09-16 (later same day) — added `tools/display_sim`
+(AR-076): `DisplayTask.cpp`'s real rendering code now also compiles
+host-side (no ESP32, no physical panel) against an in-memory framebuffer
+reusing the real Adafruit_GFX font, so a display change can be reviewed
+as an actual animation instead of reasoned about blind. Paid for itself
+immediately: reviewing the first capture (AR-075's falling-clumps
+animation) caught two real bugs -- a falling clump showing through the
+OTA percent text (transparent-background print, fixed like GRINDING's
+fields already are), and the OTA pile growing visible "growth ring"
+stripes since its color shifts with percent but only the newly-grown
+band ever got repainted (fixed with a re-flood-whole-pile option, OTA
+only). Published as an artifact for the owner to watch. See AR-076.*
+
 *Last updated: 2026-09-16 — AR-074: a 9.5g dose landed at 10.4g. Fully
 diagnosed from persisted `sessions`/`events`/`tare_debug` data alone: one
 TOPUP pulse (bucket 2) overshot its own 0.255g aim by 4.5x, commanded at

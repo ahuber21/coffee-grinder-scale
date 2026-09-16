@@ -7,7 +7,11 @@
  * patterns in Queues.h safe without additional locking.
  */
 
+#ifdef ARDUINO
 #include <Arduino.h>
+#else
+#include <cstdint>  // uint8_t/uint32_t/etc for a native build (e.g. tools/display_sim)
+#endif
 
 #include "DosingModel.h"  // TopupModelV1
 

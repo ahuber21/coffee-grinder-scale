@@ -12,4 +12,6 @@ secrets.h
 *.pyc
 __pycache__/
 venv/
+
+tools/display_sim/display_sim
 .agent/secrets/

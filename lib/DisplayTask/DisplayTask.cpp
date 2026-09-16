@@ -26,31 +26,56 @@
  * falls back to a sensible per-mode color scheme instead (white while
  * grinding, cyan while topping up/settling, green at finalize) -- see
  * `defaultColorsFor()`. A non-zero value from the producer always wins.
+ *
+ * Native/host build (no ARDUINO): the same rendering code (every
+ * constant/helper/`draw*` function/`renderMode`) compiles unchanged
+ * against `FakeCanvas` -- an in-memory RGB565 framebuffer with the same
+ * method surface `Adafruit_ST7735` provides for what this file actually
+ * calls -- instead of `Adafruit_ST7735`/real SPI hardware, with `millis()`/
+ * `random()` shims standing in for their Arduino counterparts. The FSM
+ * plumbing (`displayTaskFn`/`createDisplayTask`/`panelBegin`, all
+ * FreeRTOS/hardware-only) is compiled out; a small `main()` at the
+ * bottom drives `renderMode()` through a scripted scenario and dumps
+ * captured frames instead, so rendering changes can be reviewed as an
+ * actual image/animation without needing the physical device or a
+ * camera on it. See `tools/display_sim/README.md` for how to run it.
  */
 
 #include "DisplayTask.h"
 
+#ifdef ARDUINO
 #include <Adafruit_ST7735.h>
 #include <Arduino.h>
 #include <SPI.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
+#else
+#include "DisplaySimCanvas.h"
+#endif
+
 #include <cmath>
 #include <cstdio>
 #include <cstring>
-#include <freertos/FreeRTOS.h>
-#include <freertos/task.h>
 
 #include "Messages.h"
+
+#ifdef ARDUINO
 #include "Queues.h"
 #include "TaskConfig.h"
 #include "defines.h"
+#endif
 
 namespace {
 
 constexpr int16_t kW = 80;
 constexpr int16_t kH = 160;
 
+#ifdef ARDUINO
 SPIClass g_spi(HSPI);
 Adafruit_ST7735 g_tft(&g_spi, DISPLAY_CS_PIN, DISPLAY_DC_PIN, DISPLAY_RESET_PIN);
+#else
+FakeCanvas g_tft;
+#endif
 
 // --- Accent palette (RGB565), matched to iOS system colors ------------------
 
@@ -156,9 +181,18 @@ void seedClump(clumps::Clump &c) {
  * anything this call (the pile boundary moved, or an animation tick was
  * due) -- callers must redraw anything they draw on top when this is
  * true, since either could have just painted over it.
+ *
+ * `pileColorMayShift`: GRINDING's pile color is a fixed constant, so only
+ * ever painting the newly-grown band is correct and cheap. OTA's pile
+ * color instead continuously shifts with `frac` (blue -> green) -- with
+ * that same incremental-band approach, each band keeps whatever color it
+ * was painted with, leaving visible "growth ring" stripes as the color
+ * moves on since. Set this true to re-flood the whole pile with the
+ * current `pileColor` on every move instead, trading a full-width refill
+ * (still just a flat `fillRect`, no banding math) for a uniform color.
  */
 bool drawClumpField(float frac, uint16_t pileColor, uint16_t trackColor,
-                    uint16_t clumpLightColor, bool force) {
+                    uint16_t clumpLightColor, bool force, bool pileColorMayShift = false) {
   if (frac < 0.0f) frac = 0.0f;
   if (frac > 1.0f) frac = 1.0f;
   int16_t pileTopY = kH - static_cast<int16_t>(frac * kH + 0.5f);
@@ -186,7 +220,11 @@ bool drawClumpField(float frac, uint16_t pileColor, uint16_t trackColor,
   if (pileMoved) {
     int16_t prevTopY = force ? kH : g_clumpField.pileTopY;
     if (pileTopY < prevTopY) {
-      g_tft.fillRect(0, pileTopY, kW, prevTopY - pileTopY, pileColor);
+      if (pileColorMayShift && pileTopY < kH) {
+        g_tft.fillRect(0, pileTopY, kW, kH - pileTopY, pileColor);
+      } else {
+        g_tft.fillRect(0, pileTopY, kW, prevTopY - pileTopY, pileColor);
+      }
     } else if (pileTopY > prevTopY) {
       g_tft.fillRect(0, prevTopY, kW, pileTopY - prevTopY, trackColor);
     }
@@ -235,7 +273,8 @@ void fillGrindBackground(int16_t y, int16_t h, uint16_t pileColor, uint16_t trac
   if (h - trackH > 0) g_tft.fillRect(0, y + trackH, kW, h - trackH, pileColor);
 }
 
-// --- Panel bring-up ----------------------------------------------------------
+// --- Panel bring-up (real hardware only) ------------------------------------
+#ifdef ARDUINO
 
 // ledcSetup(1, 100, 8) is an 8-bit duty register (0-255); duty below is
 // scaled from that same range, not a wider constant.
@@ -269,6 +308,7 @@ void panelBegin() {
   backlightPercent(100);
   g_tft.fillScreen(ST7735_BLACK);
 }
+#endif  // ARDUINO
 
 // --- Connection indicator: small bottom-left dot; 0 = none -----------------
 
@@ -755,13 +795,18 @@ void drawOtaLayout(uint8_t percent, bool force) {
   // Toward a cool cyan-white, not neutral white, so falling clumps stay in
   // the same blue family instead of looking washed out.
   uint16_t clumpLightColor = lerpColor565(pileColor, 0xAFFF, 0.5f);
-  bool bgTick = drawClumpField(frac, pileColor, kColorOtaTrack, clumpLightColor, force);
+  bool bgTick =
+      drawClumpField(frac, pileColor, kColorOtaTrack, clumpLightColor, force, true);
 
   if (!percentChanged && !bgTick) {
     return;
   }
 
   // Big centered percent, white-on-black-shadow so it reads over any band.
+  // fillGrindBackground first (same helper GRINDING's text uses) -- a
+  // transparent-background print only overwrites glyph pixels, so without
+  // this a falling clump caught mid-cell would show through the gaps
+  // between strokes until a clump happens to erase over that exact spot.
   char pct[6];
   snprintf(pct, sizeof(pct), "%u%%", percent);
   constexpr uint8_t pctSize = 3;
@@ -771,6 +816,7 @@ void drawOtaLayout(uint8_t percent, bool force) {
   g_tft.getTextBounds(pct, 0, 0, &x, &y, &w, &h);
   int16_t textX = (kW - static_cast<int16_t>(w)) / 2;
   int16_t textY = (kH - static_cast<int16_t>(h)) / 2;
+  fillGrindBackground(textY, static_cast<int16_t>(h) + 1, pileColor, kColorOtaTrack);
   g_tft.setTextColor(ST7735_BLACK);
   g_tft.setCursor(textX + 1, textY + 1);
   g_tft.print(pct);
@@ -786,6 +832,7 @@ void drawOtaLayout(uint8_t percent, bool force) {
   g_tft.getTextBounds(label, 0, 0, &x, &y, &w, &h);
   int16_t labelX = (kW - static_cast<int16_t>(w)) / 2;
   int16_t labelY = textY - static_cast<int16_t>(h) - 8;
+  fillGrindBackground(labelY, static_cast<int16_t>(h) + 1, pileColor, kColorOtaTrack);
   g_tft.setTextColor(ST7735_BLACK);
   g_tft.setCursor(labelX + 1, labelY + 1);
   g_tft.print(label);
@@ -897,6 +944,7 @@ void renderMode(const DisplayCommand &cmd, bool force) {
   }
 }
 
+#ifdef ARDUINO
 /** Display task entry point: renders whatever DisplayCommand arrives, at ~60fps. */
 void displayTaskFn(void *) {
   panelBegin();
@@ -981,12 +1029,17 @@ void displayTaskFn(void *) {
     vTaskDelayUntil(&lastFrame, frameFloor);
   }
 }
+#endif  // ARDUINO
 
 }  // namespace
 
+#ifdef ARDUINO
 void createDisplayTask() {
   xTaskCreatePinnedToCore(displayTaskFn, "Display",
                            TaskConfig::kDisplayStackBytes, nullptr,
                            TaskConfig::kDisplayPriority, nullptr,
                            TaskConfig::kDisplayCore);
 }
+#else
+#include "DisplaySimMain.h"
+#endif

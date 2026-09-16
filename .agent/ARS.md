@@ -2073,3 +2073,48 @@ Format per entry:
   like.
 - Firmware builds clean, 23/23 native tests pass (unaffected --
   `DisplayTask` isn't part of that suite), OTA-deployed.
+
+### AR-076 — Added a host-side display simulator (tools/display_sim); it immediately caught two real bugs in AR-075
+
+- **Area**: firmware/display, tooling
+- **Status**: implemented, two bugs found and fixed, not yet visually
+  confirmed on the physical panel.
+- **What**: the owner asked how much effort a screen simulation would be,
+  agreed to it, and asked specifically for something animated/viewable,
+  not a pile of still PNGs. `DisplayTask.cpp` now also compiles host-side
+  (`#ifdef ARDUINO` swaps `Adafruit_ST7735`/real SPI for `FakeCanvas`, an
+  in-memory RGB565 framebuffer with the same method surface, text
+  rendering reusing the real vendored Adafruit_GFX 5x7 font table
+  verbatim so layout matches the physical panel exactly) -- the *same*
+  rendering source, not a reimplementation. `Messages.h`'s `<Arduino.h>`
+  include is now conditional too (nothing else in it is Arduino-specific).
+  A small `main()` (native-build only, `DisplaySimMain.h`) scripts three
+  scenarios -- BOOT, a full IDLE->CONFIRM->TARE->GRINDING->STOPPING->
+  TOPUP->FINALIZE dose, and an OTA_UPDATE 0->100% run -- through the exact
+  same `renderMode()` the real Display task calls, capturing frames to a
+  tiny custom `.dsim` binary; `tools/display_sim/dsim_to_gif.py` turns one
+  into an animated GIF. See `tools/display_sim/README.md`.
+- **Immediately paid for itself**: reviewing the very first capture (for
+  AR-075's falling-clumps animation) surfaced two real bugs neither code
+  review nor reasoning about the pixel math had caught:
+  1. `drawOtaLayout`'s percent/label text drew with a transparent
+     background (fine against the old smooth liquid fill) -- a falling
+     clump caught mid-glyph showed through the gaps between strokes.
+     Fixed by clearing each text row's background first via
+     `fillGrindBackground`, same as `drawGrindingBlock`'s fields already do.
+  2. OTA's pile color shifts continuously with percent (blue -> green),
+     but `drawClumpField` only ever repaints the newly-grown band -- so
+     each band kept whatever color it was painted with, leaving visible
+     "growth ring" stripes as the color moved on, an echo of the exact
+     banding flicker AR-075 was meant to eliminate. Fixed with a new
+     `pileColorMayShift` flag: true re-floods the whole pile on every
+     move (OTA only); GRINDING's pile color never changes, so it keeps
+     the cheaper incremental-band fill.
+- Both bugs are visible in the published review artifact's before/after
+  comparisons (see the session's own record for the link -- not
+  duplicated here since artifact URLs aren't guaranteed durable outside
+  the conversation that created them).
+- Firmware builds clean, 23/23 native tests pass (`DisplayTask`/the sim
+  still isn't part of that suite -- this is a visualization tool, not a
+  pass/fail check; whether it's worth golden-frame regression assertions
+  later is an open question, not attempted here).
