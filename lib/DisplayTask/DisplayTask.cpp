@@ -245,6 +245,19 @@ void fillGrindBackground(int16_t y, int16_t h, uint16_t pileColor, uint16_t trac
   if (h - trackH > 0) g_tft.fillRect(0, y + trackH, kW, h - trackH, pileColor);
 }
 
+/** True if rows [y, y+h) lie entirely on one side of the pile boundary -- a single flat
+ * color, safe for an opaque-background text overwrite instead of `fillGrindBackground`'s
+ * split fill. */
+bool bandOutsidePile(int16_t y, int16_t h) {
+  int16_t pileTopY = g_clumpField.pileTopY;
+  return pileTopY <= y || pileTopY >= y + h;
+}
+
+/** The single flat color covering [y, y+h) -- only meaningful when `bandOutsidePile(y, h)`. */
+uint16_t bandFlatColor(int16_t y, uint16_t pileColor, uint16_t trackColor) {
+  return g_clumpField.pileTopY <= y ? pileColor : trackColor;
+}
+
 // --- Panel bring-up (real hardware only) ------------------------------------
 #ifdef ARDUINO
 
@@ -474,13 +487,24 @@ struct {
 float g_grindDisplayMaxGrams = 0.0f;
 
 /**
- * Draws the GRINDING-family layout. The falling-clumps background now
- * animates continuously (see drawClumpField), so -- like drawOtaLayout --
- * this no longer skips a field just because its own string didn't change:
- * the clumps behind it may have, and with them the exact pixels a
- * skipped field would leave stale. Still gated overall on an animation
- * tick or a real value change, so a genuinely idle screen (holding on
- * FINALIZE, say) still costs nothing between ticks.
+ * Draws the GRINDING-family layout. Each field (current/target/time) is
+ * redrawn independently, on either a real change to that field or a
+ * background animation tick (the falling clumps behind it may have moved
+ * -- see drawClumpField -- leaving stale pixels a skipped field wouldn't
+ * know to repaint). A field that's redrawn purely because its own value
+ * changed, with no animation tick and the pile boundary nowhere near its
+ * rows (bandOutsidePile), overwrites in place with an opaque text
+ * background instead of blanking the whole field first: every one of
+ * these fields is formatted to only grow in on-screen width as its value
+ * rises (running-max weight, elapsed time, a fixed-width target), and
+ * centered/right-anchored so a wider redraw always fully covers the
+ * previous one -- see drawIdleLayout's intStartX tracking for the same
+ * reasoning applied to a left-growing field. Skipping that blank-first
+ * step is what actually matters here: at the ~sample rate this redraws,
+ * doing it on every tick was the real source of visible flicker, far
+ * more often than the ~14fps clump animation alone would ever need.
+ * Genuinely idle screens (holding on FINALIZE, say) still cost nothing
+ * between ticks, same as before.
  */
 void drawGrindingBlock(DisplayMode mode, float currentGrams, float targetGrams, float seconds,
                        uint16_t currentColor, uint16_t targetColor,
@@ -524,13 +548,13 @@ void drawGrindingBlock(DisplayMode mode, float currentGrams, float targetGrams, 
   snprintf(targetStr, sizeof(targetStr), "/%4.1f", targetGrams);
   snprintf(timeStr, sizeof(timeStr), "%4.1fs", seconds);
 
-  bool valueChanged = strcmp(currentStr, g_grind.currentStr) != 0 ||
-                      strcmp(targetStr, g_grind.targetStr) != 0 ||
-                      strcmp(timeStr, g_grind.timeStr) != 0 ||
-                      currentColor != g_grind.currentColor ||
-                      targetColor != g_grind.targetColor || timeColor != g_grind.timeColor;
+  bool currentChanged =
+      strcmp(currentStr, g_grind.currentStr) != 0 || currentColor != g_grind.currentColor;
+  bool targetChanged =
+      strcmp(targetStr, g_grind.targetStr) != 0 || targetColor != g_grind.targetColor;
+  bool timeChanged = strcmp(timeStr, g_grind.timeStr) != 0 || timeColor != g_grind.timeColor;
 
-  if (!force && !bgTick && !valueChanged) {
+  if (!force && !bgTick && !currentChanged && !targetChanged && !timeChanged) {
     drawConnectionIndicator(connColor);
     return;
   }
@@ -541,7 +565,7 @@ void drawGrindingBlock(DisplayMode mode, float currentGrams, float targetGrams, 
   constexpr uint8_t dotSize = 2;
   constexpr int16_t currentY = 38;
 
-  {
+  if (force || bgTick || currentChanged) {
     char intStr[10];
     char decStr[5];
     bool isNegative;
@@ -555,9 +579,19 @@ void drawGrindingBlock(DisplayMode mode, float currentGrams, float targetGrams, 
     int16_t totalWidth = minusWidth + intWidth + dotWidth + decWidth;
     int16_t currentX = (kW - totalWidth) / 2;
 
-    fillGrindBackground(currentY, 32, kColorCoffeePile, ST7735_BLACK);
-
-    g_tft.setTextColor(currentColor);
+    // The opaque-overwrite fast path relies on this field only ever
+    // growing wider, which the running-max filter above only guarantees
+    // in GRINDING -- TOPUP/STOPPING/FINALIZE show the real, unfiltered
+    // (non-monotonic) reading on purpose, so a shrinking value there can
+    // leave stale digit pixels behind a narrower opaque redraw. Confirmed
+    // via tools/display_sim: injecting the same jitter runSegment uses
+    // for those modes reproduced exactly this artifact before this guard.
+    if (mode == DisplayMode::GRINDING && !force && !bgTick && bandOutsidePile(currentY, 32)) {
+      g_tft.setTextColor(currentColor, bandFlatColor(currentY, kColorCoffeePile, ST7735_BLACK));
+    } else {
+      fillGrindBackground(currentY, 32, kColorCoffeePile, ST7735_BLACK);
+      g_tft.setTextColor(currentColor);
+    }
 
     if (isNegative) {
       g_tft.setCursor(currentX, currentY + 8);
@@ -589,10 +623,16 @@ void drawGrindingBlock(DisplayMode mode, float currentGrams, float targetGrams, 
   g_tft.getTextBounds(targetStr, 0, 0, &x, &y, &w, &h);
   const int16_t targetY = currentY + 32 + 10;
 
-  fillGrindBackground(targetY, h, kColorCoffeePile, ST7735_BLACK);
-  g_tft.setCursor((kW - w) / 2, targetY);
-  g_tft.setTextColor(targetColor);
-  g_tft.print(targetStr);
+  if (force || bgTick || targetChanged) {
+    if (!force && !bgTick && bandOutsidePile(targetY, h)) {
+      g_tft.setTextColor(targetColor, bandFlatColor(targetY, kColorCoffeePile, ST7735_BLACK));
+    } else {
+      fillGrindBackground(targetY, h, kColorCoffeePile, ST7735_BLACK);
+      g_tft.setTextColor(targetColor);
+    }
+    g_tft.setCursor((kW - w) / 2, targetY);
+    g_tft.print(targetStr);
+  }
 
   // Time, at the bottom.
   constexpr uint8_t timeSize = 2;
@@ -600,10 +640,16 @@ void drawGrindingBlock(DisplayMode mode, float currentGrams, float targetGrams, 
   g_tft.getTextBounds(timeStr, 0, 0, &x, &y, &w, &h);
   const int16_t timeY = targetY + h + 20;
 
-  fillGrindBackground(timeY, h, kColorCoffeePile, ST7735_BLACK);
-  g_tft.setCursor((kW - w) / 2, timeY);
-  g_tft.setTextColor(timeColor);
-  g_tft.print(timeStr);
+  if (force || bgTick || timeChanged) {
+    if (!force && !bgTick && bandOutsidePile(timeY, h)) {
+      g_tft.setTextColor(timeColor, bandFlatColor(timeY, kColorCoffeePile, ST7735_BLACK));
+    } else {
+      fillGrindBackground(timeY, h, kColorCoffeePile, ST7735_BLACK);
+      g_tft.setTextColor(timeColor);
+    }
+    g_tft.setCursor((kW - w) / 2, timeY);
+    g_tft.print(timeStr);
+  }
 
   strncpy(g_grind.currentStr, currentStr, sizeof(g_grind.currentStr) - 1);
   g_grind.currentStr[sizeof(g_grind.currentStr) - 1] = '\0';
