@@ -1,10 +1,9 @@
 #pragma once
 
 /**
- * Native-build-only stand-ins for what DisplayTask.cpp otherwise gets from
- * Arduino/Adafruit_ST7735/FreeRTOS -- exists purely so the *same*
- * rendering code can run host-side for `tools/display_sim` (see that
- * directory's README). Nothing here is used by the real firmware.
+ * Host-build stand-ins for what DisplayTask.cpp otherwise gets from
+ * Arduino, Adafruit_ST7735 and FreeRTOS, so the same rendering code runs
+ * for `tools/display_sim`. The firmware never uses this file.
  */
 
 #include <cstdint>
@@ -12,25 +11,18 @@
 
 #include "DisplaySimFont.h"
 
-// The two colors this project's rendering code actually references by
-// name (every other color is a local RGB565 constant already computed in
-// DisplayTask.cpp) -- normally pulled in transitively from
-// Adafruit_ST7735.h.
+// The two colors the renderer references by name; Adafruit_ST7735.h normally provides them.
 constexpr uint16_t ST7735_BLACK = 0x0000;
 constexpr uint16_t ST7735_WHITE = 0xFFFF;
 
-// millis(), settable from the simulator's own driver loop so a whole
-// scripted scenario can be stepped through deterministically rather than
-// tied to wall-clock time.
+// millis() driven by the simulator loop, so scenarios step deterministically instead of in wall-clock time.
 inline uint32_t &simMillisRef() {
   static uint32_t ms = 0;
   return ms;
 }
 inline uint32_t millis() { return simMillisRef(); }
 
-// Arduino's random(min, max): a uniform long in [min, max). No need to
-// match its exact PRNG -- nothing here is asserted against a specific
-// sequence, only ever looked at visually.
+// Arduino's random(min, max): a uniform long in [min, max). The exact PRNG is irrelevant to the renderer.
 inline long random(long minVal, long maxVal) {
   if (maxVal <= minVal) return minVal;
   return minVal + (std::rand() % (maxVal - minVal));
@@ -98,9 +90,7 @@ class FakeCanvas {
     }
   }
 
-  // Only ever called with a tiny radius (a 2px accent underline) -- a
-  // plain rect is visually indistinguishable there, not worth a faithful
-  // corner-rounding implementation for this tool.
+  // Only called for a 2px underline, where a plain rect is indistinguishable from a rounded one.
   void fillRoundRect(int16_t x, int16_t y, int16_t w, int16_t h, int16_t /*r*/,
                       uint16_t color) {
     fillRect(x, y, w, h, color);
@@ -129,10 +119,8 @@ class FakeCanvas {
     _cx = x;
   }
 
-  // Mirrors Adafruit_GFX::getTextBounds' classic-font (non-gfxFont)
-  // branch: every char advances x by 6*size regardless of glyph
-  // content, single line (this project never prints a string containing
-  // '\n', so that branch isn't reproduced here).
+  // Mirrors Adafruit_GFX::getTextBounds for the classic font: each char advances 6*size, on a
+  // single line (nothing here prints a newline).
   void getTextBounds(const char *str, int16_t x, int16_t y, int16_t *x1, int16_t *y1,
                       uint16_t *w, uint16_t *h) {
     int16_t minx = 0x7FFF, miny = 0x7FFF, maxx = -1, maxy = -1;
@@ -158,9 +146,8 @@ class FakeCanvas {
     pixels[y][x] = color;
   }
 
-  // Reimplements Adafruit_GFX::drawChar's classic-font branch exactly
-  // (same column/row bit order, same background-fill-only-if-opaque
-  // rule, same trailing spacer column) against kFont5x7 instead of SPI.
+  // Reimplements Adafruit_GFX::drawChar for the classic font (same bit order, opaque-only
+  // background fill and trailing spacer column) against kFont5x7.
   void drawChar(int16_t x, int16_t y, unsigned char c) {
     if (c >= 176) c++;  // 'classic' charset behavior, matches the real drawChar()
     for (int8_t i = 0; i < 5; ++i) {

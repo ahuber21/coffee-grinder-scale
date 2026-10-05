@@ -19,9 +19,10 @@ mkdir -p /tmp/dsim_out
 ./tools/display_sim/display_sim /tmp/dsim_out
 ```
 
-Writes `boot.dsim`, `dose.dsim`, `ota.dsim` -- one scripted scenario each
-(see `DisplaySimMain.h`), captured at a fixed 24fps regardless of how fast
-the underlying simulated clock moves.
+Writes `boot.dsim`, `dose.dsim`, `ota.dsim` and `edge.dsim` -- one scripted scenario
+each (see `DisplaySimMain.h`; `edge.dsim` covers signed and over-wide readouts, the
+DEBUG screen and live density changes), captured at a fixed 24fps regardless of how
+fast the underlying simulated clock moves.
 
 ## Viewing a capture
 
@@ -33,10 +34,13 @@ pixels concatenated, row-major. Convert one to an animated GIF:
 python3 tools/display_sim/dsim_to_gif.py /tmp/dsim_out/dose.dsim /tmp/dsim_out/dose.gif --scale 4
 ```
 
-Not wired into `pio test` -- this is a visualization tool, not a pass/fail
-check. Whether it's worth adding golden-frame regression assertions later
-(pin known-good pixel data, fail on an unintended diff) is an open question,
-not attempted here.
+## Regression check
+
+`tools/display_sim/check_golden.sh` renders every scenario and compares the frame
+hashes with `golden.sha1`, so a refactor that changes any pixel is caught. After an
+intended visual change, inspect the new frames and run `check_golden.sh --update`.
+The hashes depend on the platform's `rand()`, so regenerate them on a new machine.
+It is not part of `pio test`, which runs on the host without a C++ display build.
 
 ## Adding a new scenario
 

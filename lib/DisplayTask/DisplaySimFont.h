@@ -1,11 +1,8 @@
 #pragma once
 
-// Vendored from Adafruit_GFX's classic 5x7 bitmap font (glcdfont.c),
-// BSD-licensed, https://github.com/adafruit/Adafruit-GFX-Library --
-// reused verbatim (not reimplemented) so this simulator's text
-// layout matches the real firmware's pixel-for-pixel. Native-build
-// only; the real firmware links the actual Adafruit_GFX library.
-// 256 chars x 5 bytes/char, one bitmap column per byte, LSB = top row.
+// Adafruit_GFX's classic 5x7 font (glcdfont.c, BSD-licensed,
+// https://github.com/adafruit/Adafruit-GFX-Library), copied verbatim so the simulator's text
+// matches the firmware's. 256 chars x 5 bytes, one bitmap column per byte, LSB = top row.
 constexpr unsigned char kFont5x7[] = {
     0x00, 0x00, 0x00, 0x00, 0x00, 0x3E, 0x5B, 0x4F, 0x5B, 0x3E, 0x3E, 0x6B,
     0x4F, 0x6B, 0x3E, 0x1C, 0x3E, 0x7C, 0x3E, 0x1C, 0x18, 0x3C, 0x7E, 0x3C,

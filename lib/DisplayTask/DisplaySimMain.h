@@ -8,8 +8,8 @@
  * only link-restricted across translation units, not within one). Not
  * part of the real firmware in any way. See `tools/display_sim/README.md`.
  *
- * Scripts three scenarios (BOOT, a full IDLE->CONFIRM->TARE->GRINDING->
- * STOPPING->TOPUP->FINALIZE dose, and an OTA_UPDATE run) through the
+ * Scripts four scenarios (BOOT, a full IDLE->CONFIRM->TARE->GRINDING->
+ * STOPPING->TOPUP->FINALIZE dose, an OTA_UPDATE run, and layout edge cases) through the
  * exact same `renderMode()` the real Display task calls, stepping
  * simulated time in fine increments (finer than drawClumpField's own
  * ~70ms animation throttle, so that throttle actually governs frame
@@ -125,14 +125,12 @@ int main(int argc, char **argv) {
 
   std::string outDir = argc > 1 ? argv[1] : ".";
 
-  // Distinct from every real DisplayMode value, so the very first
-  // segment's mode always registers as "changed" and gets its initial
-  // full-force render -- same reason displayTaskFn seeds `last.mode =
-  // DisplayMode::BOOT` and force-renders once before its own loop starts.
+  // Distinct from every real DisplayMode, so the first segment counts as a mode change and
+  // gets a full forced render.
   DisplayCommand last{};
   last.mode = static_cast<DisplayMode>(255);
 
-  FrameDump bootDump, doseDump, otaDump;
+  FrameDump bootDump, doseDump, otaDump, edgeDump;
 
   {
     DisplayCommand boot{};
@@ -155,11 +153,8 @@ int main(int argc, char **argv) {
     tare.mode = DisplayMode::TARE;
     runSegment(doseDump, last, tare, 500);
 
-    // GRINDING: main grind stops a bit short of the corrected target,
-    // anticipating coast -- matches real behavior (see AR-072/AR-073).
-    // Noisy on purpose (see runSegment's noiseG) -- this is what actually
-    // exercises drawGrindingBlock's running-max display filter; a clean
-    // linear ramp would look identical whether the filter existed or not.
+    // GRINDING stops a bit short of the corrected target, anticipating coast. The noise is
+    // what exercises the running-max display filter; a clean ramp looks the same with or without it.
     DisplayCommand grinding{};
     grinding.mode = DisplayMode::GRINDING;
     grinding.target_grams = 9.5f;
@@ -174,9 +169,8 @@ int main(int argc, char **argv) {
     stopping.elapsed_s = 10.7f;
     runSegment(doseDump, last, stopping, 1500, 0.1f);
 
-    // TOPUP: one pulse (fast jump), then its settle wait. Noisy too, to
-    // show this mode deliberately does NOT get the running-max filter --
-    // the owner wants the real (settling) reading here, not smoothed.
+    // TOPUP: one pulse (a fast jump), then its settle wait. Noisy too, since this mode
+    // deliberately shows the real reading rather than the running-max filter.
     DisplayCommand pulseEnd{};
     pulseEnd.mode = DisplayMode::TOPUP;
     pulseEnd.target_grams = 9.5f;
@@ -205,6 +199,53 @@ int main(int argc, char **argv) {
     }
   }
   writeDump(outDir + "/ota.dsim", otaDump, 24);
+
+  {
+    // Layout edge cases the scripted dose never reaches: signed and over-wide idle readouts,
+    // the connection dot, the DEBUG rows, and live density/gravity changes.
+    DisplayCommand idle{};
+    idle.mode = DisplayMode::IDLE;
+    for (float grams : {0.0f, -3.2f, 12.3f, 99.9f, 105.6f, -120.0f, 8.0f, -0.4f, 56.7f}) {
+      idle.current_grams = grams;
+      idle.connection_indicator_color = grams > 50.0f ? 0x07E0 : 0;
+      runSegment(edgeDump, last, idle, 200);
+    }
+
+    DisplayCommand confirm{};
+    confirm.mode = DisplayMode::CONFIRM;
+    confirm.target_grams = 17.5f;
+    runSegment(edgeDump, last, confirm, 300);
+
+    DisplayCommand debug{};
+    debug.mode = DisplayMode::DEBUG;
+    std::snprintf(debug.debug_ip, sizeof(debug.debug_ip), "192.168.0.118");
+    debug.debug_raw_adc = -123456;
+    debug.debug_stable = true;
+    runSegment(edgeDump, last, debug, 300);
+    debug.debug_raw_adc = 4711;
+    debug.debug_stable = false;
+    runSegment(edgeDump, last, debug, 300);
+
+    DisplayCommand grinding{};
+    grinding.mode = DisplayMode::GRINDING;
+    grinding.target_grams = 18.0f;
+    grinding.current_grams = -1.5f;
+    grinding.elapsed_s = 0.0f;
+    grinding.connection_indicator_color = 0xF800;
+    runSegment(edgeDump, last, grinding, 400);
+    grinding.current_grams = 17.0f;
+    grinding.elapsed_s = 8.0f;
+    g_clumpDensity = 0.3f;
+    runSegment(edgeDump, last, grinding, 2500, 0.2f);
+    g_clumpDensity = 2.0f;
+    g_clumpGravity = 2.5f;
+    grinding.current_grams = 17.9f;
+    grinding.elapsed_s = 10.0f;
+    runSegment(edgeDump, last, grinding, 2500, 0.2f);
+    g_clumpDensity = 0.0f;
+    runSegment(edgeDump, last, grinding, 600);
+  }
+  writeDump(outDir + "/edge.dsim", edgeDump, 24);
 
   return 0;
 }
