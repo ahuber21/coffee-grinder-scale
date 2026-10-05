@@ -1,6 +1,7 @@
 #include "DosingModel.h"
 
 #include <algorithm>
+#include <cmath>
 #include <limits>
 
 namespace {
@@ -394,4 +395,68 @@ TopupModelV1 CoastModel::dumpPersisted(const TopupModelV1 &base) const {
   out.coast_weight_precision = static_cast<float>(m_coast_precision);
   out.last_updated = m_last_updated;
   return out;
+}
+
+// --- LandingLearner -------------------------------------------------------------
+
+LandingLearnerState makeDefaultLandingLearnerState() {
+  LandingLearnerState s{};
+  s.version = kLandingLearnerVersion;
+  return s;
+}
+
+LandingLearner::LandingLearner(const LandingLearnerState &persisted)
+    : LandingLearner(persisted, Config()) {}
+
+LandingLearner::LandingLearner(const LandingLearnerState &persisted, Config cfg)
+    : m_cfg(cfg), m_state(persisted) {}
+
+void LandingLearner::setRate(double rate) { m_cfg.rate = rate; }
+
+double LandingLearner::predict(bool is_double, double rate_g_s) const {
+  const LandingLearnerState::Mode &m = m_state.mode[is_double ? 1 : 0];
+  if (!(m.sw > kMinWeight)) return 0.0;
+
+  double mean_x = m.sx / m.sw;
+  double sxx_c = m.sxx - m.sx * m.sx / m.sw;
+  double sxy_c = m.sxy - m.sx * m.sy / m.sw;
+  double slope = sxy_c / (sxx_c + m_cfg.ridge);
+  double prior = m_cfg.prior_weight * m_cfg.prior_weight / (m_cfg.prior_weight + m.n);
+  double intercept = m.sy / (m.sw + prior);
+  return intercept + slope * (rate_g_s - mean_x);
+}
+
+bool LandingLearner::record(bool is_double, double rate_g_s, double uncorrected_error_g) {
+  if (!std::isfinite(rate_g_s) || !std::isfinite(uncorrected_error_g)) return false;
+  if (std::fabs(uncorrected_error_g) > m_cfg.max_abs_error_g) return false;
+
+  LandingLearnerState::Mode &m = m_state.mode[is_double ? 1 : 0];
+  double keep = 1.0 - m_cfg.rate;
+  m.sw = keep * m.sw + 1.0;
+  m.sx = keep * m.sx + rate_g_s;
+  m.sy = keep * m.sy + uncorrected_error_g;
+  m.sxx = keep * m.sxx + rate_g_s * rate_g_s;
+  m.sxy = keep * m.sxy + rate_g_s * uncorrected_error_g;
+  m.syy = keep * m.syy + uncorrected_error_g * uncorrected_error_g;
+  ++m.n;
+  return true;
+}
+
+double LandingLearner::residualSd(bool is_double) const {
+  const LandingLearnerState::Mode &m = m_state.mode[is_double ? 1 : 0];
+  if (!(m.sw > 1.5)) return 0.0;
+  double syy_c = m.syy - m.sy * m.sy / m.sw;
+  double sxx_c = m.sxx - m.sx * m.sx / m.sw;
+  double sxy_c = m.sxy - m.sx * m.sy / m.sw;
+  double slope = sxy_c / (sxx_c + m_cfg.ridge);
+  double var = (syy_c - slope * sxy_c) / m.sw;
+  return std::sqrt(std::max(var, 0.0));
+}
+
+double LandingLearner::effectiveSessions(bool is_double) const {
+  return m_state.mode[is_double ? 1 : 0].sw;
+}
+
+uint32_t LandingLearner::sessions(bool is_double) const {
+  return m_state.mode[is_double ? 1 : 0].n;
 }

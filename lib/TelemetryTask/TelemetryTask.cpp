@@ -275,6 +275,25 @@ void postRawSample(const TelemetryEvent &ev) {
   postgrestRequest("POST", "/raw_samples", String(body));
 }
 
+/**
+ * LANDING -> PATCH /sessions: the settled main-grind weight and what the
+ * landing learner did. A separate PATCH from COMPLETE's, so an older
+ * database without these columns can only lose this one request.
+ */
+void patchSessionLanding(const TelemetryEvent &ev) {
+  if (!g_session_open) return;
+
+  char body[256];
+  snprintf(body, sizeof(body),
+           "{\"settled_weight_g\":%.4f,\"coast_g\":%.4f,\"training_margin_g\":%.4f,"
+           "\"learner_correction_g\":%.4f,\"learner_clamped\":%s}",
+           ev.grams, ev.landing_coast_g, ev.landing_margin_g, ev.landing_correction_g,
+           ev.landing_clamped ? "true" : "false");
+
+  String path = String("/sessions?session_id=eq.") + g_session_uuid;
+  postgrestRequest("PATCH", path, String(body));
+}
+
 /** COMPLETE -> PATCH /sessions: closes the session out with its outcome. */
 void patchSessionFinal(const TelemetryEvent &ev) {
   if (!g_session_open) return;
@@ -332,6 +351,9 @@ void telemetryTaskFn(void *) {
           break;
         case TelemetryType::FINALIZE:
           g_finalize_seen = true;
+          break;
+        case TelemetryType::LANDING:
+          patchSessionLanding(ev);
           break;
         case TelemetryType::COMPLETE:
           patchSessionFinal(ev);

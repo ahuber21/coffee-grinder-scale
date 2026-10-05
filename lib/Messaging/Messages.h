@@ -99,6 +99,9 @@ enum class TelemetryType : uint8_t {
   // consistency across sessions -- not a calibration input, just stats.
   // See .agent/design/db-schema/002_tare_debug_stats.sql.
   TARE_DEBUG,
+  // Main-grind landing measurements, once per session, after the post-grind
+  // settle -- see .agent/design/db-schema/005_landing_stats.sql.
+  LANDING,
 };
 
 /** Which of GRINDING's three stop conditions actually fired -- PROGRESS only. */
@@ -166,6 +169,16 @@ struct TelemetryEvent {
   /// kTopupLutBuckets/kTopupLutBucketWidthG in DosingModel.h.
   float topup_lut_duration_ms[kTopupLutBuckets];
   uint32_t topup_lut_n[kTopupLutBuckets];
+
+  /*
+   * LANDING only (settled weight itself travels in `grams`, delta space):
+   * the coast that settled in after relay-off, the margin this session
+   * aimed short by, and what the landing learner did to the stop point.
+   */
+  float landing_coast_g;
+  float landing_margin_g;
+  float landing_correction_g;  ///< Applied stop-point shift, positive = stopped earlier.
+  bool landing_clamped;
 };
 
 /** A manual/API dose request, sent from Network task to Dosing task. */
@@ -264,6 +277,12 @@ struct SettingsSnapshot {
   float display_clump_density = 1.0f;  ///< Scales how many clumps fall at once.
   float display_clump_gravity = 1.0f;  ///< Scales how fast each clump falls.
 
+  // Dosing task's landing learner, which shifts the main-grind stop point
+  // so the settled weight lands on the margin-offset target.
+  bool landing_learner_enabled = true;
+  float landing_learner_rate = 0.05f;  ///< Per-session forgetting; evidence window ~1/rate sessions.
+  uint32_t landing_learner_clamp_ms = 500;  ///< Max stop-time shift either way vs the unlearned stop.
+
   // Network task's slice.
   bool wifi_reset_flag = false;
   bool wifi_reboot_flag = false;
@@ -302,6 +321,9 @@ enum class SettingsFieldId : uint16_t {
   BUTTON_MIN_HOLD_MS,
   DISPLAY_CLUMP_DENSITY,
   DISPLAY_CLUMP_GRAVITY,
+  LANDING_LEARNER_ENABLED,
+  LANDING_LEARNER_RATE,
+  LANDING_LEARNER_CLAMP_MS,
 };
 
 /** A single validated field write, sent from Network task to Settings task. */
@@ -322,6 +344,7 @@ struct SettingsWriteRequest {
 /** Identifies which persisted blob a PersistRequest carries. */
 enum class PersistBlobId : uint16_t {
   TOPUP_MODEL_V1,
+  LANDING_LEARNER_V1,
 };
 
 /**
@@ -330,6 +353,7 @@ enum class PersistBlobId : uint16_t {
  */
 struct PersistRequest {
   PersistBlobId blob_id;
-  TopupModelV1 payload;
+  TopupModelV1 payload;                ///< Valid when blob_id == TOPUP_MODEL_V1.
+  LandingLearnerState learner_payload;  ///< Valid when blob_id == LANDING_LEARNER_V1.
   uint32_t request_id;
 };

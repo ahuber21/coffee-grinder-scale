@@ -107,6 +107,9 @@ export interface SettingsMessage {
   button_min_hold_ms: number;
   display_clump_density: number;
   display_clump_gravity: number;
+  landing_learner_enabled: boolean;
+  landing_learner_rate: number;
+  landing_learner_clamp_ms: number;
 }
 
 export interface ErrorMessage {
@@ -147,7 +150,10 @@ export type WritableSettingsField =
   | "screensaver_wake_weight_delta_g"
   | "button_min_hold_ms"
   | "display_clump_density"
-  | "display_clump_gravity";
+  | "display_clump_gravity"
+  | "landing_learner_enabled"
+  | "landing_learner_rate"
+  | "landing_learner_clamp_ms";
 
 export interface SettingsWriteOutbound {
   type: "settings_write";

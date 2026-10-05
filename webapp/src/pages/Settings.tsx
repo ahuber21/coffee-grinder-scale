@@ -92,6 +92,42 @@ export function SelectSettingRow({ field, label, currentValue, options, unit }: 
   );
 }
 
+interface ToggleFieldProps {
+  field: WritableSettingsField;
+  label: string;
+  currentValue: boolean | null;
+}
+
+// The firmware only accepts a JSON boolean for flag fields, so this sends
+// true/false rather than the 0/1 SelectSettingRow would.
+function ToggleSettingRow({ field, label, currentValue }: ToggleFieldProps) {
+  const { send, nextRequestId } = useDeviceSocket();
+
+  return (
+    <div className="setting-row">
+      <div className="label">{label}</div>
+      <div style={{ display: "flex", alignItems: "center" }}>
+        <span className="current">
+          {currentValue === null ? "not reported yet" : currentValue ? "on" : "off"}
+        </span>
+        <input
+          type="checkbox"
+          checked={currentValue ?? false}
+          disabled={currentValue === null}
+          onChange={(e) =>
+            send({
+              type: "settings_write",
+              field,
+              value: e.target.checked,
+              request_id: nextRequestId(),
+            })
+          }
+        />
+      </div>
+    </div>
+  );
+}
+
 interface SliderFieldProps {
   field: WritableSettingsField;
   label: string;
@@ -251,6 +287,35 @@ export default function SettingsPage() {
           step="10"
           unit=" ms"
         />
+      </div>
+
+      <div className="panel">
+        <h3>Landing learner</h3>
+        <ToggleSettingRow
+          field="landing_learner_enabled"
+          label="Learner active"
+          currentValue={settings?.landing_learner_enabled ?? null}
+        />
+        <NumberSettingRow
+          field="landing_learner_rate"
+          label="Learning rate (per session)"
+          currentValue={settings?.landing_learner_rate ?? null}
+          step="0.01"
+        />
+        <NumberSettingRow
+          field="landing_learner_clamp_ms"
+          label="Stop-time clamp (±)"
+          currentValue={settings?.landing_learner_clamp_ms ?? null}
+          step="50"
+          unit=" ms"
+        />
+        <p className="muted" style={{ fontSize: "0.85em" }}>
+          Shifts the main-grind stop so the settled weight lands on the margin-offset target
+          (requested dose minus the top-up margin). The clamp bounds how far it can move the
+          stop from the unlearned stop time; the rate is the per-session forgetting (0.05 weighs
+          about the last 20 sessions). Each session's landing and applied shift show up in the
+          console as a LAND line.
+        </p>
       </div>
 
       <div className="panel">

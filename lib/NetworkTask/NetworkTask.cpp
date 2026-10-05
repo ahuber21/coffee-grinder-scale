@@ -75,6 +75,8 @@ const char *telemetryTypeToString(TelemetryType t) {
       return "model_state";
     case TelemetryType::TARE_DEBUG:
       return "tare_debug";
+    case TelemetryType::LANDING:
+      return "landing";
   }
   return "unknown";
 }
@@ -97,6 +99,14 @@ String buildTelemetryJson(const TelemetryEvent &ev) {
     case TelemetryType::TARE_DEBUG:
       doc["raw_adc"] = ev.raw_adc;
       doc["grams"] = ev.grams;
+      break;
+    case TelemetryType::LANDING:
+      doc["grams"] = ev.grams;
+      doc["target_grams"] = ev.target_grams;
+      doc["coast_g"] = ev.landing_coast_g;
+      doc["margin_g"] = ev.landing_margin_g;
+      doc["correction_g"] = ev.landing_correction_g;
+      doc["clamped"] = ev.landing_clamped;
       break;
     case TelemetryType::TOPUP_PULSE:
       doc["grams"] = ev.grams;
@@ -171,6 +181,9 @@ String buildSettingsJson(const SettingsSnapshot &s) {
   doc["button_min_hold_ms"] = s.button_min_hold_ms;
   doc["display_clump_density"] = s.display_clump_density;
   doc["display_clump_gravity"] = s.display_clump_gravity;
+  doc["landing_learner_enabled"] = s.landing_learner_enabled;
+  doc["landing_learner_rate"] = s.landing_learner_rate;
+  doc["landing_learner_clamp_ms"] = s.landing_learner_clamp_ms;
   String out;
   serializeJson(doc, out);
   return out;
@@ -314,6 +327,18 @@ bool settingsFieldFromName(const char *name, SettingsFieldId &out) {
     out = SettingsFieldId::DISPLAY_CLUMP_GRAVITY;
     return true;
   }
+  if (strcmp(name, "landing_learner_enabled") == 0) {
+    out = SettingsFieldId::LANDING_LEARNER_ENABLED;
+    return true;
+  }
+  if (strcmp(name, "landing_learner_rate") == 0) {
+    out = SettingsFieldId::LANDING_LEARNER_RATE;
+    return true;
+  }
+  if (strcmp(name, "landing_learner_clamp_ms") == 0) {
+    out = SettingsFieldId::LANDING_LEARNER_CLAMP_MS;
+    return true;
+  }
   return false;
 }
 
@@ -345,7 +370,8 @@ void handleWsMessage(AsyncWebSocketClient *client, const uint8_t *data, size_t l
     req.field_id = fieldId;
     req.request_id = request_id;
     if (fieldId == SettingsFieldId::WIFI_RESET_FLAG ||
-        fieldId == SettingsFieldId::WIFI_REBOOT_FLAG) {
+        fieldId == SettingsFieldId::WIFI_REBOOT_FLAG ||
+        fieldId == SettingsFieldId::LANDING_LEARNER_ENABLED) {
       req.value.b = doc["value"] | false;
     } else if (fieldId == SettingsFieldId::CALIBRATION_FACTOR) {
       // The wire value is calibration_factor_x1e6 (see buildSettingsJson
@@ -362,7 +388,8 @@ void handleWsMessage(AsyncWebSocketClient *client, const uint8_t *data, size_t l
                fieldId == SettingsFieldId::RATE_CALCULATION_PERCENTAGE ||
                fieldId == SettingsFieldId::SCREENSAVER_WAKE_WEIGHT_DELTA_G ||
                fieldId == SettingsFieldId::DISPLAY_CLUMP_DENSITY ||
-               fieldId == SettingsFieldId::DISPLAY_CLUMP_GRAVITY) {
+               fieldId == SettingsFieldId::DISPLAY_CLUMP_GRAVITY ||
+               fieldId == SettingsFieldId::LANDING_LEARNER_RATE) {
       // static_cast<double>, not the bare NAN macro (which is float-typed)
       // -- ArduinoJson's operator| deduces its parse target type from the
       // fallback's type, so a float fallback here would parse (and

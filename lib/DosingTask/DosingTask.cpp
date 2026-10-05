@@ -1,6 +1,7 @@
 #include "DosingTask.h"
 
 #include <Arduino.h>
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
@@ -74,6 +75,16 @@ TopupModelV1 g_persisted_model;
 MainGrindModel *g_main_grind_model = nullptr;
 TopupModel *g_topup_model = nullptr;
 CoastModel *g_coast_model = nullptr;
+
+// Landing learner: same lifecycle as the models above (persisted copy
+// loaded at BOOT, written back at FINALIZE, rebuilt on discard_training).
+LandingLearnerState g_persisted_learner;
+LandingLearner *g_landing_learner = nullptr;
+float g_learner_applied_g = 0.0f;  ///< Stop-point shift applied at the latest GRINDING sample (g, positive = earlier).
+bool g_learner_clamped = false;    ///< Whether that shift was cut short by the stop-time clamp.
+double g_last_rate_g_s = 0.0;      ///< Blended grind rate at the latest GRINDING sample.
+double g_stop_rate_g_s = 0.0;      ///< Grind rate captured at the stop instant.
+GrindStopReason g_stop_reason = GrindStopReason::TIME_ESTIMATE;
 
 /** Current time as seconds since epoch, for the models' recency decay. */
 int64_t nowEpochS() { return static_cast<int64_t>(time(nullptr)); }
@@ -311,6 +322,45 @@ void sendModelStateTelemetry(const TopupModelV1 &model) {
 /** Energizes/de-energizes the grinder relay -- the sole writer of this pin. */
 void grinderRelay(bool on) { digitalWrite(GRINDER_RELAY_PIN, on ? HIGH : LOW); }
 
+/**
+ * Records this session's settled main-grind landing: sends it to
+ * telemetry and, when the settle was genuine and the time estimate
+ * ended the grind, trains the landing learner on it. The training
+ * target is the error the session would have had without the learner's
+ * own shift. A settle that merely timed out is not a measurement.
+ */
+void recordLanding(double observed_coast_g, bool settled_stable) {
+  float settled_delta = g_last_sample.grams - g_grams_on_grind_start;
+  float landing_error_g = settled_delta - g_target_grams_corrected;
+
+  bool trained = false;
+  if (settled_stable && g_stop_reason == GrindStopReason::TIME_ESTIMATE) {
+    g_landing_learner->setRate(g_settings.landing_learner_rate);
+    trained = g_landing_learner->record(g_is_double, g_stop_rate_g_s,
+                                         landing_error_g + g_learner_applied_g);
+  }
+
+  TelemetryEvent ev{};
+  ev.type = TelemetryType::LANDING;
+  ev.session_id = g_session_id;
+  ev.runtime_ms = g_grinder_started_ms ? (millis() - g_grinder_started_ms) : 0;
+  ev.grams = settled_delta;
+  ev.target_grams = g_target_grams;
+  ev.landing_coast_g = static_cast<float>(observed_coast_g);
+  ev.landing_margin_g = g_target_grams - g_target_grams_corrected;
+  ev.landing_correction_g = g_learner_applied_g;
+  ev.landing_clamped = g_learner_clamped;
+  xQueueSend(g_telemetry_q, &ev, 0);
+
+  char line[96];
+  snprintf(line, sizeof(line), "LAND %s err=%+.3fg corr=%+.3fg%s n=%u sd=%.3fg%s",
+           g_is_double ? "dbl" : "sgl", landing_error_g, g_learner_applied_g,
+           g_learner_clamped ? " CLAMP" : "",
+           static_cast<unsigned>(g_landing_learner->sessions(g_is_double)),
+           g_landing_learner->residualSd(g_is_double), trained ? "" : " (not trained)");
+  sendLog(line);
+}
+
 /** Per-sample GRINDING update: feeds the rate/coast models and checks every stop condition. */
 void handleGrindingSample(const ScaleSample &s) {
   uint32_t runtime_ms = s.millis - g_grinder_started_ms;
@@ -322,6 +372,25 @@ void handleGrindingSample(const ScaleSample &s) {
   double coast_estimate = g_coast_model->currentCoastEstimate();
   double predicted_stop_ms = g_main_grind_model->predictStopTimeMsWithCoast(
       g_target_grams_corrected, coast_estimate);
+
+  // The landing learner moves the stop by its predicted landing excess,
+  // never further than the clamp from the unlearned stop.
+  g_last_rate_g_s = g_main_grind_model->currentRateEstimate();
+  g_learner_applied_g = 0.0f;
+  g_learner_clamped = false;
+  if (g_settings.landing_learner_enabled && std::isfinite(predicted_stop_ms) &&
+      g_last_rate_g_s > 0.0) {
+    double shift_g = g_landing_learner->predict(g_is_double, g_last_rate_g_s);
+    double learned_ms = g_main_grind_model->predictStopTimeMsWithCoast(
+        g_target_grams_corrected, coast_estimate + shift_g);
+    double clamp_ms = g_settings.landing_learner_clamp_ms;
+    double clamped_ms = std::max(predicted_stop_ms - clamp_ms,
+                                  std::min(learned_ms, predicted_stop_ms + clamp_ms));
+    g_learner_clamped = clamped_ms != learned_ms;
+    g_learner_applied_g = static_cast<float>((predicted_stop_ms - clamped_ms) *
+                                              g_last_rate_g_s / 1000.0);
+    predicted_stop_ms = clamped_ms;
+  }
 
   // Both primary and fallback stops use the same canonical target value;
   // currentWeightEstimate() is already filtered by addSample's plausibility check.
@@ -357,6 +426,8 @@ void handleGrindingSample(const ScaleSample &s) {
                                    : raw_weight_fallback_fired ? GrindStopReason::RAW_WEIGHT_FALLBACK
                                                                  : GrindStopReason::SAFETY_TIMEOUT;
     double weight_estimate = g_main_grind_model->currentWeightEstimate();
+    g_stop_reason = stop_reason;
+    g_stop_rate_g_s = g_last_rate_g_s;
     g_main_grind_model->finalizeSession(nowEpochS());
     sendProgressTelemetry(stop_reason, static_cast<float>(delta_weight), weight_estimate);
     transitionTo(DosingState::STOPPING);
@@ -468,6 +539,12 @@ void dosingTaskFn(void *) {
   g_topup_model = new TopupModel(g_persisted_model);
   g_coast_model = new CoastModel(g_persisted_model);
   sendModelStateTelemetry(g_persisted_model);
+
+  if (xQueueReceive(g_landing_learner_mailbox, &g_persisted_learner, portMAX_DELAY) != pdTRUE) {
+    g_persisted_learner = makeDefaultLandingLearnerState();
+  }
+  xQueueOverwrite(g_landing_learner_mailbox, &g_persisted_learner);
+  g_landing_learner = new LandingLearner(g_persisted_learner);
 
   transitionTo(DosingState::IDLE);
   sendDisplayCommand();
@@ -658,6 +735,7 @@ void dosingTaskFn(void *) {
         if (settled && g_have_sample) {
           double observed_coast = g_last_sample.grams - g_weight_at_relay_off;
           g_coast_model->recordCoast(observed_coast, nowEpochS());
+          recordLanding(observed_coast, g_have_sample && g_last_sample.stable);
           g_topup_phase = TopupPhase::DECIDING;
           g_topup_deciding_entered_ms = millis();
           transitionTo(DosingState::TOPUP);
@@ -690,6 +768,8 @@ void dosingTaskFn(void *) {
             g_main_grind_model = new MainGrindModel(g_persisted_model);
             g_topup_model = new TopupModel(g_persisted_model);
             g_coast_model = new CoastModel(g_persisted_model);
+            delete g_landing_learner;
+            g_landing_learner = new LandingLearner(g_persisted_learner);
             sendLog("FINALIZE: discard_training set, model left untouched");
           } else {
             // Fold the three models' latest state into one blob and hand
@@ -700,8 +780,18 @@ void dosingTaskFn(void *) {
             blob = g_coast_model->dumpPersisted(blob);
             g_persisted_model = blob;
 
-            PersistRequest req{PersistBlobId::TOPUP_MODEL_V1, blob, g_session_id};
+            PersistRequest req{};
+            req.blob_id = PersistBlobId::TOPUP_MODEL_V1;
+            req.payload = blob;
+            req.request_id = g_session_id;
             xQueueSend(g_persist_request_q, &req, 0);
+
+            g_persisted_learner = g_landing_learner->dumpPersisted();
+            PersistRequest learner_req{};
+            learner_req.blob_id = PersistBlobId::LANDING_LEARNER_V1;
+            learner_req.learner_payload = g_persisted_learner;
+            learner_req.request_id = g_session_id;
+            xQueueSend(g_persist_request_q, &learner_req, 0);
           }
           sendModelStateTelemetry(g_persisted_model);
 

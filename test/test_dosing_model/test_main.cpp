@@ -493,6 +493,83 @@ void test_topup_model_falls_back_to_default_seed_for_invalid_persisted_bucket(vo
   TEST_ASSERT_DOUBLE_WITHIN(1e-3, expected, model.durationForBucket(3));
 }
 
+// ---------------------------------------------------------------------------
+// LandingLearner
+// ---------------------------------------------------------------------------
+
+void test_landing_learner_predicts_zero_with_no_data(void) {
+  LandingLearner l(makeDefaultLandingLearnerState());
+  TEST_ASSERT_DOUBLE_WITHIN(1e-12, 0.0, l.predict(false, 1.0));
+}
+
+void test_landing_learner_converges_on_a_constant_bias(void) {
+  LandingLearner l(makeDefaultLandingLearnerState());
+  for (int i = 0; i < 200; ++i) l.record(false, 1.0, 0.10);
+  TEST_ASSERT_DOUBLE_WITHIN(0.01, 0.10, l.predict(false, 1.0));
+}
+
+void test_landing_learner_first_session_barely_moves_the_stop(void) {
+  LandingLearner l(makeDefaultLandingLearnerState());
+  l.record(false, 1.0, 0.30);
+  TEST_ASSERT_TRUE(l.predict(false, 1.0) < 0.1);
+}
+
+void test_landing_learner_learns_rate_dependence_and_cuts_spread(void) {
+  auto rng = makeRng();
+  std::normal_distribution<double> rate_noise(1.0, 0.1);
+  std::normal_distribution<double> noise(0.0, 0.04);
+  LandingLearner l(makeDefaultLandingLearnerState());
+  // Truth: landing error = 0.05 + 1.2*(rate - 1.0) + noise.
+  for (int i = 0; i < 300; ++i) {
+    double x = rate_noise(rng);
+    l.record(false, x, 0.05 + 1.2 * (x - 1.0) + noise(rng));
+  }
+  double sum_raw = 0.0, sum_fixed = 0.0;
+  const int n = 400;
+  for (int i = 0; i < n; ++i) {
+    double x = rate_noise(rng);
+    double y = 0.05 + 1.2 * (x - 1.0) + noise(rng);
+    sum_raw += y * y;
+    double resid = y - l.predict(false, x);
+    sum_fixed += resid * resid;
+  }
+  TEST_ASSERT_TRUE(std::sqrt(sum_fixed / n) < 0.6 * std::sqrt(sum_raw / n));
+}
+
+void test_landing_learner_modes_are_independent(void) {
+  LandingLearner l(makeDefaultLandingLearnerState());
+  for (int i = 0; i < 100; ++i) l.record(true, 1.0, 0.2);
+  TEST_ASSERT_DOUBLE_WITHIN(1e-12, 0.0, l.predict(false, 1.0));
+  TEST_ASSERT_TRUE(l.predict(true, 1.0) > 0.15);
+}
+
+void test_landing_learner_rejects_glitch_observations(void) {
+  LandingLearner l(makeDefaultLandingLearnerState());
+  TEST_ASSERT_FALSE(l.record(false, 1.0, 2.5));
+  TEST_ASSERT_FALSE(l.record(false, std::nan(""), 0.1));
+  TEST_ASSERT_EQUAL_UINT32(0, l.sessions(false));
+}
+
+void test_landing_learner_state_roundtrips_through_byte_copy(void) {
+  LandingLearner a(makeDefaultLandingLearnerState());
+  for (int i = 0; i < 30; ++i) a.record(false, 1.0 + 0.01 * i, 0.05 * (i % 3));
+  LandingLearnerState raw = a.dumpPersisted();
+  LandingLearnerState copy{};
+  std::memcpy(&copy, &raw, sizeof(raw));
+  LandingLearner b(copy);
+  TEST_ASSERT_DOUBLE_WITHIN(1e-12, a.predict(false, 1.1), b.predict(false, 1.1));
+}
+
+void test_landing_learner_forgets_old_evidence(void) {
+  LandingLearner::Config cfg;
+  cfg.rate = 0.2;
+  LandingLearner l(makeDefaultLandingLearnerState(), cfg);
+  for (int i = 0; i < 100; ++i) l.record(false, 1.0, 0.3);
+  for (int i = 0; i < 100; ++i) l.record(false, 1.0, 0.0);
+  TEST_ASSERT_TRUE(std::fabs(l.predict(false, 1.0)) < 0.02);
+}
+
+
 int main(int argc, char **argv) {
   (void)argc;
   (void)argv;
@@ -525,6 +602,14 @@ int main(int argc, char **argv) {
   RUN_TEST(test_coast_model_rejects_absurdly_large_observation);
   RUN_TEST(test_coast_model_recency_decay_reduces_old_observations_influence);
 
+  RUN_TEST(test_landing_learner_predicts_zero_with_no_data);
+  RUN_TEST(test_landing_learner_converges_on_a_constant_bias);
+  RUN_TEST(test_landing_learner_first_session_barely_moves_the_stop);
+  RUN_TEST(test_landing_learner_learns_rate_dependence_and_cuts_spread);
+  RUN_TEST(test_landing_learner_modes_are_independent);
+  RUN_TEST(test_landing_learner_rejects_glitch_observations);
+  RUN_TEST(test_landing_learner_state_roundtrips_through_byte_copy);
+  RUN_TEST(test_landing_learner_forgets_old_evidence);
   RUN_TEST(test_bucket_for_gap_maps_correctly);
   RUN_TEST(test_decision_fires_using_bucket_duration_and_aim_weight);
   RUN_TEST(test_decision_fires_even_for_a_tiny_0_1g_gap);

@@ -15,6 +15,7 @@ namespace {
 
 SettingsSnapshot g_settings;  ///< Canonical copy -- only this task ever writes it.
 TopupModelV1 g_topup_model;   ///< Canonical cold copy -- ditto.
+LandingLearnerState g_landing_learner;  ///< Canonical cold copy of the landing learner's state.
 
 // ESP32 NVS caps namespace/key names at 15 characters -- every key
 // below stays under that. One `Preferences` handle, opened and closed
@@ -56,9 +57,16 @@ constexpr const char *kKeyClumpGravity = "clump_gravity";
 constexpr const char *kKeyWifiReset = "wifi_reset";
 constexpr const char *kKeyWifiReboot = "wifi_reboot";
 constexpr const char *kKeyTopupModel = "topup_model";
+constexpr const char *kKeyLandingEnabled = "land_enabled";
+constexpr const char *kKeyLandingRate = "land_rate";
+constexpr const char *kKeyLandingClampMs = "land_clamp_ms";
+constexpr const char *kKeyLandingLearner = "land_learner";
 
 /** @see isPlausibleTopupModel */
 bool isPlausibleTopupModel(const TopupModelV1 &m);
+
+/** @see isPlausibleLandingLearner */
+bool isPlausibleLandingLearner(const LandingLearnerState &s);
 
 // Field validators: the single source of truth, shared by the live
 // write path and the NVS loader below.
@@ -91,6 +99,12 @@ bool validScreensaverWakeWeightDeltaG(float v) { return std::isfinite(v) && v > 
 bool validClumpDensity(float v) { return std::isfinite(v) && v >= 0.0f && v <= 3.0f; }
 /** Clump fall-speed multiplier: must stay positive, or clumps freeze in place forever. */
 bool validClumpGravity(float v) { return std::isfinite(v) && v > 0.0f && v <= 5.0f; }
+
+/** Landing-learner forgetting rate: a fraction per session, never 0 (frozen) or past 0.5 (noise-chasing). */
+bool validLandingRate(float v) { return std::isfinite(v) && v >= 0.01f && v <= 0.5f; }
+
+/** Landing-learner stop-time clamp: bounded so a bad value can't let it move the stop by seconds. */
+bool validLandingClampMs(uint32_t v) { return v <= 2000; }
 
 /**
  * Loads SettingsSnapshot from NVS. Returns false (leaving `out`
@@ -291,6 +305,22 @@ bool loadSettingsFromNvs(SettingsSnapshot &out) {
     Serial.println("[Settings] NVS display_clump_gravity invalid -- using default");
   }
 
+  float landing_rate = g_prefs.getFloat(kKeyLandingRate, defaults.landing_learner_rate);
+  if (validLandingRate(landing_rate)) {
+    out.landing_learner_rate = landing_rate;
+  } else {
+    Serial.println("[Settings] NVS landing_learner_rate invalid -- using default");
+  }
+
+  uint32_t landing_clamp = g_prefs.getUInt(kKeyLandingClampMs, defaults.landing_learner_clamp_ms);
+  if (validLandingClampMs(landing_clamp)) {
+    out.landing_learner_clamp_ms = landing_clamp;
+  } else {
+    Serial.println("[Settings] NVS landing_learner_clamp_ms invalid -- using default");
+  }
+
+  out.landing_learner_enabled = g_prefs.getBool(kKeyLandingEnabled, defaults.landing_learner_enabled);
+
   // Flags have no illegal state -- any stored bool is trusted as-is.
   out.wifi_reset_flag = g_prefs.getBool(kKeyWifiReset, defaults.wifi_reset_flag);
   out.wifi_reboot_flag = g_prefs.getBool(kKeyWifiReboot, defaults.wifi_reboot_flag);
@@ -335,6 +365,9 @@ void saveSettingsToNvs(const SettingsSnapshot &snap) {
   g_prefs.putUInt(kKeyBtnHoldMs, snap.button_min_hold_ms);
   g_prefs.putFloat(kKeyClumpDensity, snap.display_clump_density);
   g_prefs.putFloat(kKeyClumpGravity, snap.display_clump_gravity);
+  g_prefs.putFloat(kKeyLandingRate, snap.landing_learner_rate);
+  g_prefs.putUInt(kKeyLandingClampMs, snap.landing_learner_clamp_ms);
+  g_prefs.putBool(kKeyLandingEnabled, snap.landing_learner_enabled);
   g_prefs.putBool(kKeyWifiReset, snap.wifi_reset_flag);
   g_prefs.putBool(kKeyWifiReboot, snap.wifi_reboot_flag);
 
@@ -380,6 +413,32 @@ void saveTopupModelToNvs(const TopupModelV1 &model) {
     return;
   }
   g_prefs.putBytes(kKeyTopupModel, &model, sizeof(model));
+  g_prefs.end();
+}
+
+/** LandingLearnerState NVS round-trip, same raw-bytes scheme as the topup model. */
+bool loadLandingLearnerFromNvs(LandingLearnerState &out) {
+  if (!g_prefs.begin(kNvsNamespace, /*readOnly=*/true)) return false;
+  LandingLearnerState loaded{};
+  size_t got = g_prefs.getBytes(kKeyLandingLearner, &loaded, sizeof(loaded));
+  g_prefs.end();
+
+  if (got != sizeof(loaded) || loaded.version != kLandingLearnerVersion ||
+      !isPlausibleLandingLearner(loaded)) {
+    Serial.println("[Settings] Landing learner NVS blob missing/stale -- starting empty");
+    return false;
+  }
+  out = loaded;
+  return true;
+}
+
+/** @see loadLandingLearnerFromNvs */
+void saveLandingLearnerToNvs(const LandingLearnerState &state) {
+  if (!g_prefs.begin(kNvsNamespace, /*readOnly=*/false)) {
+    Serial.println("[Settings] NVS open for write failed -- landing learner not persisted");
+    return;
+  }
+  g_prefs.putBytes(kKeyLandingLearner, &state, sizeof(state));
   g_prefs.end();
 }
 
@@ -501,6 +560,17 @@ bool applyWrite(const SettingsWriteRequest &req) {
       if (!validClumpGravity(req.value.f)) return false;
       g_settings.display_clump_gravity = req.value.f;
       return true;
+    case SettingsFieldId::LANDING_LEARNER_ENABLED:
+      g_settings.landing_learner_enabled = req.value.b;
+      return true;
+    case SettingsFieldId::LANDING_LEARNER_RATE:
+      if (!validLandingRate(req.value.f)) return false;
+      g_settings.landing_learner_rate = req.value.f;
+      return true;
+    case SettingsFieldId::LANDING_LEARNER_CLAMP_MS:
+      if (!validLandingClampMs(req.value.u)) return false;
+      g_settings.landing_learner_clamp_ms = req.value.u;
+      return true;
   }
   return false;
 }
@@ -519,6 +589,17 @@ bool isPlausibleTopupModel(const TopupModelV1 &m) {
   return true;
 }
 
+/** Plausibility bounds for a persisted LandingLearnerState: finite sums, non-negative weights. */
+bool isPlausibleLandingLearner(const LandingLearnerState &s) {
+  for (const LandingLearnerState::Mode &m : s.mode) {
+    if (!std::isfinite(m.sw) || !std::isfinite(m.sx) || !std::isfinite(m.sy) ||
+        !std::isfinite(m.sxx) || !std::isfinite(m.sxy) || !std::isfinite(m.syy))
+      return false;
+    if (m.sw < 0.0 || m.sw > 1000.0 || m.syy < 0.0) return false;
+  }
+  return true;
+}
+
 /** Settings task entry point: loads NVS, then serves the write/persist queues. */
 void settingsTaskFn(void *) {
   g_settings = SettingsSnapshot{};  // Compiled-in defaults (Messages.h).
@@ -532,8 +613,14 @@ void settingsTaskFn(void *) {
     g_topup_model = makeDefaultTopupModel();
   }
 
+  g_landing_learner = makeDefaultLandingLearnerState();
+  if (!loadLandingLearnerFromNvs(g_landing_learner)) {
+    g_landing_learner = makeDefaultLandingLearnerState();
+  }
+
   broadcastSnapshot();
   xQueueOverwrite(g_topup_model_mailbox, &g_topup_model);
+  xQueueOverwrite(g_landing_learner_mailbox, &g_landing_learner);
 
   // Every subscriber's first read is now guaranteed to be a valid,
   // fully loaded snapshot, never a default-constructed placeholder.
@@ -562,8 +649,13 @@ void settingsTaskFn(void *) {
           isPlausibleTopupModel(persist.payload)) {
         g_topup_model = persist.payload;
         saveTopupModelToNvs(g_topup_model);
+      } else if (persist.blob_id == PersistBlobId::LANDING_LEARNER_V1 &&
+                 persist.learner_payload.version == kLandingLearnerVersion &&
+                 isPlausibleLandingLearner(persist.learner_payload)) {
+        g_landing_learner = persist.learner_payload;
+        saveLandingLearnerToNvs(g_landing_learner);
       } else {
-        Serial.printf("[Settings] rejected topup-model persist, request_id=%u\n",
+        Serial.printf("[Settings] rejected model persist, request_id=%u\n",
                       persist.request_id);
       }
     }

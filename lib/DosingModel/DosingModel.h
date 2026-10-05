@@ -457,3 +457,71 @@ class CoastModel {
   double m_coast_precision;
   int64_t m_last_updated;
 };
+
+/** Version tag of LandingLearnerState; a mismatch on load discards the blob. */
+constexpr uint16_t kLandingLearnerVersion = 1;
+
+/** Persisted state of LandingLearner: forgetting-weighted regression sums per dose mode. */
+struct LandingLearnerState {
+  /// Weighted sums of one dose mode's (rate, uncorrected landing error) observations.
+  struct Mode {
+    double sw;   ///< Sum of weights.
+    double sx;   ///< Sum of w*x, x = flow rate at the stop (g/s).
+    double sy;   ///< Sum of w*y, y = uncorrected landing error (g, positive = landed high).
+    double sxx;
+    double sxy;
+    double syy;
+    uint32_t n;  ///< Lifetime accepted sessions.
+  };
+  uint16_t version;
+  Mode mode[2];  ///< Index 0 = single, 1 = double.
+};
+
+static_assert(std::is_trivially_copyable<LandingLearnerState>::value,
+              "LandingLearnerState is persisted as raw bytes");
+
+/** An empty, current-version LandingLearnerState. */
+LandingLearnerState makeDefaultLandingLearnerState();
+
+/**
+ * Predicts how far above its aim the main grind will settle, from the
+ * flow rate at the stop, so the stop can be moved earlier (or later) by
+ * that amount. Per dose mode it fits y = b + c*(x - mean_x) over the
+ * settled landing errors with exponential forgetting; the intercept is
+ * shrunk toward zero and the slope is ridge-regularised, so the first
+ * few sessions barely move the stop. y is always the error the session
+ * would have had with no correction applied, so the learner never
+ * trains on its own action.
+ */
+class LandingLearner {
+ public:
+  struct Config {
+    double rate = 0.05;         ///< Forgetting per session; the evidence window is ~1/rate sessions.
+    double prior_weight = 3.0;  ///< Pseudo-sessions of zero error damping the cold-start intercept; fades as sessions accrue.
+    double ridge = 0.02;        ///< Added to the centred Sxx; shrinks the slope toward zero.
+    double max_abs_error_g = 1.0;  ///< Observations beyond this are glitches, not data.
+  };
+
+  explicit LandingLearner(const LandingLearnerState &persisted);
+  LandingLearner(const LandingLearnerState &persisted, Config cfg);
+
+  void setRate(double rate);
+
+  /** Expected landed-high excess in grams for a grind at `rate_g_s`; 0 with no data. */
+  double predict(bool is_double, double rate_g_s) const;
+
+  /** Folds one session; returns false (state untouched) for an implausible observation. */
+  bool record(bool is_double, double rate_g_s, double uncorrected_error_g);
+
+  /** Sd of the uncorrected landing error around the fit, in grams. */
+  double residualSd(bool is_double) const;
+  /** Effective (forgetting-weighted) session count. */
+  double effectiveSessions(bool is_double) const;
+  uint32_t sessions(bool is_double) const;
+
+  LandingLearnerState dumpPersisted() const { return m_state; }
+
+ private:
+  Config m_cfg;
+  LandingLearnerState m_state;
+};
