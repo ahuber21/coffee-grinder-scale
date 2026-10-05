@@ -48,9 +48,7 @@ constexpr UBaseType_t kNetworkPriority = 3;
 constexpr uint32_t kNetworkStackBytes = 8192;
 constexpr int kNetworkCore = kCorePro;
 
-// #7 Telemetry. Stack bumped from an original 6144 to 8192 (matching
-// Network's) once the real body used HTTPClient/WiFiClient -- their
-// internal buffers push past what a queue-drain-and-forward stub needed.
+// #7 Telemetry. Sized like Network's: HTTPClient/WiFiClient keep large internal buffers.
 constexpr UBaseType_t kTelemetryPriority = 2;
 constexpr uint32_t kTelemetryStackBytes = 8192;
 constexpr int kTelemetryCore = kCorePro;

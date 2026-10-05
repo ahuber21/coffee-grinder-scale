@@ -24,13 +24,13 @@
 #include "TaskConfig.h"
 #include "defines.h"  // SERVER_PORT
 
+namespace {
+
 /** True unless Dosing task is mid-grind, in which case an OTA start must be refused. */
 bool otaSafeToStart() {
   EventBits_t bits = xEventGroupGetBits(g_sys_events);
   return (bits & kDosingActiveBit) == 0;
 }
-
-namespace {
 
 constexpr const char *kApName = "Eureka setup";  ///< WiFiManager AP name.
 

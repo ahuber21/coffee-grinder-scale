@@ -13,78 +13,42 @@
 #include "Messages.h"
 #include "Queues.h"
 #include "TaskConfig.h"
+#include "defines.h"  // POSTGREST_BASE_URL
 
-/**
- * Real PostgREST posting for Telemetry task. Endpoint shape and auth
- * model come from the live deployment: base URL
- * http://192.168.0.111:3000, schema v2, plain HTTP (no TLS -- that is a
- * future hardening step, not implemented server-side yet), and no auth
- * header -- this deployment has no JWT config, so every request already
- * runs as a single scoped anonymous role purely from which port/schema
- * it hits. That role can SELECT+INSERT on all three v2 tables, plus
- * UPDATE scoped to just the "finalize" columns, matching exactly what
- * patchSessionFinal() below sends.
+/*
+ * Telemetry task: forwards Dosing task's events to the WS broadcast
+ * queue and posts them to PostgREST (schema v2, plain HTTP, no auth
+ * header: the deployment runs every request as one scoped anonymous role
+ * that can SELECT and INSERT on the v2 tables and UPDATE only the
+ * session's finalize and landing columns).
  *
- * TelemetryEvent -> PostgREST mapping. Dosing task's actual telemetry
- * stream (see its sendTelemetry() call sites) is simpler than a
- * per-tick stream would be: one TARGET at grind start, one PROGRESS
- * when the main grind's relay turns off, one TOPUP_PULSE per completed
- * topup cycle, one FINALIZE when the topup loop decides it's done, one
- * COMPLETE at session end. This task's body is written against that
- * actual stream:
+ * Event to request mapping:
+ *   TARGET       POST  /sessions     opens a session under a fresh UUIDv4
+ *                                    (the event's own session_id is a local counter)
+ *   PROGRESS     POST  /events       the MAIN_GRIND row, sent once the relay is off
+ *   TOPUP_PULSE  POST  /events       one TOPUP row per settled pulse; the event carries
+ *                                    no pulse timestamps, so both are set to its runtime_ms
+ *   TARE_DEBUG   POST  /tare_debug   the session's tare baseline
+ *   RAW_SAMPLE   POST  /raw_samples  handled, but Dosing task does not emit it yet
+ *   LANDING      PATCH /sessions     settled weight, coast and learner correction
+ *   FINALIZE     none                marks a normal finish, so COMPLETE can tell it from an abort
+ *   COMPLETE     PATCH /sessions     final weight and outcome
  *
- *   TARGET       -> POST /sessions (session_id is a fresh UUIDv4
- *                    generated here, since TelemetryEvent.session_id is
- *                    only a local counter -- the sessions table's
- *                    session_id column is a real UUID).
- *   PROGRESS     -> POST /events (MAIN_GRIND, pulse_index=0). Dosing
- *                    only sends this once the main-grind relay is
- *                    already off, so before/after weight and both relay
- *                    timestamps are all known in the one call.
- *   TOPUP_PULSE  -> POST /events (TOPUP, pulse_index=1,2,...). Same
- *                    reasoning -- Dosing only sends this after the
- *                    pulse's settle has already completed. Known gap:
- *                    TelemetryEvent doesn't carry the pulse's own
- *                    relay-on/relay-off timestamps (only the
- *                    settle-complete runtime_ms), so both are
- *                    approximated as that one timestamp rather than a
- *                    real pulse duration; Dosing task already has the
- *                    real start time locally and could forward it.
- *   RAW_SAMPLE   -> POST /raw_samples. Not actually emitted by Dosing
- *                    task yet, but handled here for forward-compatibility.
- *   FINALIZE     -> no HTTP call; just marks that the topup loop
- *                    finished normally, so COMPLETE's outcome can tell
- *                    that apart from a manual abort or the topup loop's
- *                    own safety timeout -- neither of which sends a
- *                    FINALIZE event first. Those two causes aren't
- *                    distinguishable from each other yet; both collapse
- *                    to "aborted" here, since nothing in the current
- *                    stream carries which one actually happened.
- *   COMPLETE     -> PATCH /sessions?session_id=eq.<uuid>, closing the
- *                    session out.
- *
- * Only one grind session is ever in flight at a time (Dosing task is
- * the sole owner of the grinder relay), so the assembly state below is
- * a single set of "current session" variables, not a session table.
+ * Only one session is in flight at a time (Dosing task owns the relay),
+ * so the assembly state below is a single set of variables.
  */
 
 namespace {
 
-constexpr const char *kPostgrestBase = "http://192.168.0.111:3000";
 constexpr uint32_t kHttpTimeoutMs = 2000;
 
-// No repo-wide firmware version scheme exists yet (e.g. a build-time
-// git-describe define) -- this is a stand-in so the schema's required
-// firmware_version column isn't sent empty.
+// Labels stored in v2.sessions; kept stable so session history stays comparable.
 constexpr const char *kFirmwareVersion = "rtos-rewrite-dev";
-constexpr const char *kModelVersion = "DosingModelState";
+constexpr const char *kModelVersion = "TopupModelV1";
 
-uint32_t g_dropped_events = 0;
-uint32_t g_http_failures = 0;
-
-// Current-session assembly state (single in-flight session, see above).
+// Current-session assembly state.
 bool g_session_open = false;
-char g_session_uuid[37] = {0};  // 8-4-4-4-12 hex + NUL
+char g_session_uuid[37] = {0};  ///< 8-4-4-4-12 hex digits plus NUL.
 float g_main_grind_weight_before = 0.0f;
 int g_pulse_index = 0;
 bool g_finalize_seen = false;
@@ -108,12 +72,10 @@ void makeUuidV4(char out[37]) {
 }
 
 /**
- * Fires one POST or PATCH against PostgREST. Best-effort: on any
- * failure (no WiFi, connection refused, non-2xx) it logs and drops --
- * Telemetry task must never block Dosing task, and its own queue
- * receive already has a short timeout rather than an infinite one, so
- * a slow/unreachable PostgREST only delays the next drain, never stalls
- * the rest of the system.
+ * Fires one POST or PATCH against PostgREST. Best-effort: any failure
+ * (no WiFi, connection refused, non-2xx) is logged and dropped, and the
+ * HTTP timeout bounds how long an unreachable server can delay the next
+ * queue drain.
  */
 bool postgrestRequest(const char *method, const String &path, const String &body) {
   if (WiFi.status() != WL_CONNECTED) {
@@ -121,13 +83,11 @@ bool postgrestRequest(const char *method, const String &path, const String &body
   }
 
   HTTPClient http;
-  String url = String(kPostgrestBase) + path;
+  String url = String(POSTGREST_BASE_URL) + path;
   http.begin(url);
   http.setTimeout(kHttpTimeoutMs);
   http.addHeader("Content-Type", "application/json");
-  // Harmless for the current all-in-one-call format; would matter if a
-  // future pulse-level PATCH needed event_id back from the insert.
-  http.addHeader("Prefer", "return=representation");
+  http.addHeader("Prefer", "return=minimal");  // Responses are never read.
 
   int code;
   if (strcmp(method, "POST") == 0) {
@@ -138,7 +98,6 @@ bool postgrestRequest(const char *method, const String &path, const String &body
 
   bool ok = code >= 200 && code < 300;
   if (!ok) {
-    g_http_failures++;
     Serial.printf("[Telemetry] PostgREST %s %s -> %d\n", method, path.c_str(), code);
   }
   http.end();
@@ -155,8 +114,7 @@ String isoTimestampNowUtc() {
   return String(ts);
 }
 
-// One builder per PostgREST call below, matching the live schema's
-// columns field-for-field.
+// One builder per PostgREST call, matching the schema's columns field for field.
 
 /** TARGET -> POST /sessions: opens a new session with a fresh UUID. */
 void postSessionStart(const TelemetryEvent &ev) {
@@ -192,13 +150,11 @@ const char *stopReasonToString(GrindStopReason reason) {
 
 /**
  * PROGRESS -> POST /events: the main-grind row, complete in one call.
- * stop_reason/weight_estimate_g exist purely for post-mortem (AR-074) --
- * a completed session's own final_weight_g can never reveal after the
- * fact which stop condition fired or what the model believed at that
- * instant.
+ * stop_reason and weight_estimate_g record which stop condition fired and
+ * what the model believed at that instant, which the final weight cannot.
  */
 void postMainGrindEvent(const TelemetryEvent &ev) {
-  if (!g_session_open) return;  // stray PROGRESS with no open session
+  if (!g_session_open) return;
 
   char body[320];
   snprintf(body, sizeof(body),
@@ -215,11 +171,8 @@ void postMainGrindEvent(const TelemetryEvent &ev) {
 
 /**
  * TOPUP_PULSE -> POST /events: one topup pulse's row, complete in one
- * call. topup_bucket/topup_aim_weight_g/topup_commanded_duration_ms are
- * this pulse's own inputs at fire time (AR-074) -- TopupModel keeps
- * retuning each bucket's duration from every later pulse that lands in
- * it, so the value at this exact moment isn't recoverable afterward any
- * other way.
+ * call. The bucket, aim and commanded duration are the pulse's inputs at
+ * fire time; TopupModel keeps retuning them, so they can't be recovered later.
  */
 void postTopupPulseEvent(const TelemetryEvent &ev) {
   if (!g_session_open) return;
@@ -243,10 +196,8 @@ void postTopupPulseEvent(const TelemetryEvent &ev) {
 }
 
 /**
- * TARE_DEBUG -> POST /tare_debug: debug-only row logging this session's
- * tare baseline (raw ADC count + converted grams). Purely observational --
- * see .agent/design/db-schema/002_tare_debug_stats.sql -- never read back
- * by the firmware or folded into calibration.
+ * TARE_DEBUG -> POST /tare_debug: this session's tare baseline (raw ADC
+ * count and grams). Observational only; the firmware never reads it back.
  */
 void postTareDebug(const TelemetryEvent &ev) {
   if (!g_session_open) return;
@@ -258,7 +209,7 @@ void postTareDebug(const TelemetryEvent &ev) {
   postgrestRequest("POST", "/tare_debug", String(body));
 }
 
-/** RAW_SAMPLE -> POST /raw_samples: forward-compatible, not emitted yet. */
+/** RAW_SAMPLE -> POST /raw_samples; Dosing task does not emit this event yet. */
 void postRawSample(const TelemetryEvent &ev) {
   if (!g_session_open) return;
 
@@ -275,11 +226,7 @@ void postRawSample(const TelemetryEvent &ev) {
   postgrestRequest("POST", "/raw_samples", String(body));
 }
 
-/**
- * LANDING -> PATCH /sessions: the settled main-grind weight and what the
- * landing learner did. A separate PATCH from COMPLETE's, so an older
- * database without these columns can only lose this one request.
- */
+/** LANDING -> PATCH /sessions: the settled main-grind weight and what the landing learner did. */
 void patchSessionLanding(const TelemetryEvent &ev) {
   if (!g_session_open) return;
 
@@ -319,20 +266,14 @@ void telemetryTaskFn(void *) {
 
   TelemetryEvent ev;
   for (;;) {
-    // Best-effort, lowest task priority -- block briefly rather than
-    // busy-poll; Dosing task never waits on us either way.
     if (xQueueReceive(g_telemetry_q, &ev, pdMS_TO_TICKS(50)) == pdTRUE) {
       if (ev.type == TelemetryType::LOG_LINE) {
         Serial.printf("[Telemetry] %s\n", ev.log_line);
       }
 
-      // Forward a subset to Network task's WS-broadcast inbox.
-      // Zero-timeout send with a drop-and-count policy.
-      if (xQueueSend(g_ws_broadcast_q, &ev, 0) != pdTRUE) {
-        g_dropped_events++;
-      }
+      // Zero timeout: a full broadcast queue drops the event rather than stalling the PostgREST path.
+      xQueueSend(g_ws_broadcast_q, &ev, 0);
 
-      // PostgREST posting -- see the file-level comment for the mapping.
       switch (ev.type) {
         case TelemetryType::TARGET:
           postSessionStart(ev);

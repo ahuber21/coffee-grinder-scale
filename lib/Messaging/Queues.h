@@ -24,11 +24,8 @@
 constexpr UBaseType_t kScaleSampleQueueDepth = 8;
 extern QueueHandle_t g_scale_sample_q;
 
-// Scale -> Network: latest sample only, for the Advanced/Calibration
-// page's on-demand raw-ADC polling. Deliberately separate from
-// g_scale_sample_q (a real queue Dosing task drains item-by-item) --
-// Network task only ever wants "whatever the ADC reads right now", never
-// a backlog, and peeking a mailbox costs it nothing when no one's asking.
+// Scale -> Network: the latest sample only, for the Calibration page's raw-ADC polling.
+// Separate from g_scale_sample_q so Network never sees (or drains) a backlog.
 extern QueueHandle_t g_latest_sample_mailbox;  // depth 1, xQueueOverwrite
 
 // Dosing (and, narrowly, Network for OTA_UPDATE) -> Display.
@@ -67,11 +64,11 @@ extern QueueHandle_t g_settings_mailbox_display;
 constexpr UBaseType_t kSettingsWriteQueueDepth = 4;
 extern QueueHandle_t g_settings_write_q;
 
-// Topup-model persistence round trip.
-extern QueueHandle_t g_dosing_model_mailbox;  // Settings -> Dosing, depth 1, read once at boot
+// Model persistence round trip.
+extern QueueHandle_t g_dosing_model_mailbox;     // Settings -> Dosing, depth 1, read once at boot
 extern QueueHandle_t g_landing_learner_mailbox;  // Settings -> Dosing, depth 1, read once at boot
 constexpr UBaseType_t kPersistRequestQueueDepth = 2;
-extern QueueHandle_t g_persist_request_q;    // Dosing -> Settings, session-boundary only
+extern QueueHandle_t g_persist_request_q;  // Dosing -> Settings, once per session
 
 // Telemetry -> Network WS broadcast.
 constexpr UBaseType_t kWsBroadcastQueueDepth = 16;
@@ -83,16 +80,12 @@ extern EventGroupHandle_t g_sys_events;
 constexpr EventBits_t kSettingsLoadedBit = BIT0;
 constexpr EventBits_t kScaleReadyBit = BIT1;
 constexpr EventBits_t kDisplayReadyBit = BIT2;
-constexpr EventBits_t kWifiConnectedBit = BIT3;  // not part of the startup boot gate
+constexpr EventBits_t kWifiConnectedBit = BIT3;  ///< Not part of the boot gate.
 constexpr EventBits_t kOtaInProgressBit = BIT4;
-constexpr EventBits_t kDosingActiveBit = BIT5;   // set/cleared outside IDLE/SCREENSAVER
+constexpr EventBits_t kDosingActiveBit = BIT5;  ///< Set whenever Dosing is outside BOOT/IDLE/SCREENSAVER.
 
 constexpr EventBits_t kBootGateBits =
     kSettingsLoadedBit | kScaleReadyBit | kDisplayReadyBit;
 
-/**
- * Creates every queue/mailbox/event group above. Must run once, before
- * any task that touches them is created -- called from
- * src/main.cpp::setup().
- */
+/** Creates every queue, mailbox and event group above; call once, before any task starts. */
 void initQueuesAndEvents();

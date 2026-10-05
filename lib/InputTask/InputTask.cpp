@@ -12,18 +12,19 @@
 
 namespace {
 
-/*
- * The three buttons are wired asymmetrically on this hardware, not
- * uniformly: LEFT/RIGHT are pulled up (idle HIGH, pressed pulls the
- * pin LOW), BACK is pulled down (idle LOW, pressed pulls it HIGH) --
- * confirmed against the original firmware's pinMode calls, and
- * directly confirmed live on this device (LEFT's debounce diagnostic
- * showed held_high=0 at verification time, i.e. it never reads HIGH
- * when pressed). Indexed by ButtonId: LEFT, RIGHT, BACK.
- */
-constexpr uint8_t kActiveLevel[3] = {LOW, LOW, HIGH};
+constexpr uint8_t kButtonCount = 3;
 
-/** Identical ISR template for all three buttons: no global state touched, no settings read. */
+/// GPIO per button, indexed by ButtonId: LEFT, RIGHT, BACK.
+constexpr uint8_t kButtonPins[kButtonCount] = {BUTTON_LEFT, BUTTON_RIGHT, BUTTON_BACK};
+
+/*
+ * The wiring is asymmetric: LEFT and RIGHT are pulled up (a press pulls
+ * the pin LOW) while BACK is pulled down (a press pulls it HIGH).
+ * Indexed by ButtonId.
+ */
+constexpr uint8_t kActiveLevel[kButtonCount] = {LOW, LOW, HIGH};
+
+/** Identical ISR template for all three buttons; it only enqueues the edge. */
 template <ButtonId B, uint8_t Pin>
 void IRAM_ATTR buttonIsr() {
   bool active = digitalRead(Pin) == kActiveLevel[static_cast<uint8_t>(B)];
@@ -33,25 +34,20 @@ void IRAM_ATTR buttonIsr() {
   portYIELD_FROM_ISR(woken);
 }
 
-/** Per-button candidate-press state, awaiting hold-time verification. */
+/** Per-button debounce state. */
 struct DebounceState {
-  bool pending = false;
-  bool level = false;
-  uint32_t edge_ms = 0;
+  bool pending = false;  ///< A press candidate is awaiting hold-time verification.
+  uint32_t edge_ms = 0;  ///< When that candidate press began.
+  bool have_last_edge = false;
+  uint32_t last_edge_ms = 0;  ///< Last edge, press or release, accepted past the debounce gate.
 };
 
-DebounceState g_debounce[3];  ///< Indexed by ButtonId.
+DebounceState g_debounce[kButtonCount];
 
-/// Last edge (press or release, any button) accepted past the debounce
-/// gate below -- separate from DebounceState, which only tracks a
-/// press candidate awaiting hold-time verification.
-uint32_t g_last_edge_ms[3] = {0, 0, 0};
-bool g_have_last_edge[3] = {false, false, false};
-
-uint32_t g_min_hold_ms = 20;       ///< Overwritten from settings once loaded.
+uint32_t g_min_hold_ms = 20;          ///< Overwritten from settings once loaded.
 uint32_t g_button_debounce_ms = 150;  ///< Overwritten from settings once loaded.
 
-/** Refreshes g_min_hold_ms/g_button_debounce_ms from the latest settings snapshot, if any. */
+/** Refreshes the debounce timings from the latest settings snapshot, if any. */
 void applySettings() {
   SettingsSnapshot snap;
   if (xQueuePeek(g_settings_mailbox_input, &snap, 0) == pdTRUE) {
@@ -60,76 +56,65 @@ void applySettings() {
   }
 }
 
+/**
+ * Handles one raw edge. An edge within button_debounce_ms of the last
+ * accepted one on the same button is contact bounce and is dropped. A
+ * press edge starts a candidate, verified later against button_min_hold_ms.
+ */
+void handleEdge(const ButtonEdge &edge) {
+  DebounceState &d = g_debounce[static_cast<uint8_t>(edge.button)];
+  if (d.have_last_edge && edge.millis - d.last_edge_ms < g_button_debounce_ms) {
+    return;
+  }
+  d.have_last_edge = true;
+  d.last_edge_ms = edge.millis;
+
+  d.pending = edge.level;
+  if (edge.level) {
+    d.edge_ms = edge.millis;
+  }
+}
+
+/** Confirms each press candidate that has been held long enough and is still active. */
+void confirmHeldPresses() {
+  uint32_t now = millis();
+  for (uint8_t i = 0; i < kButtonCount; ++i) {
+    DebounceState &d = g_debounce[i];
+    if (!d.pending || now - d.edge_ms < g_min_hold_ms) {
+      continue;
+    }
+    d.pending = false;
+    if (digitalRead(kButtonPins[i]) == kActiveLevel[i]) {
+      ButtonPress press{static_cast<ButtonId>(i), now};
+      xQueueSend(g_button_press_q, &press, 0);
+    } else {
+      TelemetryEvent diag{};
+      diag.type = TelemetryType::LOG_LINE;
+      snprintf(diag.log_line, sizeof(diag.log_line), "button %u released before the hold time", i);
+      xQueueSend(g_telemetry_q, &diag, 0);
+    }
+  }
+}
+
 /** Input task entry point: attaches the button ISRs, then debounces edges. */
 void inputTaskFn(void *) {
-  xEventGroupWaitBits(g_sys_events, kSettingsLoadedBit, pdFALSE, pdTRUE,
-                       portMAX_DELAY);
+  xEventGroupWaitBits(g_sys_events, kSettingsLoadedBit, pdFALSE, pdTRUE, portMAX_DELAY);
   applySettings();
 
   pinMode(BUTTON_LEFT, INPUT_PULLUP);
   pinMode(BUTTON_RIGHT, INPUT_PULLUP);
   pinMode(BUTTON_BACK, INPUT_PULLDOWN);
-  attachInterrupt(digitalPinToInterrupt(BUTTON_LEFT),
-                   buttonIsr<ButtonId::LEFT, BUTTON_LEFT>, CHANGE);
-  attachInterrupt(digitalPinToInterrupt(BUTTON_RIGHT),
-                   buttonIsr<ButtonId::RIGHT, BUTTON_RIGHT>, CHANGE);
-  attachInterrupt(digitalPinToInterrupt(BUTTON_BACK),
-                   buttonIsr<ButtonId::BACK, BUTTON_BACK>, CHANGE);
+  attachInterrupt(digitalPinToInterrupt(BUTTON_LEFT), buttonIsr<ButtonId::LEFT, BUTTON_LEFT>, CHANGE);
+  attachInterrupt(digitalPinToInterrupt(BUTTON_RIGHT), buttonIsr<ButtonId::RIGHT, BUTTON_RIGHT>, CHANGE);
+  attachInterrupt(digitalPinToInterrupt(BUTTON_BACK), buttonIsr<ButtonId::BACK, BUTTON_BACK>, CHANGE);
 
   ButtonEdge edge;
   for (;;) {
     applySettings();
-
-    // Drain every pending edge (queue depth 8, human-timescale bursts only).
     while (xQueueReceive(g_button_edge_q, &edge, 0) == pdTRUE) {
-      uint8_t idx = static_cast<uint8_t>(edge.button);
-      // Debounce gate: an edge arriving within button_debounce_ms of the
-      // last accepted edge on this same button is contact bounce, not a
-      // real transition -- dropped before it can touch the hold-time
-      // candidate below. Separate from g_min_hold_ms, which verifies an
-      // already-accepted press stays held, not whether the edge itself
-      // was real.
-      if (g_have_last_edge[idx] && edge.millis - g_last_edge_ms[idx] < g_button_debounce_ms) {
-        continue;
-      }
-      g_have_last_edge[idx] = true;
-      g_last_edge_ms[idx] = edge.millis;
-
-      DebounceState &d = g_debounce[idx];
-      if (edge.level) {
-        // Candidate press: remember it, verify after the hold time.
-        d.pending = true;
-        d.level = true;
-        d.edge_ms = edge.millis;
-      } else {
-        d.pending = false;
-      }
+      handleEdge(edge);
     }
-
-    // Every button, every state, the same hold-time verification -- no
-    // per-state exception exists at this layer.
-    uint32_t now = millis();
-    for (uint8_t i = 0; i < 3; ++i) {
-      DebounceState &d = g_debounce[i];
-      if (d.pending && (now - d.edge_ms) >= g_min_hold_ms) {
-        auto pin = i == 0 ? BUTTON_LEFT : (i == 1 ? BUTTON_RIGHT : BUTTON_BACK);
-        bool still_active = digitalRead(pin) == kActiveLevel[i];
-        // Reports every debounce decision, not just accepted presses,
-        // so a wiring/polarity issue is visible over the WS log too.
-        TelemetryEvent diag{};
-        diag.type = TelemetryType::LOG_LINE;
-        snprintf(diag.log_line, sizeof(diag.log_line),
-                  "InputTask debounce id=%u pin=%d still_active=%d", i,
-                  static_cast<int>(pin), still_active ? 1 : 0);
-        xQueueSend(g_telemetry_q, &diag, 0);
-        if (still_active) {
-          ButtonPress press{static_cast<ButtonId>(i), now};
-          xQueueSend(g_button_press_q, &press, 0);
-        }
-        d.pending = false;
-      }
-    }
-
+    confirmHeldPresses();
     vTaskDelay(pdMS_TO_TICKS(5));
   }
 }
@@ -137,7 +122,6 @@ void inputTaskFn(void *) {
 }  // namespace
 
 void createInputTask() {
-  xTaskCreatePinnedToCore(inputTaskFn, "Input", TaskConfig::kInputStackBytes,
-                           nullptr, TaskConfig::kInputPriority, nullptr,
-                           TaskConfig::kInputCore);
+  xTaskCreatePinnedToCore(inputTaskFn, "Input", TaskConfig::kInputStackBytes, nullptr,
+                          TaskConfig::kInputPriority, nullptr, TaskConfig::kInputCore);
 }

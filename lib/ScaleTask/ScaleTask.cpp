@@ -12,30 +12,29 @@
 
 namespace {
 
-ADS1232 g_ads(ADC_PDWN_PIN, ADC_SCLK_PIN, ADC_DOUT_PIN, ADC_SPEED_PIN,
-              ADC_GAIN1_PIN, ADC_GAIN0_PIN);
+ADS1232 g_ads(ADC_PDWN_PIN, ADC_SCLK_PIN, ADC_DOUT_PIN, ADC_SPEED_PIN, ADC_GAIN1_PIN, ADC_GAIN0_PIN);
 
-// Re-tares automatically whenever idle and stable, rate-limited only to
-// avoid calling tare() on every single sample. Right after a dose
-// finishes, a longer grace period applies instead, so the final weight
-// stays on screen instead of being auto-zeroed the moment IDLE begins.
+/// While idle and stable the scale re-tares itself, at most this often.
 constexpr uint32_t kAutoTareMinIntervalMs = 1000;
+/// After a dose finishes, auto-tare waits this long so the final weight stays on screen.
 constexpr uint32_t kAutoTareIdleReturnCooldownMs = 10000;
+constexpr uint32_t kBootTareTimeoutMs = 5000;
+constexpr uint32_t kPreDoseTareTimeoutMs = 20000;
+constexpr uint32_t kTareWarnIntervalMs = 2000;
+constexpr uint32_t kSamplePeriodMs = 2;  ///< ~500Hz.
+
 uint32_t g_next_auto_tare_allowed_ms = 0;
 bool g_prev_dosing_active = false;
 
-/** Version of SettingsSnapshot last applied to the ADS1232 driver. */
+/// Version of SettingsSnapshot last applied to the ADS1232 driver.
 uint32_t g_applied_settings_version = 0;
 
 /** Re-applies ADC config to the ADS1232 driver if a new settings version arrived. */
 void applySettingsIfChanged() {
   SettingsSnapshot snap;
-  // Peek, never consume: Scale task is the only reader of this mailbox,
-  // and peeking never empties it.
-  if (xQueuePeek(g_settings_mailbox_scale, &snap, 0) != pdTRUE) {
-    return;
-  }
-  if (snap.version == g_applied_settings_version) {
+  // Peek, never consume: this task is the mailbox's only reader.
+  if (xQueuePeek(g_settings_mailbox_scale, &snap, 0) != pdTRUE ||
+      snap.version == g_applied_settings_version) {
     return;
   }
   g_ads.setRingBufferSize(snap.read_samples);
@@ -45,87 +44,97 @@ void applySettingsIfChanged() {
   g_applied_settings_version = snap.version;
 }
 
+/**
+ * Tares once the ring buffer settles, retrying for up to `timeout_ms`
+ * (tare() captures the buffer's mean whether or not it is stable, so it
+ * reports when it did not). Returns whether a stable tare landed; the
+ * bound only keeps a load cell that never settles from stalling this
+ * task and everything downstream of its samples.
+ */
+bool tareUntilStable(uint32_t timeout_ms, const char *what) {
+  uint32_t start_ms = millis();
+  uint32_t last_warn_ms = start_ms;
+  bool tared = g_ads.tare();
+  while (!tared && millis() - start_ms < timeout_ms) {
+    vTaskDelay(pdMS_TO_TICKS(2));
+    g_ads.readADCIfReady();
+    tared = g_ads.tare();
+    uint32_t now = millis();
+    if (now - last_warn_ms >= kTareWarnIntervalMs) {
+      Serial.printf("[Scale] %s tare still not stable after %u ms\n", what,
+                    static_cast<unsigned>(now - start_ms));
+      last_warn_ms = now;
+    }
+  }
+  return tared;
+}
+
+/**
+ * Answers Dosing task's per-dose re-tare requests before this tick's
+ * sample is built, so the next sample already reflects the tare. On
+ * timeout the tare is left as it was and failure is reported: an untared
+ * dose is worse than a slow one, so Dosing aborts rather than start
+ * from an unproven baseline.
+ */
+void handleTareRequests() {
+  TareRequest request;
+  while (xQueueReceive(g_tare_request_q, &request, 0) == pdTRUE) {
+    bool tared = tareUntilStable(kPreDoseTareTimeoutMs, "pre-dose");
+    if (!tared) {
+      Serial.println("[Scale] pre-dose tare never stabilized -- aborting this dose");
+    }
+    TareResult result{tared};
+    xQueueSend(g_tare_result_q, &result, 0);
+  }
+}
+
+/** Tares an idle scale on its own, holding off right after a dose so the result stays readable. */
+void autoTareWhenIdle(const ScaleSample &sample) {
+  bool dosing_active = (xEventGroupGetBits(g_sys_events) & kDosingActiveBit) != 0;
+  if (g_prev_dosing_active && !dosing_active) {
+    g_next_auto_tare_allowed_ms = sample.millis + kAutoTareIdleReturnCooldownMs;
+  }
+  g_prev_dosing_active = dosing_active;
+
+  if (!dosing_active && sample.stable && sample.millis >= g_next_auto_tare_allowed_ms) {
+    g_ads.tare();
+    g_next_auto_tare_allowed_ms = sample.millis + kAutoTareMinIntervalMs;
+  }
+}
+
 /** Scale task entry point: initializes the ADS1232, then samples at ~500Hz. */
 void scaleTaskFn(void *) {
-  // Wait for Settings task's first snapshot before touching the ADC, so
-  // calibration is never applied from a default-constructed placeholder.
-  xEventGroupWaitBits(g_sys_events, kSettingsLoadedBit, pdFALSE, pdTRUE,
-                       portMAX_DELAY);
+  // Never apply calibration from a default-constructed placeholder.
+  xEventGroupWaitBits(g_sys_events, kSettingsLoadedBit, pdFALSE, pdTRUE, portMAX_DELAY);
 
-  // Powers the load cell's bridge excitation -- without it the ADC
-  // reads a fixed value regardless of physical force.
+  // Powers the load cell's bridge excitation; without it the ADC reads a fixed value.
   pinMode(ADC_LDO_EN_PIN, OUTPUT);
   digitalWrite(ADC_LDO_EN_PIN, HIGH);
 
-  // begin() (which also powers on and calibrates) resets gain/speed to
-  // hardware defaults, so real settings must be applied after it, not
-  // before -- and before initRingBuffer(), which reads ringBufferSize.
+  // begin() resets gain/speed to hardware defaults, so settings go after it
+  // and before initRingBuffer(), which reads the ring buffer size.
   g_ads.begin();
   applySettingsIfChanged();
   g_ads.initRingBuffer();
 
-  // Retry until the ring buffer settles, same bar the idle auto-tare below
-  // holds itself to -- a mid-transient boot tare biases every dose until
-  // that auto-tare corrects it, up to kAutoTareIdleReturnCooldownMs later.
-  constexpr uint32_t kBootTareTimeoutMs = 5000;
-  uint32_t bootTareDeadline = millis() + kBootTareTimeoutMs;
-  while (!g_ads.tare() && millis() < bootTareDeadline) {
-    vTaskDelay(pdMS_TO_TICKS(2));
-    g_ads.readADCIfReady();
-  }
-  if (millis() >= bootTareDeadline) {
+  // A mid-transient boot tare would bias every dose until the idle auto-tare corrects it.
+  if (!tareUntilStable(kBootTareTimeoutMs, "boot")) {
     Serial.println("[Scale] boot tare never stabilized; using last reading");
   }
 
   xEventGroupSetBits(g_sys_events, kScaleReadyBit);
 
   uint32_t seq = 0;
-  const TickType_t period = pdMS_TO_TICKS(2);  // ~500Hz poll.
-  TickType_t lastWake = xTaskGetTickCount();
+  const TickType_t period = pdMS_TO_TICKS(kSamplePeriodMs);
+  TickType_t last_wake = xTaskGetTickCount();
 
   for (;;) {
     applySettingsIfChanged();
-
     g_ads.readADCIfReady();
-
-    // Explicit per-dose re-tare, requested by Dosing task the instant a
-    // dose is confirmed -- drained (and applied) before this tick's
-    // sample is built, so the very next sample already reflects it.
-    // tare() captures the ring buffer's mean unconditionally, so retry
-    // until it lands on a stable one. Bounded only to guarantee this
-    // task can't stall forever (and with it every sample this device's
-    // display/WS/telemetry depend on) if the load cell never settles --
-    // an untared dose is worse than a slow one, so on timeout this does
-    // NOT fall back to "use the last reading anyway": it reports failure
-    // below and leaves tareRaw exactly as it was, and Dosing task aborts
-    // that dose rather than start it from an unproven baseline.
-    TareRequest tareReq;
-    while (xQueueReceive(g_tare_request_q, &tareReq, 0) == pdTRUE) {
-      constexpr uint32_t kPreDoseTareTimeoutMs = 20000;
-      uint32_t waitStartMs = millis();
-      uint32_t lastWarnMs = waitStartMs;
-      bool tared = g_ads.tare();
-      while (!tared && millis() - waitStartMs < kPreDoseTareTimeoutMs) {
-        vTaskDelay(pdMS_TO_TICKS(2));
-        g_ads.readADCIfReady();
-        tared = g_ads.tare();
-        uint32_t now = millis();
-        if (now - lastWarnMs >= 2000) {
-          Serial.printf("[Scale] pre-dose tare still not stable after %u ms\n",
-                         static_cast<unsigned>(now - waitStartMs));
-          lastWarnMs = now;
-        }
-      }
-      if (!tared) {
-        Serial.println("[Scale] pre-dose tare never stabilized -- aborting this dose");
-      }
-      TareResult result{tared};
-      xQueueSend(g_tare_result_q, &result, 0);
-    }
+    handleTareRequests();
 
     bool stable = false;
     int32_t raw = g_ads.getRaw(stable);
-
     ScaleSample sample{
         .grams = static_cast<float>(g_ads.getUnits()),
         .raw_adc = raw,
@@ -134,37 +143,24 @@ void scaleTaskFn(void *) {
         .millis = millis(),
     };
 
-    // Always current, no backlog -- see the mailbox's own doc comment in
-    // Queues.h for why this is separate from g_scale_sample_q.
+    // The mailbox always holds the latest sample, with no backlog (see Queues.h).
     xQueueOverwrite(g_latest_sample_mailbox, &sample);
+    autoTareWhenIdle(sample);
 
-    bool dosing_active = (xEventGroupGetBits(g_sys_events) & kDosingActiveBit) != 0;
-    if (g_prev_dosing_active && !dosing_active) {
-      g_next_auto_tare_allowed_ms = sample.millis + kAutoTareIdleReturnCooldownMs;
-    }
-    g_prev_dosing_active = dosing_active;
-
-    if (!dosing_active && stable && sample.millis >= g_next_auto_tare_allowed_ms) {
-      g_ads.tare();
-      g_next_auto_tare_allowed_ms = sample.millis + kAutoTareMinIntervalMs;
-    }
-
-    // Zero-timeout send; on a full queue (Dosing task stalled), drop the
-    // oldest sample rather than block the sampler.
+    // If Dosing task has stalled and the queue is full, drop the oldest sample rather than block.
     if (xQueueSend(g_scale_sample_q, &sample, 0) != pdTRUE) {
       ScaleSample discard;
       xQueueReceive(g_scale_sample_q, &discard, 0);
       xQueueSend(g_scale_sample_q, &sample, 0);
     }
 
-    vTaskDelayUntil(&lastWake, period);
+    vTaskDelayUntil(&last_wake, period);
   }
 }
 
 }  // namespace
 
 void createScaleTask() {
-  xTaskCreatePinnedToCore(scaleTaskFn, "Scale", TaskConfig::kScaleStackBytes,
-                           nullptr, TaskConfig::kScalePriority, nullptr,
-                           TaskConfig::kScaleCore);
+  xTaskCreatePinnedToCore(scaleTaskFn, "Scale", TaskConfig::kScaleStackBytes, nullptr,
+                          TaskConfig::kScalePriority, nullptr, TaskConfig::kScaleCore);
 }

@@ -1,9 +1,8 @@
 /**
- * FreeRTOS task/queue skeleton: 7 independent tasks communicating over
- * queues and mailboxes. This file is deliberately thin: its only job
- * is to create the shared queues/mailboxes/event group and start every
- * task. All real behavior lives in each task's own lib/<Name>Task
- * module.
+ * Firmware entry point. The firmware is seven independent FreeRTOS tasks
+ * that communicate over queues and mailboxes; this file only creates the
+ * shared queues and event group and starts each task, and all behavior
+ * lives in the lib/<Name>Task modules.
  */
 
 #include <Arduino.h>
@@ -17,19 +16,17 @@
 #include "SettingsTask.h"
 #include "TelemetryTask.h"
 
-/** Arduino entry point: wires up shared state, then starts all 7 tasks. */
+/** Arduino entry point: wires up shared state, then starts all seven tasks. */
 void setup() {
   Serial.begin(115200);
   delay(100);
-  Serial.println("\n[main] coffee-grinder-scale RTOS skeleton starting");
+  Serial.println("\n[main] coffee-grinder-scale starting");
 
-  // Must run before any task that touches a queue/mailbox/event-group
-  // bit is created.
+  // The queues must exist before any task that uses them is created.
   initQueuesAndEvents();
 
-  // Starting Settings task first isn't required (every task waits on
-  // its own readiness bits before touching shared state), but gives its
-  // NVS load a head start before anything blocks on it being ready.
+  // Settings goes first so its NVS load gets a head start; every other
+  // task waits on its own readiness bits regardless.
   createSettingsTask();
   createScaleTask();
   createInputTask();
@@ -43,7 +40,6 @@ void setup() {
 
 /** Unused: all work happens in the tasks setup() created. */
 void loop() {
-  // Arduino's own loopTask (which called setup()/loop()) has no further
-  // work of its own -- delete it rather than spin an idle loop.
+  // Delete Arduino's own loop task rather than spin an idle loop.
   vTaskDelete(nullptr);
 }

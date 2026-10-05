@@ -27,3 +27,5 @@
 #define GRINDER_RELAY_PIN 4
 
 #define SERVER_PORT 80
+
+#define POSTGREST_BASE_URL "http://192.168.0.111:3000"
