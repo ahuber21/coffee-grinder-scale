@@ -10,7 +10,7 @@
  * namespace "settings", one key per field -- see SettingsTask.cpp).
  * Load falls back per-field to compiled-in defaults on first boot or a
  * missing/out-of-range key, validated through the same predicates the
- * live write path uses. TopupModelV1 NVS round-tripping is still
+ * live write path uses. DosingModelState NVS round-tripping is still
  * stubbed -- a separate, still-open follow-up.
  */
 

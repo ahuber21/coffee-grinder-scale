@@ -417,7 +417,7 @@ void handleWsMessage(AsyncWebSocketClient *client, const uint8_t *data, size_t l
     float grams = doc["grams"] | 0.0f;
     // Dosing task re-validates this range itself; this is just a
     // fast-fail check so a bad request doesn't queue up for nothing.
-    if (!std::isfinite(grams) || grams <= 0.0f || grams > 50.0f) {
+    if (!std::isfinite(grams) || grams <= 0.0f || grams > kMaxDoseGrams) {
       sendError(client, "grams out of range (0, 50]", request_id);
       return;
     }

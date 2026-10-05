@@ -13,7 +13,7 @@
 #include <cstdint>  // uint8_t/uint32_t/etc for a native build (e.g. tools/display_sim)
 #endif
 
-#include "DosingModel.h"  // TopupModelV1
+#include "DosingModel.h"  // DosingModelState
 
 /** Physical button identity, from ISR up through Input and Dosing tasks. */
 enum class ButtonId : uint8_t { LEFT, RIGHT, BACK };
@@ -181,6 +181,9 @@ struct TelemetryEvent {
   bool landing_clamped;
 };
 
+/// Largest dose, in grams, an API request may ask for.
+constexpr float kMaxDoseGrams = 50.0f;
+
 /** A manual/API dose request, sent from Network task to Dosing task. */
 struct DoseRequest {
   float requested_grams;
@@ -343,8 +346,8 @@ struct SettingsWriteRequest {
 
 /** Identifies which persisted blob a PersistRequest carries. */
 enum class PersistBlobId : uint16_t {
-  TOPUP_MODEL_V1,
-  LANDING_LEARNER_V1,
+  DOSING_MODEL,
+  LANDING_LEARNER,
 };
 
 /**
@@ -353,7 +356,7 @@ enum class PersistBlobId : uint16_t {
  */
 struct PersistRequest {
   PersistBlobId blob_id;
-  TopupModelV1 payload;                ///< Valid when blob_id == TOPUP_MODEL_V1.
-  LandingLearnerState learner_payload;  ///< Valid when blob_id == LANDING_LEARNER_V1.
+  DosingModelState payload;                ///< Valid when blob_id == DOSING_MODEL.
+  LandingLearnerState learner_payload;  ///< Valid when blob_id == LANDING_LEARNER.
   uint32_t request_id;
 };

@@ -77,7 +77,7 @@ constexpr uint32_t kHttpTimeoutMs = 2000;
 // git-describe define) -- this is a stand-in so the schema's required
 // firmware_version column isn't sent empty.
 constexpr const char *kFirmwareVersion = "rtos-rewrite-dev";
-constexpr const char *kModelVersion = "TopupModelV1";
+constexpr const char *kModelVersion = "DosingModelState";
 
 uint32_t g_dropped_events = 0;
 uint32_t g_http_failures = 0;

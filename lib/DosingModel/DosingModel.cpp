@@ -8,13 +8,19 @@ namespace {
 constexpr double kMinDenom = 1e-9;
 constexpr double kMinWeight = 1e-9;
 constexpr double kSecondsPerDay = 86400.0;
-/*
- * Floor for residual variance so a (near-)perfect fit yields a very high
- * but finite precision instead of literal zero/infinity -- avoids the
- * fused estimate blowing up or collapsing to "no information" on
- * unusually clean data (e.g. synthetic test fixtures).
- */
+/// Floor on residual variance, so a near-perfect fit gives a huge but finite precision.
 constexpr double kMinResidualVariance = 1e-6;
+
+/** The weight a topup pulse for `bucket` aims to add. */
+double aimWeightForBucket(int bucket, double aim_fraction) {
+  return aim_fraction * (bucket + 1) * kTopupLutBucketWidthG;
+}
+
+/** Initial pulse duration for `bucket`, from the prior deadtime and slope. */
+double seedDurationMs(int bucket, double aim_fraction) {
+  return TopupPriors::kTopupDeadtimeMs +
+         1000.0 * aimWeightForBucket(bucket, aim_fraction) / TopupPriors::kTopupSlope;
+}
 }  // namespace
 
 // --- WeightedLinearFit ------------------------------------------------------
@@ -63,18 +69,11 @@ double WeightedLinearFit::residualVariance() const {
   if (!hasFit()) return 0.0;
   double a = intercept();
   double b = slope();
-  // Standard weighted-least-squares identity via the normal equations:
-  // SSE = Swyy - a*Swy - b*Swxy.
-  double sse = m_swyy - a * m_swy - b * m_swxy;
-  if (sse < 0.0) sse = 0.0;  // guard tiny negative from float error
-  // Floor the degrees of freedom too: heavy decay can push Sw arbitrarily
-  // close to (or below) 2 without the fit becoming meaningless.
+  double sse = m_swyy - a * m_swy - b * m_swxy;  // Normal-equations identity.
+  if (sse < 0.0) sse = 0.0;                       // Guard tiny negatives from rounding.
+  // Floored, since heavy decay can push Sw to or below 2 without making the fit meaningless.
   double dof = std::max(m_sw - 2.0, 1.0);
   return std::max(sse / dof, kMinResidualVariance);
-}
-
-double WeightedLinearFit::residualStdDev() const {
-  return std::sqrt(residualVariance());
 }
 
 double WeightedLinearFit::slopeVariance() const {
@@ -82,11 +81,11 @@ double WeightedLinearFit::slopeVariance() const {
   return residualVariance() * m_sw / denom();
 }
 
-// --- TopupModelV1 -----------------------------------------------------------
+// --- DosingModelState -----------------------------------------------------------
 
-TopupModelV1 makeDefaultTopupModel() {
-  TopupModelV1 m{};
-  m.version = kTopupModelVersion;
+DosingModelState makeDefaultDosingModelState() {
+  DosingModelState m{};
+  m.version = kDosingModelVersion;
   m.rate_hat = TopupPriors::kRateHat;
   m.rate_precision = 1.0f / (TopupPriors::kRateSd * TopupPriors::kRateSd);
   m.rate_n_effective = TopupPriors::kRateN0;
@@ -95,16 +94,9 @@ TopupModelV1 makeDefaultTopupModel() {
   m.coast_weight_precision =
       1.0f / (TopupPriors::kCoastWeightSd * TopupPriors::kCoastWeightSd);
 
-  // Seeds every bucket's duration from the historical slope/deadtime
-  // fit (duration = deadtime + aim_weight / slope) as a starting point
-  // for TopupModel's per-bucket online tuning (see
-  // TopupModel::recordPulse) to correct from real pulses.
   TopupModel::Config default_cfg;
   for (int i = 0; i < kTopupLutBuckets; ++i) {
-    double bucket_upper = (i + 1) * kTopupLutBucketWidthG;
-    double aim = default_cfg.aim_fraction * bucket_upper;
-    double duration = TopupPriors::kTopupDeadtimeMs + 1000.0 * aim / TopupPriors::kTopupSlope;
-    m.topup_lut_duration_ms[i] = static_cast<float>(duration);
+    m.topup_lut_duration_ms[i] = static_cast<float>(seedDurationMs(i, default_cfg.aim_fraction));
     m.topup_lut_n[i] = 0;
   }
   return m;
@@ -112,10 +104,10 @@ TopupModelV1 makeDefaultTopupModel() {
 
 // --- MainGrindModel ----------------------------------------------------------
 
-MainGrindModel::MainGrindModel(const TopupModelV1 &persisted)
+MainGrindModel::MainGrindModel(const DosingModelState &persisted)
     : MainGrindModel(persisted, Config()) {}
 
-MainGrindModel::MainGrindModel(const TopupModelV1 &persisted, Config cfg)
+MainGrindModel::MainGrindModel(const DosingModelState &persisted, Config cfg)
     : m_cfg(cfg),
       m_rate_hat(persisted.rate_hat),
       m_rate_precision(persisted.rate_precision),
@@ -140,8 +132,7 @@ void MainGrindModel::addSample(double runtime_ms, double weight_g) {
       if (runtime_ms - m_reject_started_ms < m_cfg.max_reject_duration_ms) {
         return;
       }
-      // Implausible for too long to be a transient spike -- fall through
-      // and accept it as the new real weight.
+      // Implausible for too long to be a transient: accept it as the new weight.
     }
     m_rejecting = false;
   }
@@ -150,9 +141,8 @@ void MainGrindModel::addSample(double runtime_ms, double weight_g) {
   m_last_runtime_ms = runtime_ms;
   m_last_weight_g = weight_g;
 
-  if (runtime_ms < m_cfg.deadtime_ms) return;  // chute not primed yet
-  // Fit x in seconds so the resulting slope comes out directly in g/s,
-  // matching rate_hat's persisted units.
+  if (runtime_ms < m_cfg.deadtime_ms) return;  // Chute not primed yet.
+  // x in seconds, so the slope comes out in g/s like rate_hat.
   m_session_fit.addObservation(runtime_ms / 1000.0, weight_g, 1.0);
 }
 
@@ -168,8 +158,7 @@ double MainGrindModel::currentRateEstimate() const {
   double session_precision = sessionPrecision();
   if (session_precision <= 0.0) return m_rate_hat;
 
-  // Bayesian normal-normal precision-weighted combination: dominated by
-  // whichever side currently has more precision, with no hard cutover.
+  // Bayesian normal-normal blend: whichever side has more precision dominates, with no cutover.
   double prior_precision = std::max(m_rate_precision, 0.0);
   double total_precision = prior_precision + session_precision;
   if (total_precision <= 0.0) return m_rate_hat;
@@ -182,10 +171,7 @@ double MainGrindModel::currentRateEstimate() const {
 double MainGrindModel::predictStopTimeMs(double target_weight_g) const {
   if (!m_have_last_sample) return 0.0;
   double rate = currentRateEstimate();
-  // A non-positive rate means the estimate itself is untrustworthy, not
-  // that the target has already been reached -- returning "no prediction"
-  // here defers the stop decision to the raw-weight and safety-timeout
-  // checks instead of firing early on bad data.
+  // A non-positive rate is an untrustworthy estimate, not a reached target; defer to the other stop checks.
   if (rate <= 0.0) return std::numeric_limits<double>::infinity();
   double remaining_g = target_weight_g - m_last_weight_g;
   if (remaining_g <= 0.0) return m_last_runtime_ms;
@@ -224,8 +210,7 @@ bool MainGrindModel::finalizeSession(int64_t now_epoch_s) {
 
   if (new_rate_hat < m_cfg.min_plausible_rate ||
       new_rate_hat > m_cfg.max_plausible_rate) {
-    // Discard this session's contribution outright and keep the last
-    // known-good persisted state untouched.
+    // Discard this session's contribution and keep the last good state.
     startSession();
     return false;
   }
@@ -238,8 +223,8 @@ bool MainGrindModel::finalizeSession(int64_t now_epoch_s) {
   return true;
 }
 
-TopupModelV1 MainGrindModel::dumpPersisted(const TopupModelV1 &base) const {
-  TopupModelV1 out = base;
+DosingModelState MainGrindModel::dumpPersisted(const DosingModelState &base) const {
+  DosingModelState out = base;
   out.rate_hat = static_cast<float>(m_rate_hat);
   out.rate_precision = static_cast<float>(m_rate_precision);
   out.rate_n_effective = m_rate_n_effective;
@@ -249,19 +234,14 @@ TopupModelV1 MainGrindModel::dumpPersisted(const TopupModelV1 &base) const {
 
 // --- TopupModel ---------------------------------------------------------------
 
-TopupModel::TopupModel(const TopupModelV1 &persisted) : TopupModel(persisted, Config()) {}
+TopupModel::TopupModel(const DosingModelState &persisted) : TopupModel(persisted, Config()) {}
 
-TopupModel::TopupModel(const TopupModelV1 &persisted, Config cfg) : m_cfg(cfg) {
+TopupModel::TopupModel(const DosingModelState &persisted, Config cfg) : m_cfg(cfg) {
   for (int i = 0; i < kTopupLutBuckets; ++i) {
     double duration = persisted.topup_lut_duration_ms[i];
-    // A zero/implausible persisted entry (e.g. an older-schema blob that
-    // never had this bucket) falls back to the same formula
-    // makeDefaultTopupModel() seeds fresh buckets with, rather than
-    // silently commanding a 0ms pulse.
+    // An implausible entry is reseeded rather than commanding a 0ms pulse.
     if (!(duration >= m_cfg.hygiene_min_duration_ms && duration <= m_cfg.hygiene_max_duration_ms)) {
-      double bucket_upper = (i + 1) * kTopupLutBucketWidthG;
-      double aim = m_cfg.aim_fraction * bucket_upper;
-      duration = TopupPriors::kTopupDeadtimeMs + 1000.0 * aim / TopupPriors::kTopupSlope;
+      duration = seedDurationMs(i, m_cfg.aim_fraction);
     }
     m_duration_ms[i] = duration;
     m_n[i] = persisted.topup_lut_n[i];
@@ -278,13 +258,10 @@ int TopupModel::bucketForGap(double gap_g) {
 TopupModel::Decision TopupModel::computeTopupDecision(double gap_g) const {
   Decision d;
   d.bucket = bucketForGap(gap_g);
-  double bucket_upper = (d.bucket + 1) * kTopupLutBucketWidthG;
-  d.aim_weight_g = m_cfg.aim_fraction * bucket_upper;
+  d.aim_weight_g = aimWeightForBucket(d.bucket, m_cfg.aim_fraction);
 
   double duration_ms = m_duration_ms[d.bucket];
-  // Safety net: a bucket's tuned duration should already respect these
-  // bounds (recordPulse clamps every update to them), but never fire a
-  // pulse outside them regardless of how it got there.
+  // recordPulse already clamps to these bounds; this guarantees no pulse outside them fires.
   if (duration_ms < m_cfg.hygiene_min_duration_ms || duration_ms > m_cfg.hygiene_max_duration_ms) {
     return d;
   }
@@ -297,10 +274,7 @@ TopupModel::Decision TopupModel::computeTopupDecision(double gap_g) const {
 TopupModel::PulseResult TopupModel::recordPulse(double gap_at_fire_g, double weight_increment_g) {
   PulseResult r;
 
-  /*
-   * Hard bounds first: catches sensor-glitch garbage (e.g. the
-   * historical 483g / -129g entries) before it can influence anything.
-   */
+  // Hard bounds first, so sensor-glitch garbage can't influence anything.
   if (weight_increment_g < m_cfg.reject_hard_min_g ||
       weight_increment_g > m_cfg.reject_hard_max_g) {
     r.hard_rejected = true;
@@ -308,9 +282,8 @@ TopupModel::PulseResult TopupModel::recordPulse(double gap_at_fire_g, double wei
   }
 
   int bucket = bucketForGap(gap_at_fire_g);
-  double bucket_upper = (bucket + 1) * kTopupLutBucketWidthG;
-  double aim_weight = m_cfg.aim_fraction * bucket_upper;
-  double error = aim_weight - weight_increment_g;  // > 0 == undershot this pulse
+  double aim_weight = aimWeightForBucket(bucket, m_cfg.aim_fraction);
+  double error = aim_weight - weight_increment_g;  // > 0 means this pulse undershot.
 
   double learn_rate = error > 0.0 ? m_cfg.learn_rate_undershoot : m_cfg.learn_rate_overshoot;
   double adjustment_ms = learn_rate * error * 1000.0 / TopupPriors::kTopupSlope;
@@ -327,8 +300,8 @@ TopupModel::PulseResult TopupModel::recordPulse(double gap_at_fire_g, double wei
   return r;
 }
 
-TopupModelV1 TopupModel::dumpPersisted(const TopupModelV1 &base) const {
-  TopupModelV1 out = base;
+DosingModelState TopupModel::dumpPersisted(const DosingModelState &base) const {
+  DosingModelState out = base;
   for (int i = 0; i < kTopupLutBuckets; ++i) {
     out.topup_lut_duration_ms[i] = static_cast<float>(m_duration_ms[i]);
     out.topup_lut_n[i] = m_n[i];
@@ -338,10 +311,10 @@ TopupModelV1 TopupModel::dumpPersisted(const TopupModelV1 &base) const {
 
 // --- CoastModel ----------------------------------------------------------------
 
-CoastModel::CoastModel(const TopupModelV1 &persisted)
+CoastModel::CoastModel(const DosingModelState &persisted)
     : CoastModel(persisted, Config()) {}
 
-CoastModel::CoastModel(const TopupModelV1 &persisted, Config cfg)
+CoastModel::CoastModel(const DosingModelState &persisted, Config cfg)
     : m_cfg(cfg),
       m_coast_hat(persisted.coast_weight_hat),
       m_coast_precision(persisted.coast_weight_precision),
@@ -351,11 +324,7 @@ CoastModel::RecordResult CoastModel::recordCoast(double observed_coast_g,
                                                    int64_t now_epoch_s) {
   RecordResult r;
 
-  /*
-   * Plausibility bounds first, mirroring TopupModel's hard-bounds check:
-   * reject garbage (negative coast, or an absurdly large
-   * value) outright, before it can touch the persisted estimate at all.
-   */
+  // Reject garbage before it can touch the persisted estimate.
   if (observed_coast_g < m_cfg.min_plausible_coast_g ||
       observed_coast_g > m_cfg.max_plausible_coast_g) {
     r.rejected = true;
@@ -369,12 +338,7 @@ CoastModel::RecordResult CoastModel::recordCoast(double observed_coast_g,
     decayed_precision *= factor;
   }
 
-  /*
-   * Bayesian normal-normal scalar blend: the new observation carries
-   * fixed precision 1/observation_sd^2 (there's no in-session fit to
-   * derive a per-observation precision from, unlike Model A's
-   * session_precision).
-   */
+  // Normal-normal blend; the observation carries the fixed precision 1/observation_sd^2.
   double obs_sd = m_cfg.observation_sd > 0.0 ? m_cfg.observation_sd
                                               : TopupPriors::kCoastWeightSd;
   double obs_precision = 1.0 / (obs_sd * obs_sd);
@@ -389,8 +353,8 @@ CoastModel::RecordResult CoastModel::recordCoast(double observed_coast_g,
   return r;
 }
 
-TopupModelV1 CoastModel::dumpPersisted(const TopupModelV1 &base) const {
-  TopupModelV1 out = base;
+DosingModelState CoastModel::dumpPersisted(const DosingModelState &base) const {
+  DosingModelState out = base;
   out.coast_weight_hat = static_cast<float>(m_coast_hat);
   out.coast_weight_precision = static_cast<float>(m_coast_precision);
   out.last_updated = m_last_updated;

@@ -41,12 +41,12 @@ void test_weighted_linear_fit_decay_shrinks_effective_weight(void) {
 }
 
 // ---------------------------------------------------------------------------
-// TopupModelV1 -- POD / NVS round-trip
+// DosingModelState -- POD / NVS round-trip
 // ---------------------------------------------------------------------------
 
-void test_topup_model_v1_roundtrips_through_byte_copy(void) {
-  TopupModelV1 original{};
-  original.version = kTopupModelVersion;
+void test_dosing_model_state_roundtrips_through_byte_copy(void) {
+  DosingModelState original{};
+  original.version = kDosingModelVersion;
   original.rate_hat = 1.0123f;
   original.rate_precision = 123.45f;
   for (int i = 0; i < kTopupLutBuckets; ++i) {
@@ -58,11 +58,11 @@ void test_topup_model_v1_roundtrips_through_byte_copy(void) {
   original.coast_weight_hat = 0.49f;
   original.coast_weight_precision = 39.06f;
 
-  uint8_t buffer[sizeof(TopupModelV1)];
-  std::memcpy(buffer, &original, sizeof(TopupModelV1));
+  uint8_t buffer[sizeof(DosingModelState)];
+  std::memcpy(buffer, &original, sizeof(DosingModelState));
 
-  TopupModelV1 restored{};
-  std::memcpy(&restored, buffer, sizeof(TopupModelV1));
+  DosingModelState restored{};
+  std::memcpy(&restored, buffer, sizeof(DosingModelState));
 
   TEST_ASSERT_EQUAL_UINT8(original.version, restored.version);
   TEST_ASSERT_EQUAL_FLOAT(original.rate_hat, restored.rate_hat);
@@ -83,9 +83,9 @@ void test_topup_model_v1_roundtrips_through_byte_copy(void) {
 
 void test_cold_start_topup_model_reports_prior(void) {
   // Every bucket is seeded from the historical slope/deadtime fit via
-  // the same formula makeDefaultTopupModel() uses: deadtime +
+  // the same formula makeDefaultDosingModelState() uses: deadtime +
   // 1000*aim_fraction*bucket_upper/slope.
-  TopupModelV1 persisted = makeDefaultTopupModel();
+  DosingModelState persisted = makeDefaultDosingModelState();
   TopupModel model(persisted);
 
   double expected_bucket0 = 310.0 + 1000.0 * 0.85 * 0.1 / 1.05;
@@ -95,13 +95,13 @@ void test_cold_start_topup_model_reports_prior(void) {
 }
 
 void test_cold_start_main_grind_model_reports_prior(void) {
-  TopupModelV1 persisted = makeDefaultTopupModel();
+  DosingModelState persisted = makeDefaultDosingModelState();
   MainGrindModel model(persisted);
   TEST_ASSERT_DOUBLE_WITHIN(1e-6, 1.00, model.currentRateEstimate());
 }
 
 void test_cold_start_coast_model_reports_prior(void) {
-  TopupModelV1 persisted = makeDefaultTopupModel();
+  DosingModelState persisted = makeDefaultDosingModelState();
   CoastModel model(persisted);
   TEST_ASSERT_DOUBLE_WITHIN(1e-6, 0.49, model.currentCoastEstimate());
 }
@@ -122,7 +122,7 @@ void test_topup_lut_converges_toward_bucket_aim_weight(void) {
   const double bucket_upper = (bucket + 1) * 0.1;
   const double aim_weight = 0.85 * bucket_upper;  // TopupModel::Config's default aim_fraction
 
-  TopupModelV1 persisted = makeDefaultTopupModel();
+  DosingModelState persisted = makeDefaultDosingModelState();
   // Deliberately wrong starting point (well below what's needed) so
   // convergence is actually exercised, not already correct at seed time.
   persisted.topup_lut_duration_ms[bucket] = 350.0f;
@@ -144,7 +144,7 @@ void test_main_grind_model_converges_to_known_rate(void) {
   const double deadtime_s = 0.9;
   const double noise_sd = 0.03;
 
-  TopupModelV1 persisted = makeDefaultTopupModel();
+  DosingModelState persisted = makeDefaultDosingModelState();
   MainGrindModel model(persisted);
   model.startSession();
 
@@ -166,7 +166,7 @@ void test_main_grind_model_converges_to_known_rate(void) {
 
 void test_main_grind_model_predicts_sane_stop_time(void) {
   // Noiseless, known rate: stop-time prediction should match closed form.
-  TopupModelV1 persisted = makeDefaultTopupModel();
+  DosingModelState persisted = makeDefaultDosingModelState();
   MainGrindModel model(persisted);
   model.startSession();
 
@@ -187,7 +187,7 @@ void test_main_grind_model_predicts_earlier_stop_time_with_coast(void) {
   // Noiseless, known rate: with coast anticipation the model should aim to
   // stop earlier than the no-coast prediction, by roughly the coast amount
   // (at ~1g/s, X grams of coast should pull the stop time back by ~1000*X ms).
-  TopupModelV1 persisted = makeDefaultTopupModel();
+  DosingModelState persisted = makeDefaultDosingModelState();
   MainGrindModel model(persisted);
   model.startSession();
 
@@ -215,7 +215,7 @@ void test_main_grind_model_ignores_sudden_weight_drop(void) {
   // decrease -- addSample() must hold the last known-good sample rather
   // than fold it in, so neither the fit nor the stop-time prediction
   // corrupts into an immediate (wrong) "already there" signal.
-  TopupModelV1 persisted = makeDefaultTopupModel();
+  DosingModelState persisted = makeDefaultDosingModelState();
   MainGrindModel model(persisted);
   model.startSession();
 
@@ -254,7 +254,7 @@ void test_main_grind_model_ignores_sudden_weight_spike(void) {
   // predictStopTimeMs() can see "already at/past target" one sample
   // early and stop the grind before the true (lower, settled) weight
   // actually gets there.
-  TopupModelV1 persisted = makeDefaultTopupModel();
+  DosingModelState persisted = makeDefaultDosingModelState();
   MainGrindModel model(persisted);
   model.startSession();
 
@@ -295,7 +295,7 @@ void test_main_grind_model_accepts_persistent_step_change_after_reject_window(vo
   // real step change (a cup swap, a test weight placed by hand) -- the
   // model must recover and track it, not stay blind for the rest of the
   // session the way it would for a single-sample spike.
-  TopupModelV1 persisted = makeDefaultTopupModel();
+  DosingModelState persisted = makeDefaultDosingModelState();
   MainGrindModel::Config cfg;
   MainGrindModel model(persisted, cfg);
   model.startSession();
@@ -326,7 +326,7 @@ void test_main_grind_model_nonpositive_rate_never_predicts_immediate_stop(void) 
   // A model with no session data and a pathological (non-positive)
   // persisted prior must never report "stop right now" -- that must defer
   // to the raw-weight/safety-timeout checks, not fire on bad data.
-  TopupModelV1 persisted = makeDefaultTopupModel();
+  DosingModelState persisted = makeDefaultDosingModelState();
   persisted.rate_hat = -1.0f;  // pathological prior, should never occur in
                                 // practice (finalizeSession() validates this
                                 // before persisting) but must fail safe.
@@ -344,7 +344,7 @@ void test_main_grind_model_nonpositive_rate_never_predicts_immediate_stop(void) 
 // ---------------------------------------------------------------------------
 
 void test_topup_model_rejects_hard_bound_outlier(void) {
-  TopupModelV1 persisted = makeDefaultTopupModel();
+  DosingModelState persisted = makeDefaultDosingModelState();
   TopupModel model(persisted);
   double duration_before = model.durationForBucket(TopupModel::bucketForGap(0.45));
 
@@ -366,7 +366,7 @@ void test_topup_model_rejects_hard_bound_outlier(void) {
 // ---------------------------------------------------------------------------
 
 void test_coast_model_shifts_meaningfully_with_consistent_observations(void) {
-  TopupModelV1 persisted = makeDefaultTopupModel();
+  DosingModelState persisted = makeDefaultDosingModelState();
   CoastModel model(persisted);
 
   TEST_ASSERT_DOUBLE_WITHIN(1e-6, 0.49, model.currentCoastEstimate());
@@ -386,7 +386,7 @@ void test_coast_model_shifts_meaningfully_with_consistent_observations(void) {
 }
 
 void test_coast_model_rejects_negative_observation(void) {
-  TopupModelV1 persisted = makeDefaultTopupModel();
+  DosingModelState persisted = makeDefaultDosingModelState();
   CoastModel model(persisted);
 
   CoastModel::RecordResult r = model.recordCoast(-0.5, 1000);
@@ -396,7 +396,7 @@ void test_coast_model_rejects_negative_observation(void) {
 }
 
 void test_coast_model_rejects_absurdly_large_observation(void) {
-  TopupModelV1 persisted = makeDefaultTopupModel();
+  DosingModelState persisted = makeDefaultDosingModelState();
   CoastModel model(persisted);
 
   // Matches the kind of gross sensor-glitch value topup-model.md/coast
@@ -409,7 +409,7 @@ void test_coast_model_rejects_absurdly_large_observation(void) {
 }
 
 void test_coast_model_recency_decay_reduces_old_observations_influence(void) {
-  TopupModelV1 persisted = makeDefaultTopupModel();
+  DosingModelState persisted = makeDefaultDosingModelState();
 
   CoastModel::Config decaying_cfg;
   decaying_cfg.half_life_days = 15.0;
@@ -456,7 +456,7 @@ void test_bucket_for_gap_maps_correctly(void) {
 }
 
 void test_decision_fires_using_bucket_duration_and_aim_weight(void) {
-  TopupModelV1 persisted = makeDefaultTopupModel();
+  DosingModelState persisted = makeDefaultDosingModelState();
   TopupModel model(persisted);
 
   TopupModel::Decision d = model.computeTopupDecision(0.45);  // bucket 4
@@ -473,7 +473,7 @@ void test_decision_fires_even_for_a_tiny_0_1g_gap(void) {
   // not just accept it as undershoot -- no min-controllable-gap cutoff
   // in the bucket-based decision (DosingTask.cpp's own min_topup_grams
   // setting, ~0.08g by default, is the only "basically zero" gate).
-  TopupModelV1 persisted = makeDefaultTopupModel();
+  DosingModelState persisted = makeDefaultDosingModelState();
   TopupModel model(persisted);
 
   TopupModel::Decision d = model.computeTopupDecision(0.1);
@@ -485,7 +485,7 @@ void test_topup_model_falls_back_to_default_seed_for_invalid_persisted_bucket(vo
   // An out-of-hygiene-bounds persisted duration (corrupt NVS, or an
   // older schema's blob reinterpreted) must not be trusted verbatim --
   // falls back to the same formula a fresh bucket is seeded with.
-  TopupModelV1 persisted = makeDefaultTopupModel();
+  DosingModelState persisted = makeDefaultDosingModelState();
   double expected = persisted.topup_lut_duration_ms[3];
   persisted.topup_lut_duration_ms[3] = 50.0f;  // below the 350ms hygiene floor
 
@@ -579,7 +579,7 @@ int main(int argc, char **argv) {
   RUN_TEST(test_weighted_linear_fit_recovers_exact_line);
   RUN_TEST(test_weighted_linear_fit_decay_shrinks_effective_weight);
 
-  RUN_TEST(test_topup_model_v1_roundtrips_through_byte_copy);
+  RUN_TEST(test_dosing_model_state_roundtrips_through_byte_copy);
 
   RUN_TEST(test_cold_start_topup_model_reports_prior);
   RUN_TEST(test_cold_start_main_grind_model_reports_prior);

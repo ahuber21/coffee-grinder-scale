@@ -68,7 +68,7 @@ constexpr UBaseType_t kSettingsWriteQueueDepth = 4;
 extern QueueHandle_t g_settings_write_q;
 
 // Topup-model persistence round trip.
-extern QueueHandle_t g_topup_model_mailbox;  // Settings -> Dosing, depth 1, read once at boot
+extern QueueHandle_t g_dosing_model_mailbox;  // Settings -> Dosing, depth 1, read once at boot
 extern QueueHandle_t g_landing_learner_mailbox;  // Settings -> Dosing, depth 1, read once at boot
 constexpr UBaseType_t kPersistRequestQueueDepth = 2;
 extern QueueHandle_t g_persist_request_q;    // Dosing -> Settings, session-boundary only

@@ -1,13 +1,13 @@
 #pragma once
 
 /**
- * Online-fitted dosing model for main-grind rate and topup-pulse
- * response. Replaces a static lookup table with two small recursive
- * least-squares (RLS) models fitted from real historical data.
+ * Online dosing models: main-grind rate (MainGrindModel), topup pulse
+ * durations (TopupModel), post-relay-off coast (CoastModel) and the
+ * landing learner (LandingLearner).
  *
- * Host-buildable on purpose: no Arduino/ESP32 headers, no NVS I/O. NVS
- * read/write of TopupModelV1 is a Settings-task concern; this module
- * only produces/consumes the struct as plain bytes.
+ * Host-buildable on purpose: no Arduino/ESP32 headers, no NVS I/O. The
+ * Settings task persists DosingModelState and LandingLearnerState as
+ * plain bytes.
  */
 
 #include <cmath>
@@ -17,11 +17,8 @@
 /**
  * Weighted least squares for y = intercept + slope*x, updated one
  * observation at a time via sufficient statistics (Sw, Swx, Swy, Swxx,
- * Swxy, Swyy) -- the RLS-equivalent of accumulating Sx/Sy/Sxy/Sx2.
- * decay() implements the forgetting factor: scaling every accumulator
- * by the same factor before folding in a new point is mathematically
- * equivalent to down-weighting all past observations by that factor --
- * the standard trick for calendar-time forgetting in RLS.
+ * Swxy, Swyy). decay() scales every accumulator by the same factor,
+ * which is equivalent to down-weighting all past observations by it.
  */
 class WeightedLinearFit {
  public:
@@ -31,33 +28,22 @@ class WeightedLinearFit {
   /** Folds in one (x, y) observation at the given weight. */
   void addObservation(double x, double y, double weight = 1.0);
 
-  /**
-   * Scales all accumulated statistics by `factor` (0 < factor <= 1) to
-   * forget old data by elapsed wall-clock time.
-   */
+  /** Scales all accumulated statistics by `factor` (0 < factor <= 1) to forget old data. */
   void decay(double factor);
 
-  /**
-   * False until there is enough spread in x to solve for slope/intercept
-   * (guards the Sw*Swxx - Swx^2 denominator).
-   */
+  /** False until there is enough spread in x to solve for slope/intercept. */
   bool hasFit() const;
 
   double slope() const;
   double intercept() const;
 
-  /**
-   * Weighted residual variance / standard deviation of individual
-   * observations around the fitted line. Falls back to 0 when
-   * underdetermined.
-   */
+  /** Weighted residual variance of individual observations around the line; 0 when underdetermined. */
   double residualVariance() const;
-  double residualStdDev() const;
 
   /** Variance of the slope estimator itself (residualVariance / Sxx_weighted). */
   double slopeVariance() const;
 
-  /** Sum of weights == the model's "effective n" (decays with old data). */
+  /** Sum of weights, i.e. the effective observation count after decay. */
   double effectiveWeight() const { return m_sw; }
 
  private:
@@ -71,50 +57,28 @@ class WeightedLinearFit {
   double denom() const { return m_sw * m_swxx - m_swx * m_swx; }
 };
 
-/** Number of 0.1g-wide gap buckets the topup LUT covers (0.0-1.0g). */
+/// Number of gap buckets the topup lookup table covers.
 constexpr int kTopupLutBuckets = 10;
+/// Width of each bucket; together they cover gaps of 0 to 1g.
 constexpr double kTopupLutBucketWidthG = 0.1;
 
 /**
- * Persistable model state for all three models below. Deliberately
- * POD: no pointers, no non-trivial members, so it round-trips through
- * a raw byte copy to/from NVS. `last_updated` is a fixed-width int64
- * (seconds since epoch) rather than `time_t`, because `time_t` width
- * is platform-defined (32-bit on some Arduino cores) and this struct's
- * whole point is a stable on-flash byte layout.
- *
- * Version history:
- *   v1: rate_hat/rate_precision (main-grind rate) +
- *       topup_slope/topup_deadtime_ms/topup_precision (topup response).
- *   v2: added coast_weight_hat/coast_weight_precision (post-relay-off
- *       "coast" anticipation). Bumped even though nothing had shipped
- *       to a device yet, on the principle that a versioned struct
- *       should always be bumped when its shape changes -- cheap now,
- *       and avoids ever needing to guess whether an on-flash blob
- *       predates a field.
- *   v3: replaced the topup response's single fitted (slope, deadtime,
- *       precision) line with a per-gap-bucket lookup table of tuned
- *       pulse durations (topup_lut_duration_ms/topup_lut_n). Live
- *       testing showed the real pulse-to-pulse noise (~0.23g) is large
- *       enough that a single statistical model shrinking pulse
- *       duration toward the gap size drove every pulse into the same
- *       unreliable near-stall-threshold regime -- see ARS.md AR-052
- *       and AR-059. A directly-tuned-per-bucket table, closer to the
- *       pre-rewrite firmware's hand-tuned lookup table but updated from
- *       real data instead of by hand, avoids that failure mode by
- *       construction: each bucket's duration is whatever has actually
- *       worked for gaps that size, not a value extrapolated from a
- *       model that doesn't hold at short durations.
+ * Layout version of DosingModelState. Bump it whenever the struct's shape
+ * changes; a blob with a different version is discarded on load.
  */
-constexpr uint8_t kTopupModelVersion = 3;
+constexpr uint8_t kDosingModelVersion = 3;
 
-/** @see kTopupModelVersion */
-struct TopupModelV1 {
+/**
+ * Persisted state of MainGrindModel, TopupModel and CoastModel. POD with
+ * no pointers so it round-trips through a raw byte copy to NVS;
+ * `last_updated` is a fixed-width int64 because `time_t` width is
+ * platform-defined and this struct needs a stable byte layout.
+ */
+struct DosingModelState {
   uint8_t version;
   float rate_hat;        ///< Main-grind plateau rate, g/s.
   float rate_precision;  ///< Inverse-variance of rate_hat itself.
-  /// Per-bucket pulse duration (ms): bucket i covers gap in
-  /// ((i)*0.1g, (i+1)*0.1g], e.g. bucket 0 = (0, 0.1g], bucket 9 = (0.9, 1.0g].
+  /// Per-bucket pulse duration (ms): bucket i covers gaps in (i*0.1g, (i+1)*0.1g].
   float topup_lut_duration_ms[kTopupLutBuckets];
   uint32_t topup_lut_n[kTopupLutBuckets];  ///< Observation count per bucket.
   uint32_t rate_n_effective;               ///< Decayed effective sample count.
@@ -123,25 +87,19 @@ struct TopupModelV1 {
   float coast_weight_precision;            ///< Inverse-variance of coast_weight_hat itself.
 };
 
-static_assert(std::is_trivially_copyable<TopupModelV1>::value,
-              "TopupModelV1 must be trivially copyable to be written to NVS as raw bytes");
-static_assert(std::is_standard_layout<TopupModelV1>::value,
-              "TopupModelV1 must have standard layout for a stable on-flash byte representation");
+static_assert(std::is_trivially_copyable<DosingModelState>::value,
+              "DosingModelState must be trivially copyable to be written to NVS as raw bytes");
+static_assert(std::is_standard_layout<DosingModelState>::value,
+              "DosingModelState must have standard layout for a stable on-flash byte representation");
 
 /**
- * Cold-start priors, fitted from real historical grind/topup/coast data
- * rather than guessed: rate_hat matches the historical regression fit;
- * rate_precision derives from the measured session-to-session spread
- * (~0.09 g/s sd); kTopupSlope/kTopupDeadtimeMs seed the topup LUT's
- * initial per-bucket durations (see makeDefaultTopupModel) and remain
- * the conversion factor the LUT's online update rule uses to translate
- * an observed weight error into a duration adjustment; kCoastWeightHat
- * is the measured fleet median main-grind coast weight (0.49g);
- * kCoastWeightSd is derived from the measured spread the same way (a
- * measured IQR of 0.22g implies sd ~= IQR / 1.349 ~= 0.163g, rounded to
- * 0.16g at the same precision as the others). N0 ~= 18 pseudo-
- * observations reflects how much historical data actually went into
- * the rate/coast fits.
+ * Cold-start priors, taken from measured grind/topup/coast data rather than guessed.
+ * The rate precision follows from the measured session-to-session spread
+ * (~0.09 g/s sd); kCoastWeightHat is the measured median coast, and
+ * kCoastWeightSd comes from its IQR (0.22g / 1.349). kTopupSlope and
+ * kTopupDeadtimeMs seed the topup table and convert an observed weight
+ * error into a duration adjustment. kRateN0 pseudo-observations reflect
+ * how much data went into the rate fit.
  */
 namespace TopupPriors {
 constexpr float kRateHat = 1.00f;
@@ -153,69 +111,46 @@ constexpr float kCoastWeightHat = 0.49f;
 constexpr float kCoastWeightSd = 0.16f;
 }  // namespace TopupPriors
 
-/** A fresh TopupModelV1 seeded from TopupPriors -- the cold-start state. */
-TopupModelV1 makeDefaultTopupModel();
+/** A fresh DosingModelState seeded from TopupPriors -- the cold-start state. */
+DosingModelState makeDefaultDosingModelState();
 
 /**
- * Model A -- main-grind plateau rate.
+ * Main-grind plateau rate.
  *
- * Persisted state is a single scalar (rate_hat, rate_precision): unlike
- * the topup model, only the *slope* generalizes across sessions (a
- * session's weight-vs-time intercept depends on that session's
- * tare/start offset and isn't meaningful cross-session). Each grind fits
- * its own in-session line via WeightedLinearFit and, at the end, folds
- * the resulting slope estimate into the persisted scalar via
- * precision-weighted (Bayesian normal-normal) combination.
+ * Only the slope generalizes across sessions (a session's intercept
+ * depends on its tare offset), so the persisted state is one scalar
+ * (rate_hat, rate_precision). Each grind fits its own in-session line and
+ * folds the slope into that scalar by precision-weighted (Bayesian
+ * normal-normal) combination.
  */
 class MainGrindModel {
  public:
-  /** Tunable bounds/windows for the fit -- see field comments. */
+  /** Tunable bounds/windows for the fit. */
   struct Config {
-    // Ignore samples before this many ms into the grind: the chute
-    // isn't primed yet, so early samples aren't on the plateau line
-    // and would bias the slope.
+    /// Samples before this many ms into the grind are ignored: the chute isn't primed yet.
     double deadtime_ms = 900.0;
-    // <= 0 disables decay: this grinder's mechanical behavior doesn't
-    // drift with age (the owner's own unit has run 7+ years with no
-    // change in feel), so an old session shouldn't count for less than
-    // a recent one. A half-life would only serve to make the estimate
-    // needlessly jumpy against ordinary session-to-session noise.
+    /// <= 0 disables recency decay; the grinder's behavior doesn't drift with age.
     double half_life_days = 0.0;
-    /** Minimum in-session points before the session fit is trusted at all. */
+    /// Minimum in-session points before the session fit is trusted at all.
     int min_session_points = 3;
-    // A folded-in rate outside this physically plausible range is
-    // discarded rather than trusted.
+    /// A folded-in rate outside this range is discarded.
     double min_plausible_rate = 0.3;
     double max_plausible_rate = 2.5;
-    // Real grind weight only increases (mod sensor noise); a sample
-    // implying a bigger drop than this since the last accepted one is a
-    // glitch (e.g. the cup lifted off the scale mid-grind), not data --
-    // held at the last known-good sample instead of folded in.
+    /// A drop bigger than this since the last accepted sample is a glitch (e.g. the cup lifted off).
     double max_plausible_drop_g = 1.0;
-    // Symmetric to the drop bound above: a falling clump of grounds has
-    // inertia, so its impact on the pan reads as extra force -- heavier
-    // than its true settled mass -- for an instant before decaying back
-    // down. A single-sample rise bigger than this since the last
-    // accepted one is that transient, not real accumulated mass, and is
-    // rejected the same way: held at the last known-good sample rather
-    // than folded in. This matters beyond the fit itself --
-    // m_last_weight_g is also what predictStopTimeMs() compares against
-    // target_weight_g to decide "have we already reached it," so an
-    // unrejected spike here can stop the grind a moment early.
+    /*
+     * A rise bigger than this since the last accepted sample is a clump
+     * impact reading heavier than its settled mass. It matters beyond the
+     * fit: the last accepted weight is what the stop check compares to the
+     * target, so an unrejected spike could stop the grind early.
+     */
     double max_plausible_rise_g = 1.0;
-    // A transient clump-impact spike self-reverts within a sample or two;
-    // a reading that stays implausible for at least this long is a real
-    // step change (a cup swap, a test weight placed by hand) rather than
-    // a glitch, and gets accepted instead of leaving the model blind to
-    // the true weight for the rest of the session.
+    /// A reading implausible for this long is a real step change (cup swap), not a transient, and is accepted.
     double max_reject_duration_ms = 500.0;
   };
 
-  // Two overloads, rather than a `Config cfg = Config()` default
-  // argument, to sidestep a default-member-initializer-visibility
-  // quirk some compilers hit in this situation.
-  explicit MainGrindModel(const TopupModelV1 &persisted);
-  MainGrindModel(const TopupModelV1 &persisted, Config cfg);
+  explicit MainGrindModel(const DosingModelState &persisted);
+  MainGrindModel(const DosingModelState &persisted, Config cfg);
 
   /** Begins a new grind: clears in-session state, keeps the persisted prior. */
   void startSession();
@@ -223,54 +158,41 @@ class MainGrindModel {
   /** Feeds one (runtime_ms, weight_g) sample from the current grind. */
   void addSample(double runtime_ms, double weight_g);
 
-  /**
-   * Precision-weighted blend of the persisted prior and the in-session
-   * fit so far -- dominated by the prior early in a grind, shifting
-   * toward this grind's own data as it accumulates.
-   */
+  /** Precision-weighted blend of the persisted prior and the in-session fit so far. */
   double currentRateEstimate() const;
 
   /**
    * Predicted absolute stop time (ms since grind start) for
-   * `target_weight_g`, using the last sample fed via addSample() and the
-   * current blended rate.
+   * `target_weight_g`, from the last accepted sample and the current rate.
+   * Infinity when the rate is not positive.
    */
   double predictStopTimeMs(double target_weight_g) const;
 
   /**
-   * Same as predictStopTimeMs, but aims for an *effective* target that
-   * anticipates post-relay-off "coast" (see CoastModel below): stop
-   * when the grind reaches target_weight_g - coast_weight_g, since
-   * that much more will still land after the relay turns off. A thin
-   * wrapper rather than a defaulted second parameter, so callers who
-   * want coast anticipation must pass an explicit estimate instead of
-   * silently getting 0 from a forgotten argument.
+   * Like predictStopTimeMs, but stops `coast_weight_g` early because that
+   * much more lands after the relay turns off. The estimate is a required
+   * argument so a forgotten one can't silently mean zero.
    */
   double predictStopTimeMsWithCoast(double target_weight_g, double coast_weight_g) const;
 
   /**
    * Folds this session's fit into the persisted state (recency-decayed
-   * by elapsed wall-clock time first) and resets for the next grind.
-   * Returns false, leaving persisted state untouched, if the resulting
-   * rate would be physically implausible.
+   * first) and resets for the next grind. Returns false, leaving persisted
+   * state untouched, if the resulting rate would be implausible.
    */
   bool finalizeSession(int64_t now_epoch_s);
 
   /**
-   * The most recent sample addSample() actually accepted (post drop/rise
-   * plausibility rejection) -- the model's own best estimate of current
-   * weight, safe to compare directly against a target even while the
-   * grind is continuously running, unlike a raw ScaleSample. 0 if no
-   * sample has been accepted yet this session.
+   * The most recent sample addSample() accepted after its drop/rise
+   * rejection: safe to compare against a target while the grind runs,
+   * unlike a raw ScaleSample. 0 before the first accepted sample.
    */
   double currentWeightEstimate() const { return m_last_weight_g; }
 
   double persistedRateHat() const { return m_rate_hat; }
-  double persistedRatePrecision() const { return m_rate_precision; }
-  uint32_t persistedRateNEffective() const { return m_rate_n_effective; }
 
   /** Returns `base` with the persisted rate fields overwritten by this model's state. */
-  TopupModelV1 dumpPersisted(const TopupModelV1 &base) const;
+  DosingModelState dumpPersisted(const DosingModelState &base) const;
 
  private:
   Config m_cfg;
@@ -291,53 +213,35 @@ class MainGrindModel {
 };
 
 /**
- * Model B -- topup pulse response, as a self-tuning lookup table: one
- * pulse duration per 0.1g-wide remaining-gap bucket (0.0-1.0g), each
- * nudged toward whatever duration has actually produced a safe amount
- * of weight for gaps that size.
+ * Topup pulse response as a self-tuning lookup table: one pulse duration
+ * per remaining-gap bucket, nudged toward whatever duration has actually
+ * produced a safe amount of weight for gaps that size.
  *
- * This replaces an earlier fitted-line approach (`weight_added(t) =
- * slope * (t - deadtime)`, one line for every gap size) that assumed a
- * short topup pulse's output scales smoothly with duration. Live
- * testing showed that assumption doesn't hold: short pulses land in a
- * discrete, clumpy regime (a given pulse either dislodges a small clump
- * of grounds or does nothing) with real noise (~0.23g measured) too
- * large for a single duration-from-gap formula to stay both safe and
- * effective across the whole range -- see ARS.md AR-052/AR-059. A
- * per-bucket table sidesteps that: each bucket's duration is whatever
- * has empirically worked for gaps that size, closer to how the
- * pre-rewrite firmware's hand-tuned table was built, just updated from
- * real data instead of by hand.
+ * A table rather than a fitted duration-to-weight line, because short
+ * pulses land in a discrete, clumpy regime (a pulse either dislodges a
+ * small clump or does nothing) with noise (~0.23g) too large for one
+ * formula to stay both safe and effective across the range.
  */
 class TopupModel {
  public:
   /** Tunable bounds for pulse acceptance and the topup decision. */
   struct Config {
-    // Hard bounds a raw observation must satisfy before it's even
-    // considered -- catches sensor-glitch garbage like the historical
-    // 483g / -129g entries outright.
+    /// An observation outside these bounds is sensor garbage and is rejected outright.
     double reject_hard_min_g = -1.0;
     double reject_hard_max_g = 10.0;
 
-    // A fired pulse aims for this fraction of its bucket's own upper
-    // edge, not the full width -- leaves slack so a slightly-larger-
-    // than-typical clump doesn't push past the true target, and leaves
-    // the remainder (if any) for a subsequent, smaller-bucket pulse.
+    /// A pulse aims for this fraction of its bucket's upper edge, leaving slack for a larger clump.
     double aim_fraction = 0.85;
 
-    // Asymmetric learning rate for the online duration update:
-    // overshoot (this pulse added more than aimed for) is corrected
-    // faster than undershoot, matching the project's standing priority
-    // that overshoot is the worse failure mode.
+    /// Learning rate per update; overshoot is corrected faster because it is the worse failure.
     double learn_rate_overshoot = 0.6;
     double learn_rate_undershoot = 0.3;
 
-    // The relay is a physical, clicky (not solid-state) switch driving
-    // a motor with real static friction/cogging to overcome -- below
-    // ~300ms it just stalls and produces zero output rather than a
-    // proportionally smaller pulse. This is a hard hardware floor a
-    // bucket's tuned duration is always clamped to, independent of
-    // whatever the online update rule would otherwise produce.
+    /*
+     * The relay is a mechanical switch driving a motor with static
+     * friction: below ~300ms it stalls and produces nothing. A bucket's
+     * tuned duration is always clamped to this floor.
+     */
     double hygiene_min_duration_ms = 350.0;
     double hygiene_max_duration_ms = 5000.0;  ///< Beyond this, a duration isn't a real dose.
   };
@@ -357,8 +261,8 @@ class TopupModel {
     double aim_weight_g = 0.0;  ///< This bucket's aim point, for logging/telemetry.
   };
 
-  explicit TopupModel(const TopupModelV1 &persisted);
-  TopupModel(const TopupModelV1 &persisted, Config cfg);
+  explicit TopupModel(const DosingModelState &persisted);
+  TopupModel(const DosingModelState &persisted, Config cfg);
 
   /** Maps a remaining gap to its LUT bucket index, clamped to the table's range. */
   static int bucketForGap(double gap_g);
@@ -370,10 +274,9 @@ class TopupModel {
   Decision computeTopupDecision(double gap_g) const;
 
   double durationForBucket(int bucket) const { return m_duration_ms[bucket]; }
-  uint32_t nEffectiveForBucket(int bucket) const { return m_n[bucket]; }
 
   /** Returns `base` with the persisted topup fields overwritten by this model's state. */
-  TopupModelV1 dumpPersisted(const TopupModelV1 &base) const;
+  DosingModelState dumpPersisted(const DosingModelState &base) const;
 
  private:
   Config m_cfg;
@@ -382,47 +285,27 @@ class TopupModel {
 };
 
 /**
- * Model C -- main-grind post-relay-off "coast": coffee that keeps
- * landing on the scale for ~1.4s / ~0.49g (fleet median) after the
- * relay turns off. Confirmed negligible for topup pulses (measured
- * median -0.02g there), so this exists only for the main grind -- Model
- * B is left untouched.
+ * Main-grind post-relay-off "coast": coffee that keeps landing on the
+ * scale for ~1.4s / ~0.49g (median) after the relay turns off. It is
+ * negligible for topup pulses (median -0.02g), so only the main grind uses it.
  *
- * Kept as its own class, mirroring the existing A/B split, rather than
- * folded into MainGrindModel: it has no in-session regression to blend
- * against (coast is a single number known only once per session, after
- * the grind has already stopped and the reading has settled), so its
- * update rule is a plain Bayesian scalar blend -- precision-weighted
- * combination of the persisted (coast_weight_hat, coast_weight_precision)
- * with one new observation of assumed variance
- * TopupPriors::kCoastWeightSd^2 -- rather than MainGrindModel's
- * "blend against this session's own WeightedLinearFit" pattern.
- *
- * Deliberately the flat-median version only, no flow-rate covariate,
- * despite a measured r=0.50 correlation with flow-rate-at-cutoff: the
- * flat median alone already captures most of the achievable benefit,
- * and a rate-scaled version is a reasonable future step, not a
- * must-have for v1.
+ * Coast is a single number known once per session, after the reading
+ * settles, so there is no in-session regression to blend against. The
+ * update is a plain Bayesian scalar blend of the persisted estimate with
+ * one observation of variance TopupPriors::kCoastWeightSd^2. It is a flat
+ * estimate with no flow-rate covariate; LandingLearner models the
+ * residual's dependence on rate.
  */
 class CoastModel {
  public:
   /** Tunable bounds for coast-observation acceptance. */
   struct Config {
-    // <= 0 disables decay, matching Model A's rate: coast is tied to
-    // the same mechanical behavior, which doesn't drift with this
-    // grinder's age (see MainGrindModel::Config::half_life_days).
+    /// <= 0 disables recency decay, as for MainGrindModel: coast comes from the same mechanics.
     double half_life_days = 0.0;
-    // Plausibility bounds on a raw observation, checked before it's
-    // folded in at all: coast physically cannot be negative (chute
-    // inventory doesn't un-fall), and 3g is a tighter, still-generous
-    // margin above the measured p90 of 0.713g.
+    /// Coast cannot be negative, and 3g is a generous margin above the measured p90 of 0.713g.
     double min_plausible_coast_g = 0.0;
     double max_plausible_coast_g = 3.0;
-    /**
-     * Assumed per-session population sd of true coast weight, used as
-     * the fixed observation variance in the Bayesian scalar blend.
-     * Defaults to the measured spread, not a guess.
-     */
+    /// Fixed per-observation sd in the Bayesian blend; defaults to the measured spread.
     double observation_sd = TopupPriors::kCoastWeightSd;
   };
 
@@ -432,24 +315,20 @@ class CoastModel {
     bool rejected = false;  ///< Failed the plausibility bounds check, discarded.
   };
 
-  explicit CoastModel(const TopupModelV1 &persisted);
-  CoastModel(const TopupModelV1 &persisted, Config cfg);
+  explicit CoastModel(const DosingModelState &persisted);
+  CoastModel(const DosingModelState &persisted, Config cfg);
 
   /**
-   * Folds one session's observed coast weight (settled weight minus
-   * weight at the instant the relay turned off) into the persisted
-   * estimate, decaying old evidence by elapsed wall-clock time first
-   * (same mechanism as MainGrindModel::finalizeSession). Implausible
-   * observations are rejected outright and never touch persisted state.
+   * Folds one session's observed coast (settled weight minus the weight at
+   * relay-off) into the persisted estimate, decaying old evidence first.
+   * Implausible observations are rejected and leave the state untouched.
    */
   RecordResult recordCoast(double observed_coast_g, int64_t now_epoch_s);
 
   double currentCoastEstimate() const { return m_coast_hat; }
-  double persistedCoastPrecision() const { return m_coast_precision; }
-  int64_t lastUpdated() const { return m_last_updated; }
 
   /** Returns `base` with the persisted coast fields overwritten by this model's state. */
-  TopupModelV1 dumpPersisted(const TopupModelV1 &base) const;
+  DosingModelState dumpPersisted(const DosingModelState &base) const;
 
  private:
   Config m_cfg;

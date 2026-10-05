@@ -14,7 +14,7 @@
 namespace {
 
 SettingsSnapshot g_settings;  ///< Canonical copy -- only this task ever writes it.
-TopupModelV1 g_topup_model;   ///< Canonical cold copy -- ditto.
+DosingModelState g_dosing_model;   ///< Canonical cold copy -- ditto.
 LandingLearnerState g_landing_learner;  ///< Canonical cold copy of the landing learner's state.
 
 // ESP32 NVS caps namespace/key names at 15 characters -- every key
@@ -56,14 +56,14 @@ constexpr const char *kKeyClumpDensity = "clump_density";
 constexpr const char *kKeyClumpGravity = "clump_gravity";
 constexpr const char *kKeyWifiReset = "wifi_reset";
 constexpr const char *kKeyWifiReboot = "wifi_reboot";
-constexpr const char *kKeyTopupModel = "topup_model";
+constexpr const char *kKeyDosingModel = "topup_model";
 constexpr const char *kKeyLandingEnabled = "land_enabled";
 constexpr const char *kKeyLandingRate = "land_rate";
 constexpr const char *kKeyLandingClampMs = "land_clamp_ms";
 constexpr const char *kKeyLandingLearner = "land_learner";
 
-/** @see isPlausibleTopupModel */
-bool isPlausibleTopupModel(const TopupModelV1 &m);
+/** @see isPlausibleDosingModel */
+bool isPlausibleDosingModel(const DosingModelState &m);
 
 /** @see isPlausibleLandingLearner */
 bool isPlausibleLandingLearner(const LandingLearnerState &s);
@@ -375,30 +375,30 @@ void saveSettingsToNvs(const SettingsSnapshot &snap) {
 }
 
 /**
- * TopupModelV1 NVS round-trip: the whole POD struct as one raw-bytes
+ * DosingModelState NVS round-trip: the whole POD struct as one raw-bytes
  * blob (it's trivially copyable/standard-layout by construction, see
  * DosingModel.h's static_asserts) rather than one key per field --
  * unlike SettingsSnapshot, nothing here is meant to be hand-edited
  * field-by-field, so there's no reason to decompose it.
  */
-bool loadTopupModelFromNvs(TopupModelV1 &out) {
+bool loadDosingModelFromNvs(DosingModelState &out) {
   if (!g_prefs.begin(kNvsNamespace, /*readOnly=*/true)) {
     Serial.println("[Settings] NVS namespace not found -- topup model uses cold-start priors");
     return false;
   }
-  TopupModelV1 loaded{};
-  size_t got = g_prefs.getBytes(kKeyTopupModel, &loaded, sizeof(loaded));
+  DosingModelState loaded{};
+  size_t got = g_prefs.getBytes(kKeyDosingModel, &loaded, sizeof(loaded));
   g_prefs.end();
 
   // A version mismatch means either nothing was ever saved (got == 0)
   // or a firmware update changed the struct's shape -- either way, the
   // safe move is the same as SettingsSnapshot's schema_ver guard: fall
   // back to cold-start priors rather than reinterpret stale bytes.
-  if (got != sizeof(loaded) || loaded.version != kTopupModelVersion) {
+  if (got != sizeof(loaded) || loaded.version != kDosingModelVersion) {
     Serial.println("[Settings] Topup model NVS blob missing/stale -- using cold-start priors");
     return false;
   }
-  if (!isPlausibleTopupModel(loaded)) {
+  if (!isPlausibleDosingModel(loaded)) {
     Serial.println("[Settings] Topup model NVS blob implausible -- using cold-start priors");
     return false;
   }
@@ -406,13 +406,13 @@ bool loadTopupModelFromNvs(TopupModelV1 &out) {
   return true;
 }
 
-/** @see loadTopupModelFromNvs */
-void saveTopupModelToNvs(const TopupModelV1 &model) {
+/** @see loadDosingModelFromNvs */
+void saveDosingModelToNvs(const DosingModelState &model) {
   if (!g_prefs.begin(kNvsNamespace, /*readOnly=*/false)) {
     Serial.println("[Settings] NVS open for write failed -- topup model not persisted");
     return;
   }
-  g_prefs.putBytes(kKeyTopupModel, &model, sizeof(model));
+  g_prefs.putBytes(kKeyDosingModel, &model, sizeof(model));
   g_prefs.end();
 }
 
@@ -575,8 +575,8 @@ bool applyWrite(const SettingsWriteRequest &req) {
   return false;
 }
 
-/** Plausibility bounds for a persisted TopupModelV1 blob, same discipline as applyWrite(). */
-bool isPlausibleTopupModel(const TopupModelV1 &m) {
+/** Plausibility bounds for a persisted DosingModelState blob, same discipline as applyWrite(). */
+bool isPlausibleDosingModel(const DosingModelState &m) {
   if (!std::isfinite(m.rate_hat) || m.rate_hat < 0.3f || m.rate_hat > 2.5f) return false;
   for (int i = 0; i < kTopupLutBuckets; ++i) {
     if (!std::isfinite(m.topup_lut_duration_ms[i]) || m.topup_lut_duration_ms[i] < 0.0f ||
@@ -608,9 +608,9 @@ void settingsTaskFn(void *) {
   }
   g_settings.version = 1;
 
-  g_topup_model = makeDefaultTopupModel();
-  if (!loadTopupModelFromNvs(g_topup_model)) {
-    g_topup_model = makeDefaultTopupModel();
+  g_dosing_model = makeDefaultDosingModelState();
+  if (!loadDosingModelFromNvs(g_dosing_model)) {
+    g_dosing_model = makeDefaultDosingModelState();
   }
 
   g_landing_learner = makeDefaultLandingLearnerState();
@@ -619,7 +619,7 @@ void settingsTaskFn(void *) {
   }
 
   broadcastSnapshot();
-  xQueueOverwrite(g_topup_model_mailbox, &g_topup_model);
+  xQueueOverwrite(g_dosing_model_mailbox, &g_dosing_model);
   xQueueOverwrite(g_landing_learner_mailbox, &g_landing_learner);
 
   // Every subscriber's first read is now guaranteed to be a valid,
@@ -645,11 +645,11 @@ void settingsTaskFn(void *) {
 
     PersistRequest persist;
     while (xQueueReceive(g_persist_request_q, &persist, 0) == pdTRUE) {
-      if (persist.blob_id == PersistBlobId::TOPUP_MODEL_V1 &&
-          isPlausibleTopupModel(persist.payload)) {
-        g_topup_model = persist.payload;
-        saveTopupModelToNvs(g_topup_model);
-      } else if (persist.blob_id == PersistBlobId::LANDING_LEARNER_V1 &&
+      if (persist.blob_id == PersistBlobId::DOSING_MODEL &&
+          isPlausibleDosingModel(persist.payload)) {
+        g_dosing_model = persist.payload;
+        saveDosingModelToNvs(g_dosing_model);
+      } else if (persist.blob_id == PersistBlobId::LANDING_LEARNER &&
                  persist.learner_payload.version == kLandingLearnerVersion &&
                  isPlausibleLandingLearner(persist.learner_payload)) {
         g_landing_learner = persist.learner_payload;
