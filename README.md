@@ -14,9 +14,16 @@ Seven FreeRTOS tasks -- Scale, Dosing, Input, Display, Settings, Network,
 Telemetry -- communicating over queues/mailboxes instead of one
 `loop()`/state machine. Full design: `.agent/design/rtos-architecture.md`.
 
+## Local setup
+
+Deployment values are kept out of the repository. Copy `include/secrets.h.example` to
+`include/secrets.h`, `platformio_local.ini.example` to `platformio_local.ini` and
+`webapp/.env.example` to `webapp/.env.local`, then fill in your own PostgREST URL, device
+name and ports. All three copies are gitignored.
+
 ## Connecting to the device
 
-- **Web app**: `http://eureka.local/` (mDNS, no OTA password -- trusted
+- **Web app**: `http://<device-host>/` (mDNS, no OTA password -- trusted
   home LAN only). A small React SPA (`webapp/`) with four tabs: **Live**
   (current weight/target, a session chart, manual dose request),
   **Settings** (calibration factor, target doses, top-up margins, button

@@ -32,9 +32,8 @@ bool otaSafeToStart() {
 
 constexpr const char *kApName = "Eureka setup";  ///< WiFiManager AP name.
 
-// mDNS hostname -> eureka.local. No OTA password: accepted risk, home
-// LAN only.
-constexpr const char *kMdnsHostname = "eureka";
+// No OTA password: accepted risk, home LAN only.
+constexpr const char *kMdnsHostname = DEVICE_MDNS_HOSTNAME;
 constexpr uint16_t kOtaPort = 3232;
 
 constexpr size_t kMaxWsClients = 4;  ///< One connection cap, enforced in one place.
@@ -384,7 +383,7 @@ void setupWifi() {
   }
 }
 
-/** Starts mDNS (eureka.local) and ArduinoOTA, and advertises both services. */
+/** Starts mDNS and ArduinoOTA, and advertises both services. */
 void setupMdnsAndOta() {
   if (!MDNS.begin(kMdnsHostname)) {
     Serial.println("[Network] mDNS init failed");

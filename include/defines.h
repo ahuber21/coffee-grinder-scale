@@ -28,4 +28,5 @@
 
 #define SERVER_PORT 80
 
-#define POSTGREST_BASE_URL "http://192.168.0.111:3000"
+// POSTGREST_BASE_URL and DEVICE_MDNS_HOSTNAME come from the gitignored secrets.h.
+#include "secrets.h"

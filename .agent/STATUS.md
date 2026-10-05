@@ -519,7 +519,7 @@ correctly).
   unit-tested (22/22 passing, independently re-verified). Not yet wired
   into any actual control loop — that happens once the FreeRTOS task
   implementation exists.
-- PostgREST deployment on `192.168.0.111` (`design/postgrest-deployment.md`,
+- PostgREST deployment on `<db-host>` (`design/postgrest-deployment.md`,
   `design/db-schema/001_sessions_schema.sql`). New `v2` schema
   (sessions/events/raw_samples, session-linked, coast fields included)
   applied additively; old tables/the still-running `coffee_grinder_api`
@@ -582,7 +582,7 @@ correctly).
     idle countdown, debug IP, and OTA percent aren't populated by their
     producer tasks yet (AR-032) — cosmetic gap, not a DisplayTask bug.
   - **NetworkTask**: real WiFiManager provisioning (AP name `"Eureka
-    setup"`, ported from the old code), `eureka.local` mDNS, and real
+    setup"`, ported from the old code), `<device-host>` mDNS, and real
     ArduinoOTA gated by the existing `otaSafeToStart()` (D12) — the gate
     works by never pumping `ArduinoOTA.handle()` while a grind is active
     (so the espota handshake never even starts), with an `onStart()`
@@ -597,7 +597,7 @@ correctly).
   - **TelemetryTask**: real PostgREST POST/PATCH against the live `v2`
     schema (`/sessions`, `/events`, `/raw_samples`), plain HTTP with no
     auth header per the deployment's actual `postgrest_anon`-by-port
-    config, live-verified against `192.168.0.111:3000` and cleaned up
+    config, live-verified against `<postgrest-url>` and cleaned up
     afterward. TOPUP pulse timestamps are currently approximated from one
     value rather than DosingTask's two real ones (AR-029), session
     `outcome` (aborted vs. timed_out) is inferred heuristically rather
@@ -645,7 +645,7 @@ correctly).
   tabs render correctly, no console errors, hash routing works without a
   full reload, WS-disconnected states render correctly, and the History
   tab's direct browser→PostgREST fetch (D9) genuinely round-tripped
-  against the live `192.168.0.111:3000` deployment with no CORS issues.
+  against the live `<postgrest-url>` deployment with no CORS issues.
   Found and fixed two real phone-width layout bugs in the process (AR-035)
   — `.setting-row` not wrapping, and both History tables missing a
   horizontal-scroll container. **Still not verified**: the actual `/ws`
@@ -694,7 +694,7 @@ correctly).
   uploadfs -e esp_wroom_02_ota`, owner's go-ahead). Verified live:
   `GET /` on the device returns the real built `index.html`, and its
   referenced JS/CSS assets both serve with correct size/content-type.
-  `http://eureka.local/` is now a fully working SPA end-to-end on real
+  `http://<device-host>/` is now a fully working SPA end-to-end on real
   hardware, not just in `npm run dev`.
 
 **Not yet started:** decommissioning `coffee_grinder_api` (waits until
@@ -704,16 +704,16 @@ deployed and verified on the physical device.
 
 ## Infrastructure on hand
 
-- Read-only Postgres role `claude_agent` on `192.168.0.111`
+- Read-only Postgres role `<agent-role>` on `<db-host>`
   (`.agent/secrets/pg_agent.env`, gitignored) — used for all the analysis
   above, scoped to old tables only, no access to the new `v2` schema.
-- PostgREST live at `http://192.168.0.111:3000` (see `AGENTS.md`), with
+- PostgREST live at `<postgrest-url>` (see `AGENTS.md`), with
   its own scoped `postgrest_anon`/`postgrest_authenticator` roles.
   `TelemetryTask` now posts to it for real (see above) — the `v2` tables
   are no longer purely theoretical, though nothing has posted from *actual
   hardware* yet (only build-time/native verification and a live curl-style
   request-shape check so far).
-- `coffee_grinder_api` (Python trampoline on `192.168.0.112`) still
+- `coffee_grinder_api` (Python trampoline on `<old-api-host>`) still
   running unchanged — retirement (D8) waits until firmware actually posts
   to PostgREST and the new pipeline is verified in real use.
 

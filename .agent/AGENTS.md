@@ -34,7 +34,7 @@ transliterate blindly. Log anything questionable in `ARS.md`.
   several sessions.
 - **OTA-deploying to the physical device is always allowed**, using this
   repo's own toolchain (`pio run -t upload`/`uploadfs`, targeting
-  `eureka.local` / its IP). The owner lifted the earlier "ask first every
+  `<device-host>` / its IP). The owner lifted the earlier "ask first every
   time" rule (2026-09-14) — no per-deploy confirmation needed.
 - **Hardware is fixed.** Same ESP32 (`az-delivery-devkit-v4` board id,
   ESP32-WROOM), same 80×160 ST7735 color TFT, same ADS1232 load-cell ADC,
@@ -57,22 +57,22 @@ transliterate blindly. Log anything questionable in `ARS.md`.
   flicker-free, high-framerate animation. No resolution upgrade available.
 - **Web app**: one SPA, built with a real framework/build pipeline, served
   from an ESP32 LittleFS partition (OTA-updatable filesystem), reachable at
-  `eureka.local`. Replaces the current three separate PROGMEM-embedded
+  `<device-host>`. Replaces the current three separate PROGMEM-embedded
   pages (`/console`, `/settings`, `/graph`) and consolidates the multiple
   websockets (`WebSocketLogger`, `WebSocketGraph`, `WebSocketMetrics`,
   `RawDataWebSocket`, `WebSocketSettings`) into one multiplexed channel.
   A history/analytics tab in the SPA queries PostgREST **directly from the
   browser**, bypassing the device — the ESP32 has no business aggregating
   200k+ historical rows itself.
-- **OTA**: mDNS hostname `eureka.local`. No OTA password (accepted risk on
+- **OTA**: mDNS hostname `<device-host>`. No OTA password (accepted risk on
   a home LAN) — but see the hard constraint above, this is orthogonal to
   who is *allowed* to trigger a deploy.
 - **ADS1232 driver**: keep the existing implementation (ring buffer,
   non-blocking) — it's genuinely good. Vendor it into the new tree
   directly; don't keep it as a git submodule.
 - **Data infra**: kill `coffee_grinder_api` (the bespoke Python trampoline
-  on `192.168.0.112`). The ESP32 posts directly to **PostgREST** (deployed
-  on `192.168.0.111`, next to Postgres) over HTTPS, using an INSERT-only
+  on `<old-api-host>`). The ESP32 posts directly to **PostgREST** (deployed
+  on `<db-host>`, next to Postgres) over HTTPS, using an INSERT-only
   Postgres role — the device must never be able to read or alter history.
   New `sessions`-style schema needed (target weight, mode, linked
   topup/progress/raw-data) — the old schema silently discarded target
@@ -121,17 +121,22 @@ setting nothing in the firmware reads must not exist.
 
 ## Infrastructure access
 
-- Device: `eureka.local` (was `192.168.0.118` / mDNS
-  `esp32-98cdac595620` before rename).
+Hosts, addresses, key names and role names appear as placeholders (`<db-host>`,
+`<device-host>`, ...) because the repository is public. `.agent/secrets/infrastructure.md`
+(gitignored) maps them to the real values; read it before any SSH, database or OTA work.
+Never write a real address, hostname or credential into a tracked file.
+
+- Device: `<device-host>` (was `<device-ip>` / mDNS
+  `<old-device-host>` before rename).
 - Build offload: try `pio remote agent` / `pio remote run --force-remote`
-  against `dev-ct.local` first; if that needs a paid PlatformIO tier, fall
+  against `<build-host>` first; if that needs a paid PlatformIO tier, fall
   back to a plain SSH build-and-fetch script. Non-blocking, nice-to-have.
-- Postgres host: `192.168.0.111` (SSH as root via `~/.ssh/id_proxmox`,
+- Postgres host: `<db-host>` (SSH as root via `<ssh-key>`,
   granted for read/admin setup only — see rule below).
-- Old trampoline host: `192.168.0.112` (`coffee_grinder_api`, to be
+- Old trampoline host: `<old-api-host>` (`coffee_grinder_api`, to be
   decommissioned after PostgREST cutover is verified — still running
   unchanged, do not touch it until then).
-- **PostgREST is deployed and running**: `http://192.168.0.111:3000`,
+- **PostgREST is deployed and running**: `<postgrest-url>`,
   systemd service `postgrest` (active, enabled). Serves the new `v2`
   schema (`sessions`/`events`/`raw_samples`) in the `coffee_grinder`
   database — see `.agent/design/db-schema/001_sessions_schema.sql` and
@@ -146,7 +151,7 @@ setting nothing in the firmware reads must not exist.
   to the old tables). Note: PostgREST is pinned to v13.0.8, not latest —
   this Postgres instance runs 12.20, and PostgREST 16+ requires PG14+.
 - **Database credentials**: see `.agent/secrets/pg_agent.env`
-  (gitignored, not committed — read-only `claude_agent` Postgres role,
+  (gitignored, not committed — read-only `<agent-role>` Postgres role,
   SELECT-only on `coffee_grinder` and `coffee_grinder_raw`). **Only use
   the root SSH account for administrative read operations (e.g. creating
   scoped roles); use a purpose-scoped role for actual data access, and

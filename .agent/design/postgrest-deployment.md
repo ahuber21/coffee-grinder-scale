@@ -1,15 +1,15 @@
 # PostgREST deployment (D8/D9)
 
 Deployed and verified end-to-end on 2026-09-11. This documents the running
-setup on `192.168.0.111` — the schema it serves is
+setup on `<db-host>` — the schema it serves is
 `.agent/design/db-schema/001_sessions_schema.sql` (read that first for the
 table design and rationale; this file is deployment/ops only).
 
 ## Where it runs, and why
 
-Host: `192.168.0.111` (the `postgresql-ct` Proxmox LXC container — same
+Host: `<db-host>` (the `<db-container>` Proxmox LXC container — same
 host as Postgres, per the earlier planning discussion and AGENTS.md's
-"Data infra" note). Chosen over `192.168.0.112` (the old
+"Data infra" note). Chosen over `<old-api-host>` (the old
 `coffee_grinder_api` host) specifically because PostgREST talks to Postgres
 constantly and benefits from being on the same host (loopback connection,
 no extra network hop, no extra firewall/network config needed) — `.112`
@@ -57,7 +57,7 @@ Two roles, per PostgREST's standard authenticator/anon pattern (see the
   applying the migration.
 
 The `postgrest_authenticator` password lives only in
-`/etc/postgrest/postgrest.conf` on `192.168.0.111` (root-readable, group
+`/etc/postgrest/postgrest.conf` on `<db-host>` (root-readable, group
 `postgrest`, mode 640) — it is **not** recorded anywhere in this repo. If
 it ever needs rotating: `ALTER ROLE postgrest_authenticator PASSWORD
 '<new>';` as the `postgres` superuser (`sudo -u postgres psql`), then
@@ -151,7 +151,7 @@ journalctl -u postgrest.service -f
 
 ## Endpoint shape (what the future firmware will POST/PATCH)
 
-Base URL: `http://192.168.0.111:3000/`. No auth header required in this v1
+Base URL: `<postgrest-url>/`. No auth header required in this v1
 deployment (LAN-trusted, see above).
 
 **1. Start a session** (`POST /sessions`) — fire this once, at grind
@@ -231,7 +231,7 @@ are grantable to the device role — attempting to PATCH e.g.
 
 ## End-to-end verification performed
 
-Ran directly against the live deployment on `192.168.0.111`, then cleaned
+Ran directly against the live deployment on `<db-host>`, then cleaned
 up:
 
 1. `POST /sessions` with a test UUID, `mode=double`,

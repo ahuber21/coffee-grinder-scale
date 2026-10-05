@@ -8,6 +8,7 @@
 .platformio
 
 secrets.h
+platformio_local.ini
 
 *.pyc
 __pycache__/

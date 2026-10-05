@@ -43,7 +43,7 @@ Format per entry:
 - **Status**: open — flagged only, not rotated (live credential on a
   running service; coordinate before changing)
 - **Found**: 2026-09-11, `DB_PASSWORD = "..."` (plaintext literal) in
-  `main.py` on `192.168.0.112` — value intentionally omitted here, don't
+  `main.py` on `<old-api-host>` — value intentionally omitted here, don't
   re-add it to this repo
 - **What**: plaintext Postgres password committed to that service's own
   git repo.
@@ -466,17 +466,17 @@ Format per entry:
 - **Area**: firmware/build
 - **Status**: open — trivial to fix, noted for completeness
 - **Found**: 2026-09-11, `platformio.ini:38`
-  (`[env:esp_wroom_02_ota]`, `upload_port = 192.168.0.118`).
+  (`[env:esp_wroom_02_ota]`, `upload_port = <device-ip>`).
 - **What**: `.agent/AGENTS.md` records that the device "was
-  `192.168.0.118` / mDNS `esp32-98cdac595620` before rename" and is now
-  reachable at `eureka.local`. The OTA build environment still hardcodes
+  `<device-ip>` / mDNS `<old-device-host>` before rename" and is now
+  reachable at `<device-host>`. The OTA build environment still hardcodes
   the old numeric IP.
 - **Why it matters**: harmless as long as nobody runs `pio run -e
   esp_wroom_02_ota -t upload` against a stale address (and per the hard
   constraint in `AGENTS.md`, nobody but the owner should be running OTA
   uploads at all right now) — but it's a small piece of config rot that
   would silently fail or target the wrong host if DHCP ever reassigns that
-  IP. Worth pointing `upload_port` at `eureka.local` in the rewrite's
+  IP. Worth pointing `upload_port` at `<device-host>` in the rewrite's
   `platformio.ini` instead of a numeric address, consistent with D5.
 - **Resolution**: —
 
@@ -852,7 +852,7 @@ Format per entry:
   reset/reboot pattern works (arms independently per-button, cancels
   correctly), and — genuinely useful — the History tab's direct
   browser-to-PostgREST fetch (D9) actually round-tripped live against
-  `192.168.0.111:3000` from the browser with zero CORS errors, correctly
+  `<postgrest-url>` from the browser with zero CORS errors, correctly
   rendering "No sessions recorded yet." for the still-empty `v2` tables.
   Found and fixed two real phone-width layout bugs in the process:
   `.setting-row` didn't wrap (label/value/input/button all fought for one
@@ -886,7 +886,7 @@ Format per entry:
 - **Area**: process, firmware/network
 - **Status**: confirmed, lesson learned, not a code bug
 - **Found**: 2026-09-11, verifying the freshly OTA-deployed firmware.
-  `curl "http://192.168.0.118/api/getDosage?grams=18"` was run assuming
+  `curl "http://<device-ip>/api/getDosage?grams=18"` was run assuming
   it was a harmless read-only check of the new HTTP route -- it isn't:
   the endpoint enqueues a real `DoseRequest` to Dosing task, identical
   to pressing a physical button. The device accepted it and the grinder
@@ -1658,7 +1658,7 @@ Format per entry:
   is real but the underlying capability -- testing UI changes against
   live device data -- is legitimate and worth keeping)
 - **Found**: 2026-09-13, product/UX review -- `webapp/.env.local` hardcodes
-  `VITE_DEVICE_HOST=192.168.0.118` (the device's pre-`eureka.local`
+  `VITE_DEVICE_HOST=<device-ip>` (the device's pre-`<device-host>`
   address, itself stale per AR-020's finding about `platformio.ini`), so
   `npm run dev` connects straight to the real grinder's `/ws`, not a mock.
   Confirmed live during this review: the small green status dot and a
@@ -2249,7 +2249,7 @@ Format per entry:
   DisplayTask isn't part of that suite), webapp typechecks and builds
   clean (`tsc --noEmit && vite build`).
 - OTA-deployed: firmware (`pio run -e esp_wroom_02_ota -t upload`) and
-  the LittleFS SPA image (`-t uploadfs`), both against `eureka.local`.
+  the LittleFS SPA image (`-t uploadfs`), both against `<device-host>`.
 
 ### AR-080 — button_debounce_ms fully wired but never consumed
 

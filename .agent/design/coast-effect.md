@@ -1,7 +1,7 @@
 # Coast time / coast weight analysis
 
 Read-only analysis. No firmware or database changes made. All queries run
-2026-09-11 via the read-only `claude_agent` Postgres role against
+2026-09-11 via the read-only `<agent-role>` Postgres role against
 `coffee_grinder.public.topup` (7,647 rows), `coffee_grinder.public.progress`
 (121,847 rows, not used further below), and `coffee_grinder_raw.public.raw_data`
 (209,848 rows / 1,058 events). Raw `topup` and `raw_data` tables were dumped
@@ -378,7 +378,7 @@ already asked for generally.
 See `/private/tmp/claude-501/-Users-ahuber-Nextcloud-basteln-2026-09-11-coffee-grinder-scale/73fbb13f-0caa-4a2e-9bb7-22943def5e0d/scratchpad/coast_analysis.py`
 in this same scratch directory — reads `topup.csv` and `raw_data.csv` (both
 dumped via `\COPY ... TO STDOUT WITH CSV HEADER` from the read-only
-`claude_agent` role, queries below), reconstructs sessions, does the
+`<agent-role>` role, queries below), reconstructs sessions, does the
 segment-detection + linkage + coast computation described in §1(b), and
 prints the summary tables in §2.
 

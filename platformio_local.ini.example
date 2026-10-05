@@ -1,0 +1,7 @@
+; Copy to platformio_local.ini (gitignored) and fill in your own ports and host.
+[env:esp_wroom_02]
+upload_port = <serial port>
+monitor_port = <serial port>
+
+[env:esp_wroom_02_ota]
+upload_port = <device-host>.local

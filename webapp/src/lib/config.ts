@@ -6,5 +6,6 @@ export const deviceHost = override && override.length > 0 ? override : window.lo
 
 export const wsUrl = `ws://${deviceHost}/ws`;
 
-// The browser queries PostgREST directly, never through the device.
-export const postgrestBase = "http://192.168.0.111:3000";
+// The browser queries PostgREST directly, never through the device. The URL is set at build time
+// from VITE_POSTGREST_URL in the gitignored .env.local.
+export const postgrestBase: string = import.meta.env.VITE_POSTGREST_URL ?? "";

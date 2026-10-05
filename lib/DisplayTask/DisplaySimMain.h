@@ -218,7 +218,7 @@ int main(int argc, char **argv) {
 
     DisplayCommand debug{};
     debug.mode = DisplayMode::DEBUG;
-    std::snprintf(debug.debug_ip, sizeof(debug.debug_ip), "192.168.0.118");
+    std::snprintf(debug.debug_ip, sizeof(debug.debug_ip), "192.0.2.10");
     debug.debug_raw_adc = -123456;
     debug.debug_stable = true;
     runSegment(edgeDump, last, debug, 300);

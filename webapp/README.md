@@ -26,12 +26,9 @@ npm install
 npm run dev
 ```
 
-The dev server assumes it runs on the device's own origin. To work against a
-device on the LAN, set it in the gitignored `.env.local`:
-
-```
-VITE_DEVICE_HOST=eureka.local
-```
+Copy `.env.example` to the gitignored `.env.local` and fill it in. `VITE_POSTGREST_URL`
+(the History tab's data source) is compiled into the build. `VITE_DEVICE_HOST` points
+`npm run dev` at a device on the LAN; the built app uses its own origin.
 
 ## Build for the device
 

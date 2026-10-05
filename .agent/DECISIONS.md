@@ -39,12 +39,12 @@ served live and unified before — `/console` was real (PROGMEM HTML), but
 Python server with fake data, not the device. The rewrite builds a real SPA
 (framework TBD by whoever implements it — "use libraries, go all in," the
 owner is happy to learn the pattern), built to a LittleFS partition,
-OTA-updatable as its own filesystem image, served at `eureka.local`. The
+OTA-updatable as its own filesystem image, served at `<device-host>`. The
 five current separate WebSocket endpoints collapse into one multiplexed
 channel — there was never a principled reason for them being separate,
 just organic growth.
 
-**D5 — mDNS hostname `eureka.local`, no OTA password.** Accepted risk,
+**D5 — mDNS hostname `<device-host>`, no OTA password.** Accepted risk,
 home LAN only. Orthogonal to the separate hard rule that only the owner
 may trigger an actual OTA deploy (see `AGENTS.md`).
 
@@ -70,14 +70,14 @@ overshoot → physically discarding ground coffee).
 
 **D8 — `coffee_grinder_api` (external Python/Postgres logging trampoline)
 is in scope, and gets replaced, not preserved.** Discovered mid-planning:
-a FastAPI service on `192.168.0.112` connects *out* to the device's old
-websockets and logs into Postgres on `192.168.0.111`, with its own small
+a FastAPI service on `<old-api-host>` connects *out* to the device's old
+websockets and logs into Postgres on `<db-host>`, with its own small
 web UI for browsing history. It silently discards the `target` event
 (never persisted a target weight against a session — a real data-quality
 gap). Renaming the device's hostname/protocol would have broken it anyway.
 Decision: retire it. Device now posts directly to **PostgREST**
 (auto-generated REST-over-Postgres, no custom app code) deployed on
-`192.168.0.111`, using an INSERT-only Postgres role. `.112` gets
+`<db-host>`, using an INSERT-only Postgres role. `.112` gets
 decommissioned once the cutover is verified. New schema adds a proper
 `sessions` table (target, mode, linked topup/progress/raw rows) to close
 the data-quality gap. A hardcoded plaintext DB password was found in that

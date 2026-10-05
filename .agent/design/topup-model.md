@@ -4,7 +4,7 @@ Analysis-only. No firmware or database changes made. All numbers below come
 from live queries against `coffee_grinder.public.topup` (7,647 rows),
 `coffee_grinder.public.progress` (121,847 rows), and
 `coffee_grinder_raw.public.raw_data` (209,848 rows / 1,058 events), run via
-the read-only `claude_agent` role on 2026-09-11. Query text is included
+the read-only `<agent-role>` role on 2026-09-11. Query text is included
 inline so the numbers are reproducible.
 
 **Correction to the task brief**: the tables live in the `public` schema of
