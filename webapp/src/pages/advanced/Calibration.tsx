@@ -7,28 +7,28 @@ import {
   LinearScale,
   Tooltip,
 } from "chart.js";
+import { ACCENT_BLUE, linearAxis, tooltipTheme } from "../../lib/chartTheme";
 import { useDeviceSocket } from "../../lib/DeviceSocketContext";
 import { CALIBRATION_FACTOR_WIRE_SCALE } from "../../lib/types";
-import { SelectSettingRow } from "../Settings";
+import { SelectSettingRow } from "../../components/SettingRows";
 
 Chart.register(LineController, LineElement, PointElement, LinearScale, Tooltip);
 
 const SCATTER_WINDOW_S = 10;
-const CHART_REDRAW_MS = 150; // decoupled from poll rate, so the window slides smoothly regardless
+/// Redraws on its own timer, not per reply, so the window slides smoothly at any poll rate.
+const CHART_REDRAW_MS = 150;
 
 interface RingStats {
   mean: number;
   stable: boolean;
 }
 
-// Mirrors lib/ADS1232/ADS1232.cpp's getRaw() exactly: mean over the whole
-// buffer, "changing" (unstable) if any sample deviates from that mean by
-// more than 0.02% of the mean. Math.trunc, not JS's default float
-// division, to match the firmware's int32_t rawSum / ringBufferSize.
-// Returns null until the buffer actually holds bufferSize samples -- the
-// firmware's own ring buffer never reports a mean/stability verdict on a
-// partially-filled window either, and doing so here would flash a
-// misleadingly confident "stable" after just one or two samples.
+/*
+ * Mirrors ADS1232::getRaw(): the mean over the whole buffer (truncated, like the firmware's
+ * integer division), unstable if any sample is more than 0.02% of the mean away from it.
+ * Null until the buffer is full, as in the firmware, so a "stable" verdict never appears
+ * after just a few samples.
+ */
 function computeRingStats(buffer: number[], bufferSize: number): RingStats | null {
   const n = buffer.length;
   if (n < bufferSize) return null;
@@ -46,9 +46,7 @@ interface CalibrationPoint {
   source: "buffer mean" | "single sample";
 }
 
-// Least-squares fit of weight (g) against raw ADC count -- slope is a
-// candidate calibration_factor (g per raw count), independent of
-// whatever's currently configured on the device.
+/** Least-squares fit of weight against raw count; the slope is a candidate calibration factor in g per count. */
 function linearFit(points: CalibrationPoint[]): { slope: number; intercept: number } | null {
   const n = points.length;
   if (n < 2) return null;
@@ -70,9 +68,7 @@ function linearFit(points: CalibrationPoint[]): { slope: number; intercept: numb
 export default function CalibrationPage() {
   const { status, settings, send, nextRequestId, lastRawRead } = useDeviceSocket();
 
-  // Kept as a draft string, not a number, so an in-progress value like
-  // "0.5" doesn't get clamped/re-parsed (and its leading "0" snapped
-  // back to the fallback) after every single keystroke.
+  // Held as strings so an in-progress entry like "0.5" isn't re-parsed on every keystroke.
   const [pollHzInput, setPollHzInput] = useState("5");
   const pollHz = Math.max(0.1, parseFloat(pollHzInput) || 5);
   const [bufferSizeInput, setBufferSizeInput] = useState("12");
@@ -92,8 +88,7 @@ export default function CalibrationPage() {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const chartRef = useRef<Chart | null>(null);
 
-  // Poll loop -- fires independently of everything else on the socket, at
-  // whatever rate the field below is set to.
+  // Polls at the chosen rate, independently of everything else on the socket.
   useEffect(() => {
     const intervalMs = 1000 / Math.max(0.1, pollHz);
     const id = setInterval(() => {
@@ -102,17 +97,13 @@ export default function CalibrationPage() {
     return () => clearInterval(id);
   }, [pollHz, send, nextRequestId]);
 
-  // A resized ring buffer is a fresh experiment, not a continuation of
-  // the old one -- old samples at the wrong window size would corrupt
-  // the mean/stability computation if kept.
+  // A resized buffer starts over; old samples at the wrong window size would corrupt the statistics.
   useEffect(() => {
     bufferRef.current = [];
     setRingStats(null);
   }, [bufferSize]);
 
-  // Every reply feeds both the ring-buffer replica and the scatter
-  // history. Chart rendering itself is decoupled (see the redraw timer
-  // below) so the plotted window keeps sliding even between replies.
+  // Every reply feeds the ring-buffer replica and the scatter history; drawing is on its own timer.
   useEffect(() => {
     if (!lastRawRead) return;
     const raw = lastRawRead.raw_adc;
@@ -139,7 +130,7 @@ export default function CalibrationPage() {
             label: "Raw ADC",
             data: [],
             borderColor: "transparent",
-            backgroundColor: "#0a84ff",
+            backgroundColor: ACCENT_BLUE,
             pointRadius: 3,
             pointHoverRadius: 4,
             showLine: false,
@@ -150,48 +141,21 @@ export default function CalibrationPage() {
       options: {
         responsive: true,
         animation: false,
-        scales: {
-          x: {
-            type: "linear",
-            title: { display: true, text: "Time (s)", color: "rgba(235, 235, 245, 0.45)" },
-            ticks: { color: "rgba(235, 235, 245, 0.45)" },
-            grid: { color: "rgba(84, 84, 88, 0.2)" },
-            border: { display: false },
-          },
-          y: {
-            type: "linear",
-            title: { display: true, text: "Raw ADC count", color: "rgba(235, 235, 245, 0.45)" },
-            ticks: { color: "rgba(235, 235, 245, 0.45)" },
-            grid: { color: "rgba(84, 84, 88, 0.2)" },
-            border: { display: false },
-          },
-        },
+        scales: { x: linearAxis("Time (s)"), y: linearAxis("Raw ADC count") },
         plugins: {
           legend: { display: false },
-          tooltip: {
-            backgroundColor: "#1c1c1e",
-            titleColor: "rgba(235, 235, 245, 0.6)",
-            bodyColor: "#ffffff",
-            borderColor: "rgba(84, 84, 88, 0.65)",
-            borderWidth: 1,
-            padding: 10,
-            cornerRadius: 8,
-            displayColors: false,
-            callbacks: {
-              label: (item) => `ADC ${(item.parsed.y ?? 0).toFixed(0)}`,
-            },
-          },
+          tooltip: tooltipTheme(
+            { label: (item: { parsed: { y: number | null } }) => `ADC ${(item.parsed.y ?? 0).toFixed(0)}` },
+            false
+          ),
         },
       },
     });
     return () => chartRef.current?.destroy();
   }, []);
 
-  // Redraw on a steady timer, not on each reply -- this is what makes the
-  // window actually *slide* in real time (old points age out visually)
-  // even when the poll rate is slow. No explicit y min/max is set, so
-  // Chart.js re-fits it to whatever's currently in the window on every
-  // update() -- that's the auto-resize.
+  // A steady timer, not per reply, makes the window slide as old points age out. The y axis
+  // has no fixed range, so Chart.js re-fits it to the window on every update.
   useEffect(() => {
     const id = setInterval(() => {
       const chart = chartRef.current;
@@ -295,13 +259,7 @@ export default function CalibrationPage() {
             />
           </div>
         </div>
-        <SelectSettingRow
-          field="speed"
-          label="ADC speed (device setting)"
-          currentValue={settings?.speed ?? null}
-          options={[10, 80]}
-          unit=" SPS"
-        />
+        <SelectSettingRow field="speed" label="ADC speed (device setting)" options={[10, 80]} unit=" SPS" />
         <p className="muted" style={{ fontSize: "0.85em" }}>
           Poll rate and buffer size are purely a frontend experiment -- they never touch the
           device. ADC speed is the one real hardware setting here, written the same way the

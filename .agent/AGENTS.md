@@ -96,7 +96,7 @@ transliterate blindly. Log anything questionable in `ARS.md`.
   is the real target and `target_weight_g` is this offset target, so
   accuracy must be judged against `requested_weight_g`. The main grind
   never lands exactly on the offset target; TOPUP closes whatever gap is
-  left. `TopupModelV1` is a self-tuning per-0.1g-gap-bucket pulse-duration
+  left. `TopupModel` (persisted in `DosingModelState`) is a self-tuning per-0.1g-gap-bucket pulse-duration
   LUT (corrects overshoot faster than it lengthens for undershoot) that
   aims to close the remaining gap in a single pulse; sessions can still
   need several pulses.
@@ -109,6 +109,15 @@ transliterate blindly. Log anything questionable in `ARS.md`.
   sd 0.13g (range -0.20..+0.37g, 50% within 0.1g), so the stop is roughly
   centred on the offset target; the remaining spread is what a tuning
   learner would attack. See `design/topup-model.md` §7.
+
+## Adding a setting
+
+Add the `SettingsSnapshot` member (`lib/Messaging/Messages.h`) and one row in
+`lib/Messaging/SettingsSchema.h` (wire name, NVS key of at most 15 characters, type,
+validator). NVS load/save, live writes and the WebSocket JSON all follow from that row,
+and `pio test -e native` checks the table's invariants. Then add the field to
+`SettingsMessage` in `webapp/src/lib/types.ts` and a control on the Settings page. A
+setting nothing in the firmware reads must not exist.
 
 ## Infrastructure access
 

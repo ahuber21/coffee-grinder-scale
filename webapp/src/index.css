@@ -1,14 +1,9 @@
-/* Deliberately dark-only -- matches the physical device's own ST7735
-   display aesthetic. Not a theme-detection oversight; a kitchen
-   appliance UI has one context (near the machine), not "whatever OS
-   theme the visitor prefers" the way a general web page would.
-
-   Palette/typography follow iOS/macOS system conventions (dark mode
-   system colors, the -apple-system font stack) rather than a bespoke
-   look -- on an Apple device this renders in actual San Francisco with
-   zero font download; elsewhere it falls back to each platform's own
-   native UI font, which is the same trick native-feeling web apps use
-   generally. */
+/*
+ * Dark-only on purpose, to match the device's own display: this is a kitchen appliance used
+ * next to the machine, not a page that should follow the visitor's OS theme.
+ * Colors and the -apple-system font stack follow iOS/macOS conventions, so the UI uses the
+ * platform's native font with no font download.
+ */
 
 :root {
   color-scheme: dark;

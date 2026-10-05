@@ -19,10 +19,7 @@ import type {
 
 export type ConnectionStatus = "connecting" | "open" | "closed";
 
-// How many telemetry messages the Live view's chart can plot before older
-// points fall off -- generous enough for one full grind+topup session at
-// the ~20Hz raw_sample rate design/postgrest-deployment.md describes,
-// without letting a long-idle tab's memory grow unbounded.
+/// Telemetry kept for the Live chart: enough for a full session at ~20Hz, without unbounded growth.
 const TELEMETRY_HISTORY_LIMIT = 2000;
 
 interface DeviceSocketValue {
@@ -30,9 +27,7 @@ interface DeviceSocketValue {
   settings: SettingsMessage | null;
   telemetryHistory: TelemetryMessage[];
   lastError: ErrorMessage | null;
-  // Latest reply only -- Advanced/Calibration page's own polling loop
-  // watches this and accumulates its own local sample history from it;
-  // there's no reason for every other page to carry that stream too.
+  /** Only the latest reply; the Calibration page accumulates its own history from it. */
   lastRawRead: RawReadMessage | null;
   send: (message: OutboundMessage) => void;
   nextRequestId: () => number;
@@ -63,9 +58,7 @@ export function DeviceSocketProvider({ children }: { children: ReactNode }) {
 
       socket.onclose = () => {
         setStatus("closed");
-        // The device reboots on its own after a WiFi reset/reboot flag, an
-        // OTA update, or just a flaky home-LAN WiFi association -- reconnect
-        // rather than making the user reload the page.
+        // The device reboots after OTA or a WiFi action, so reconnect rather than make the user reload.
         retryTimer = setTimeout(connect, 2000);
       };
 

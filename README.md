@@ -1,10 +1,10 @@
 # coffee-grinder-scale
 
 ESP32 firmware that weighs coffee as it grinds, stops at a target dose,
-then tops up with short pulses to close the gap. Same physical behavior
-as the original project; `main` is a ground-up FreeRTOS rewrite; the original
-firmware is preserved on the `legacy` branch. Full rationale, current status, and design docs live in
-`.agent/` -- start with `.agent/AGENTS.md`.
+then tops up with short pulses to close the gap. `main` is a ground-up
+FreeRTOS rewrite of the original project, which is preserved on the
+`legacy` branch. Rationale, current status and design docs live in
+`.agent/`; start with `.agent/AGENTS.md`.
 
 <img src="https://github.com/ahuber21/coffee-grinder-scale/blob/main/.doc/shot.png" width=300>
 
@@ -29,8 +29,9 @@ Telemetry -- communicating over queues/mailboxes instead of one
 - **Realtime channel**: one WebSocket at `/ws` (typed JSON envelope) --
   what the SPA's Live/Settings tabs actually talk to, and connectable
   directly from any other client.
-- **OTA**: `pio run -t upload -e esp_wroom_02_ota` (espota, no password).
-  Serial: `pio run -t upload -e esp_wroom_02`.
+- **Flashing**: over WiFi with `pio run -t upload -e esp_wroom_02_ota`
+  (the SPA image with `pio run -t uploadfs -e esp_wroom_02_ota`), or over
+  serial with `pio run -t upload -e esp_wroom_02`.
 - **History data** is also queryable directly against PostgREST without
   going through the device at all -- see
   `.agent/design/postgrest-deployment.md`.
@@ -39,11 +40,14 @@ Telemetry -- communicating over queues/mailboxes instead of one
 
 - `lib/*Task/` -- the seven FreeRTOS tasks, one per directory.
 - `lib/Messaging/` -- shared message structs, queues/mailboxes, task config.
-- `lib/DosingModel/` -- the topup/coast/main-grind models, unit-tested
-  (`pio test -e native`).
-- `lib/ADS1232/` -- the vendored load-cell ADC driver, unchanged from the
-  original project (D6).
-- `webapp/` -- the SPA; see `webapp/README.md` to build/develop it.
+- `lib/DosingModel/` -- the main-grind, coast and topup models and the
+  landing learner, unit-tested on the host.
+- `lib/ADS1232/` -- the load-cell ADC driver, a ring-buffered fork of
+  jousis' library.
+- `webapp/` -- the SPA; see `webapp/README.md` to build and develop it.
+- `tools/display_sim/` -- renders the display code on the host, with a
+  golden-frame regression check.
+- `test/` -- host unit tests (`pio test -e native`).
 - `.agent/` -- the rewrite's working docs: `AGENTS.md` (rules),
   `STATUS.md` (current state), `DECISIONS.md` (why), `ARS.md` (findings
   log), `design/` (the design docs this was built from).

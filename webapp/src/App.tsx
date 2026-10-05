@@ -5,11 +5,8 @@ import SettingsPage from "./pages/Settings";
 import HistoryPage from "./pages/History";
 import AdvancedPage from "./pages/Advanced";
 
-// Four top-level tabs, one flat hash router -- no react-router dependency
-// needed for something this small. Advanced carries a second path segment
-// for its own sub-tabs (#/advanced/tare, #/advanced/calibration,
-// #/advanced/model) -- AdvancedPage owns parsing that segment, App only
-// needs to know "advanced" is a top-level tab.
+// Four top-level tabs on a flat hash router. The Advanced tab's own sub-route
+// (#/advanced/tare, ...) is parsed by AdvancedPage.
 type Tab = "live" | "settings" | "history" | "advanced";
 
 function tabFromHash(hash: string): Tab {

@@ -1,7 +1,5 @@
-// The browser queries PostgREST directly, bypassing the device -- these
-// mirror the v2 schema's tables (only the columns this page actually
-// reads). CORS is open (Access-Control-Allow-Origin: *) so no
-// proxy/device involvement is needed.
+// The browser queries PostgREST directly, not through the device. These types mirror the v2
+// schema's tables, limited to the columns the pages read.
 import { postgrestBase } from "./config";
 
 export interface Session {
@@ -12,9 +10,7 @@ export interface Session {
   requested_weight_g: number;
   target_weight_g: number;
   final_weight_g: number | null;
-  // Owner-entered independent reference-scale reading, separate from the
-  // grinder's own load cell -- see AR-073 in .agent/ARS.md. Null until
-  // entered from the History tab.
+  /** An independent reference-scale reading entered by hand from the History tab; null until then. */
   reference_weight_g: number | null;
   outcome: "in_progress" | "completed" | "aborted" | "timed_out";
   grind_setting: string | null;
@@ -59,9 +55,7 @@ export function fetchRecentSessions(limit = 50): Promise<Session[]> {
   );
 }
 
-// PATCH-only column (see 003_reference_weight.sql) -- postgrest_anon has
-// no INSERT grant on it, matching every other "entered after the row
-// already exists" field on this table.
+/** Sets the reference weight. The column is PATCH-only: the anonymous role has no INSERT grant on it. */
 export async function patchReferenceWeight(
   sessionId: string,
   referenceWeightG: number | null
@@ -81,13 +75,10 @@ export interface DoseOutcome {
   final_weight_g: number;
 }
 
-// Only completed sessions with a recorded final weight -- everything this
-// histogram needs, for a given fixed target-dose mode (single/double), and
-// a much larger sample than the "recent sessions" table needs to show.
-// Deltas here must use requested_weight_g, not target_weight_g -- the
-// latter is the margin-corrected internal MAIN_GRIND stop threshold
-// (requested minus top_up_margin_single/double), not what was actually
-// asked for; TOPUP's whole job is closing that margin back up.
+/**
+ * Completed sessions with a final weight, for one dose mode. Errors must be taken against
+ * requested_weight_g: target_weight_g is the margin-corrected stop target, which topup closes.
+ */
 export function fetchCompletedDosesForMode(
   mode: "single" | "double",
   limit = 500
@@ -103,11 +94,10 @@ export interface LandingOutcome {
   target_weight_g: number;
 }
 
-// Main-grind landing: the settled weight right after the main grind, before
-// any topup, against the margin-offset stop target (target_weight_g -- the
-// value the grind actually aims for, unlike the requested weight). Only
-// sessions that recorded a settled weight exist here, i.e. grinds on the
-// landing-learner firmware or later (see 005_landing_stats.sql).
+/**
+ * The settled weight right after the main grind, before any topup, against the stop target
+ * (target_weight_g). Only sessions that recorded a settled weight appear.
+ */
 export function fetchLandingForMode(
   mode: "single" | "double",
   limit = 500
@@ -136,9 +126,7 @@ export interface TareDebugSample {
   created_at: string;
 }
 
-// One row per dose start (button press or API custom-dose) -- the same
-// physical cup is tared every time, so raw_adc should read consistently
-// session to session if the tare/ADC path is behaved.
+/** One row per dose start; the same cup is tared every time, so raw_adc should repeat across sessions. */
 export function fetchTareDebugSamples(limit = 2000): Promise<TareDebugSample[]> {
   return get<TareDebugSample[]>(
     `/tare_debug?order=created_at.asc&limit=${limit}&select=raw_adc,grams,created_at`

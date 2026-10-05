@@ -7,15 +7,12 @@ import {
   Tooltip,
   Legend,
 } from "chart.js";
+import { ACCENT_BLUE, legendLabels, linearAxis, tooltipTheme } from "../../lib/chartTheme";
 import { fetchTareDebugSamples, type TareDebugSample } from "../../lib/postgrest";
+import { mean, sampleStdDev } from "../../lib/stats";
 
 Chart.register(BarController, BarElement, LinearScale, Tooltip, Legend);
 
-const ACCENT = "#0a84ff";
-
-function fmt(n: number, digits = 1): string {
-  return n.toFixed(digits);
-}
 
 interface Stats {
   n: number;
@@ -27,13 +24,10 @@ interface Stats {
 }
 
 function computeStats(values: number[]): Stats | null {
-  const n = values.length;
-  if (n === 0) return null;
-  const mean = values.reduce((a, b) => a + b, 0) / n;
-  const variance = n > 1 ? values.reduce((a, b) => a + (b - mean) ** 2, 0) / (n - 1) : 0;
+  if (values.length === 0) return null;
   const min = Math.min(...values);
   const max = Math.max(...values);
-  return { n, mean, sd: Math.sqrt(variance), min, max, range: max - min };
+  return { n: values.length, mean: mean(values), sd: sampleStdDev(values), min, max, range: max - min };
 }
 
 interface Bucket {
@@ -42,8 +36,7 @@ interface Bucket {
   count: number;
 }
 
-// Bin count/width both come from the data itself -- raw ADC counts have no
-// natural fixed range the way a bounded delta-from-target does.
+/** Bins the values; bin count and width come from the data, as raw ADC counts have no natural range. */
 function computeBuckets(values: number[]): Bucket[] | null {
   const n = values.length;
   if (n < 2) return null;
@@ -79,7 +72,7 @@ function TareHistogram({ buckets }: { buckets: Bucket[] }) {
           {
             label: `raw_adc (n=${buckets.reduce((a, b) => a + b.count, 0)})`,
             data: buckets.map((b) => ({ x: (b.lower + b.upper) / 2, y: b.count })),
-            backgroundColor: `${ACCENT}99`,
+            backgroundColor: `${ACCENT_BLUE}99`,
             borderWidth: 0,
             borderRadius: { topLeft: 3, topRight: 3, bottomLeft: 0, bottomRight: 0 },
             borderSkipped: false,
@@ -91,38 +84,14 @@ function TareHistogram({ buckets }: { buckets: Bucket[] }) {
         responsive: true,
         animation: false,
         scales: {
-          x: {
-            type: "linear",
-            title: { display: true, text: "Raw ADC count", color: "rgba(235, 235, 245, 0.45)" },
-            ticks: { color: "rgba(235, 235, 245, 0.45)" },
-            grid: { color: "rgba(84, 84, 88, 0.2)" },
-            border: { display: false },
-          },
-          y: {
-            type: "linear",
-            beginAtZero: true,
-            title: { display: true, text: "Count", color: "rgba(235, 235, 245, 0.45)" },
-            ticks: { color: "rgba(235, 235, 245, 0.45)" },
-            grid: { color: "rgba(84, 84, 88, 0.2)" },
-            border: { display: false },
-          },
+          x: linearAxis("Raw ADC count"),
+          y: linearAxis("Count", { beginAtZero: true }),
         },
         plugins: {
-          legend: {
-            labels: { color: "rgba(235, 235, 245, 0.75)", boxWidth: 14, boxHeight: 10 },
-          },
-          tooltip: {
-            backgroundColor: "#1c1c1e",
-            titleColor: "rgba(235, 235, 245, 0.6)",
-            bodyColor: "#ffffff",
-            borderColor: "rgba(84, 84, 88, 0.65)",
-            borderWidth: 1,
-            padding: 10,
-            cornerRadius: 8,
-            callbacks: {
-              title: (items) => `ADC ${(items[0]?.parsed.x ?? 0).toFixed(0)}`,
-            },
-          },
+          legend: legendLabels(14, { boxHeight: 10 }),
+          tooltip: tooltipTheme({
+            title: (items: { parsed: { x: number | null } }[]) => `ADC ${(items[0]?.parsed.x ?? 0).toFixed(0)}`,
+          }),
         },
       },
     });
@@ -146,12 +115,8 @@ export default function TareCalibrationPage() {
 
   const allRawAdc = useMemo(() => samples?.map((s) => s.raw_adc) ?? [], [samples]);
 
-  // A field left empty means "no bound on this side"; a field with text
-  // that doesn't parse is a mistake, not "no bound" -- flagged separately
-  // below rather than silently falling back to unfiltered data (which
-  // would look identical to a correctly-applied filter) or to an always-
-  // empty result (Number.NaN compares false against everything, which
-  // would look identical to "nothing in range").
+  // An empty field means no bound on that side. Text that doesn't parse is flagged instead of
+  // silently showing unfiltered data or an always-empty result (NaN compares false to everything).
   const minParsed = minFilter === "" ? null : Number(minFilter);
   const maxParsed = maxFilter === "" ? null : Number(maxFilter);
   const minInvalid = minParsed !== null && !Number.isFinite(minParsed);
@@ -222,9 +187,9 @@ export default function TareCalibrationPage() {
         )}
         {stats && (
           <p>
-            <strong>{stats.n}</strong> doses · mean <strong>{fmt(stats.mean)}</strong> · sd{" "}
-            <strong>{fmt(stats.sd)}</strong> · min <strong>{fmt(stats.min)}</strong> · max{" "}
-            <strong>{fmt(stats.max)}</strong> · range <strong>{fmt(stats.range)}</strong>
+            <strong>{stats.n}</strong> doses · mean <strong>{stats.mean.toFixed(1)}</strong> · sd{" "}
+            <strong>{stats.sd.toFixed(1)}</strong> · min <strong>{stats.min.toFixed(1)}</strong> · max{" "}
+            <strong>{stats.max.toFixed(1)}</strong> · range <strong>{stats.range.toFixed(1)}</strong>
           </p>
         )}
         {samples && samples.length > 0 && rawAdc.length === 0 && (
@@ -250,7 +215,7 @@ export default function TareCalibrationPage() {
                     {filledBuckets.map((b) => (
                       <tr key={b.lower}>
                         <td>
-                          ({fmt(b.lower, 0)}, {fmt(b.upper, 0)}]
+                          ({b.lower.toFixed(0)}, {b.upper.toFixed(0)}]
                         </td>
                         <td>{b.count}</td>
                       </tr>

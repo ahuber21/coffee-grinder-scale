@@ -1,15 +1,23 @@
 # Eureka SPA
 
-The web app served from the ESP32's LittleFS partition. Replaces the
-old PROGMEM `/console` page and the local-only `dev/graph`/`dev/settings`
-mocks with one real app talking to the device's consolidated `/ws`
-channel (NetworkTask.cpp) and, for history/analytics, directly to
-PostgREST — never through the device.
+The web app served from the ESP32's LittleFS partition. It talks to the
+device over the single `/ws` WebSocket (`lib/NetworkTask`) and, for history
+and analytics, directly to PostgREST, never through the device.
 
-React + TypeScript + Vite, no CSS framework (plain CSS matching the old
-mock pages' dark/monospace aesthetic — see `src/index.css`'s comment for
-why this stays dark-only rather than theme-aware). See
-`.agent/DECISIONS.md` for the full framework rationale.
+React, TypeScript and Vite, with plain CSS in a dark-only style that matches
+the device's own display (see `src/index.css`).
+
+## Layout
+
+- `src/pages/` -- one file per tab: Live, Settings, History, Advanced (with
+  its Tare, Calibration and Model sub-pages).
+- `src/components/` -- shared pieces: the settings rows and the error histogram.
+- `src/lib/` -- the WebSocket context, the wire types, the PostgREST client and
+  the shared chart styling.
+
+The wire types in `src/lib/types.ts` mirror `lib/NetworkTask/NetworkTask.cpp`
+by hand. A new setting needs a row in `lib/Messaging/SettingsSchema.h`, a field
+on `SettingsMessage`, and a control on the Settings page.
 
 ## Develop
 
@@ -18,10 +26,8 @@ npm install
 npm run dev
 ```
 
-By default the dev server assumes it's running *on* the device's own
-origin (`window.location.host`), which is wrong when you're iterating with
-`npm run dev` on a laptop against a real device on the LAN. Point it at
-the device with a `.env.local` (gitignored):
+The dev server assumes it runs on the device's own origin. To work against a
+device on the LAN, set it in the gitignored `.env.local`:
 
 ```
 VITE_DEVICE_HOST=eureka.local
@@ -33,24 +39,14 @@ VITE_DEVICE_HOST=eureka.local
 npm run build
 ```
 
-Outputs to `dist/`, which `platformio.ini`'s `data_dir` points at — from
-the firmware repo root:
+writes `dist/`, which `platformio.ini`'s `data_dir` points at. From the
+repository root, `pio run -t uploadfs -e esp_wroom_02_ota` builds the
+LittleFS image and flashes it over WiFi.
 
-```
-pio run -t buildfs -e esp_wroom_02
-```
+## Known gaps
 
-builds the LittleFS image locally. **Do not run `pio run -t uploadfs`** —
-flashing the physical device is the owner's call only (see `.agent/AGENTS.md`).
-
-## Known gaps (see `.agent/ARS.md`)
-
-- Only 8 of `SettingsSnapshot`'s fields have a write path at all
-  (`SettingsFieldId` in `lib/Messaging/Messages.h`) — ADC gain/speed/
-  read_samples and the various timeout fields aren't editable from this UI
-  yet because the firmware doesn't accept writes for them.
-- The Live page's chart is only as granular as the session-level telemetry
-  events DosingTask currently emits (target/progress/topup_pulse/finalize/
-  complete) — `RAW_SAMPLE` telemetry isn't emitted yet, so there's no
-  ~20Hz live curve, just the handful of points per session that already
-  exist.
+- The firmware does not emit `RAW_SAMPLE` telemetry yet, so the Live chart has
+  only the handful of points each session already produces and the History
+  session chart stays empty.
+- API doses are recorded as `single`, so they appear in the single-dose
+  histograms.

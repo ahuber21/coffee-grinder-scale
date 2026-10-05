@@ -1,264 +1,27 @@
-import { useEffect, useRef, useState } from "react";
+import { useState } from "react";
+import {
+  ArmedActionButton,
+  NumberSettingRow,
+  SelectSettingRow,
+  SliderSettingRow,
+  ToggleSettingRow,
+} from "../components/SettingRows";
 import { useDeviceSocket } from "../lib/DeviceSocketContext";
-import type { WritableSettingsField } from "../lib/types";
 
-interface NumberFieldProps {
-  field: WritableSettingsField;
-  label: string;
-  currentValue: number | null;
-  step: string;
-  unit?: string;
-  // Widens the input so a long value (e.g. calibration_factor_x1e6's
-  // ~10 significant digits) isn't clipped behind the default 8em width
-  // while the user is still typing it.
-  wide?: boolean;
-}
-
-function NumberSettingRow({ field, label, currentValue, step, unit, wide }: NumberFieldProps) {
-  const { send, nextRequestId } = useDeviceSocket();
-  const [draft, setDraft] = useState("");
-
-  function submit() {
-    const value = parseFloat(draft);
-    if (!Number.isFinite(value)) return;
-    send({ type: "settings_write", field, value, request_id: nextRequestId() });
-    setDraft("");
-  }
-
-  return (
-    <div className="setting-row">
-      <div className="label">{label}</div>
-      <div style={{ display: "flex", alignItems: "center" }}>
-        <span className="current">
-          {currentValue !== null ? `${currentValue}${unit ?? ""}` : "not reported yet"}
-        </span>
-        <input
-          type="number"
-          step={step}
-          style={wide ? { width: "12em" } : undefined}
-          placeholder={currentValue !== null ? String(currentValue) : "new value"}
-          value={draft}
-          onChange={(e) => setDraft(e.target.value)}
-          onKeyDown={(e) => e.key === "Enter" && submit()}
-        />
-        <button style={{ marginLeft: "0.5em" }} onClick={submit} disabled={draft === ""}>
-          Set
-        </button>
-      </div>
-    </div>
-  );
-}
-
-interface SelectFieldProps {
-  field: WritableSettingsField;
-  label: string;
-  currentValue: number | null;
-  options: number[];
-  unit?: string;
-}
-
-// For the ADS1232 driver's hardware-fixed choices (gain, speed) where any
-// other value is meaningless -- a free-typed number invites a rejected
-// write. Exported: the Advanced/Calibration page reuses this for its own
-// live SPS toggle rather than duplicating the write-request plumbing.
-export function SelectSettingRow({ field, label, currentValue, options, unit }: SelectFieldProps) {
-  const { send, nextRequestId } = useDeviceSocket();
-
-  return (
-    <div className="setting-row">
-      <div className="label">{label}</div>
-      <div style={{ display: "flex", alignItems: "center" }}>
-        <span className="current">
-          {currentValue !== null ? `${currentValue}${unit ?? ""}` : "not reported yet"}
-        </span>
-        <select
-          value={currentValue ?? ""}
-          onChange={(e) => {
-            const value = parseInt(e.target.value, 10);
-            if (!Number.isFinite(value)) return;
-            send({ type: "settings_write", field, value, request_id: nextRequestId() });
-          }}
-        >
-          {currentValue === null && <option value="">--</option>}
-          {options.map((opt) => (
-            <option key={opt} value={opt}>
-              {opt}
-              {unit ?? ""}
-            </option>
-          ))}
-        </select>
-      </div>
-    </div>
-  );
-}
-
-interface ToggleFieldProps {
-  field: WritableSettingsField;
-  label: string;
-  currentValue: boolean | null;
-}
-
-// The firmware only accepts a JSON boolean for flag fields, so this sends
-// true/false rather than the 0/1 SelectSettingRow would.
-function ToggleSettingRow({ field, label, currentValue }: ToggleFieldProps) {
-  const { send, nextRequestId } = useDeviceSocket();
-
-  return (
-    <div className="setting-row">
-      <div className="label">{label}</div>
-      <div style={{ display: "flex", alignItems: "center" }}>
-        <span className="current">
-          {currentValue === null ? "not reported yet" : currentValue ? "on" : "off"}
-        </span>
-        <input
-          type="checkbox"
-          checked={currentValue ?? false}
-          disabled={currentValue === null}
-          onChange={(e) =>
-            send({
-              type: "settings_write",
-              field,
-              value: e.target.checked,
-              request_id: nextRequestId(),
-            })
-          }
-        />
-      </div>
-    </div>
-  );
-}
-
-interface SliderFieldProps {
-  field: WritableSettingsField;
-  label: string;
-  currentValue: number | null;
-  min: number;
-  max: number;
-  step: number;
-  unit?: string;
-}
-
-// For a value meant to be dialed in by eye against the live device (the
-// falling-clumps animation's density/gravity) rather than typed and
-// submitted -- dragging updates the on-screen number immediately, but the
-// actual write is debounced so mid-drag doesn't flood the device's
-// settings-write queue (depth 4) or force an NVS flash write on every
-// intermediate tick; only the value the user actually settles on gets
-// persisted.
-function SliderSettingRow({ field, label, currentValue, min, max, step, unit }: SliderFieldProps) {
-  const { send, nextRequestId } = useDeviceSocket();
-  const [draft, setDraft] = useState<number | null>(null);
-  const debounceRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
-
-  useEffect(() => () => clearTimeout(debounceRef.current), []);
-  // Once the device's own settings broadcast catches up (whether it's our
-  // debounced write landing, or someone else's), let it take back over --
-  // otherwise this slider would show a stale local draft forever after the
-  // first drag.
-  useEffect(() => setDraft(null), [currentValue]);
-
-  function onDrag(value: number) {
-    setDraft(value);
-    clearTimeout(debounceRef.current);
-    debounceRef.current = setTimeout(() => {
-      send({ type: "settings_write", field, value, request_id: nextRequestId() });
-    }, 200);
-  }
-
-  const shown = draft ?? currentValue;
-
-  return (
-    <div className="setting-row">
-      <div className="label">{label}</div>
-      <div style={{ display: "flex", alignItems: "center", gap: "0.5em" }}>
-        <input
-          type="range"
-          min={min}
-          max={max}
-          step={step}
-          value={shown ?? min}
-          disabled={currentValue === null}
-          onChange={(e) => onDrag(parseFloat(e.target.value))}
-          style={{ flex: 1 }}
-        />
-        <span className="current" style={{ minWidth: "3.5em", textAlign: "right" }}>
-          {shown !== null ? `${shown}${unit ?? ""}` : "not reported yet"}
-        </span>
-      </div>
-    </div>
-  );
-}
-
-function ArmedActionButton({
-  label,
-  field,
-}: {
-  label: string;
-  field: "wifi_reset_flag" | "wifi_reboot_flag";
-}) {
-  const { send, nextRequestId } = useDeviceSocket();
-  const [armed, setArmed] = useState(false);
-
-  if (!armed) {
-    return (
-      <button className="danger" onClick={() => setArmed(true)}>
-        {label}
-      </button>
-    );
-  }
-  return (
-    <span style={{ display: "inline-flex", gap: "0.5em", alignItems: "center" }}>
-      <span className="muted">Reboots the device -- confirm?</span>
-      <button
-        className="danger"
-        onClick={() => {
-          send({ type: "settings_write", field, value: true, request_id: nextRequestId() });
-          setArmed(false);
-        }}
-      >
-        Confirm
-      </button>
-      <button onClick={() => setArmed(false)}>Cancel</button>
-    </span>
-  );
-}
+const noteStyle = { fontSize: "0.85em" };
 
 export default function SettingsPage() {
-  const { settings, lastError } = useDeviceSocket();
+  const { lastError } = useDeviceSocket();
   const [showAdvanced, setShowAdvanced] = useState(false);
 
   return (
     <>
       <div className="panel">
         <h3>Dosing</h3>
-        <NumberSettingRow
-          field="target_dose_single"
-          label="Target dose (single)"
-          currentValue={settings?.target_dose_single ?? null}
-          step="0.1"
-          unit=" g"
-        />
-        <NumberSettingRow
-          field="target_dose_double"
-          label="Target dose (double)"
-          currentValue={settings?.target_dose_double ?? null}
-          step="0.1"
-          unit=" g"
-        />
-        <NumberSettingRow
-          field="top_up_margin_single"
-          label="Top-up margin (single)"
-          currentValue={settings?.top_up_margin_single ?? null}
-          step="0.01"
-          unit=" g"
-        />
-        <NumberSettingRow
-          field="top_up_margin_double"
-          label="Top-up margin (double)"
-          currentValue={settings?.top_up_margin_double ?? null}
-          step="0.01"
-          unit=" g"
-        />
+        <NumberSettingRow field="target_dose_single" label="Target dose (single)" step="0.1" unit=" g" />
+        <NumberSettingRow field="target_dose_double" label="Target dose (double)" step="0.1" unit=" g" />
+        <NumberSettingRow field="top_up_margin_single" label="Top-up margin (single)" step="0.01" unit=" g" />
+        <NumberSettingRow field="top_up_margin_double" label="Top-up margin (double)" step="0.01" unit=" g" />
       </div>
 
       <div className="panel">
@@ -266,50 +29,27 @@ export default function SettingsPage() {
         <NumberSettingRow
           field="calibration_factor_x1e6"
           label="Calibration factor (×10⁻⁶)"
-          currentValue={settings?.calibration_factor_x1e6 ?? null}
           step="0.000001"
           wide
         />
-        <p className="muted" style={{ fontSize: "0.85em" }}>
-          Shown and set scaled by 1e6 (e.g. 924.583895, not 0.000924583895) -- the true factor
-          has more significant digits than fit in 9 decimal places once its actual magnitude
-          (~1e-4) is accounted for, and JSON over the wire only carries 9. Double-check against
+        <p className="muted" style={noteStyle}>
+          Shown and set scaled by 1e6 (e.g. 924.583895, not 0.000924583895): JSON over the wire
+          carries only 9 decimal places, which would truncate the true factor. Check it against
           a known reference weight before setting it.
         </p>
       </div>
 
       <div className="panel">
         <h3>Input</h3>
-        <NumberSettingRow
-          field="button_debounce_ms"
-          label="Button debounce"
-          currentValue={settings?.button_debounce_ms ?? null}
-          step="10"
-          unit=" ms"
-        />
+        <NumberSettingRow field="button_debounce_ms" label="Button debounce" step="10" unit=" ms" />
       </div>
 
       <div className="panel">
         <h3>Landing learner</h3>
-        <ToggleSettingRow
-          field="landing_learner_enabled"
-          label="Learner active"
-          currentValue={settings?.landing_learner_enabled ?? null}
-        />
-        <NumberSettingRow
-          field="landing_learner_rate"
-          label="Learning rate (per session)"
-          currentValue={settings?.landing_learner_rate ?? null}
-          step="0.01"
-        />
-        <NumberSettingRow
-          field="landing_learner_clamp_ms"
-          label="Stop-time clamp (±)"
-          currentValue={settings?.landing_learner_clamp_ms ?? null}
-          step="50"
-          unit=" ms"
-        />
-        <p className="muted" style={{ fontSize: "0.85em" }}>
+        <ToggleSettingRow field="landing_learner_enabled" label="Learner active" />
+        <NumberSettingRow field="landing_learner_rate" label="Learning rate (per session)" step="0.01" />
+        <NumberSettingRow field="landing_learner_clamp_ms" label="Stop-time clamp (±)" step="50" unit=" ms" />
+        <p className="muted" style={noteStyle}>
           Shifts the main-grind stop so the settled weight lands on the margin-offset target
           (requested dose minus the top-up margin). The clamp bounds how far it can move the
           stop from the unlearned stop time; the rate is the per-session forgetting (0.05 weighs
@@ -320,27 +60,12 @@ export default function SettingsPage() {
 
       <div className="panel">
         <h3>Display animation</h3>
-        <SliderSettingRow
-          field="display_clump_density"
-          label="Pixel density"
-          currentValue={settings?.display_clump_density ?? null}
-          min={0}
-          max={3}
-          step={0.1}
-        />
-        <SliderSettingRow
-          field="display_clump_gravity"
-          label="Gravity"
-          currentValue={settings?.display_clump_gravity ?? null}
-          min={0.1}
-          max={5}
-          step={0.1}
-        />
-        <p className="muted" style={{ fontSize: "0.85em" }}>
-          Tunes the falling-grounds animation on the GRINDING and firmware-update screens --
+        <SliderSettingRow field="display_clump_density" label="Pixel density" min={0} max={3} step={0.1} />
+        <SliderSettingRow field="display_clump_gravity" label="Gravity" min={0.1} max={5} step={0.1} />
+        <p className="muted" style={noteStyle}>
+          Tunes the falling-grounds animation on the GRINDING and firmware-update screens:
           density scales how many pieces fall at once (0 turns the animation off), gravity
-          scales how fast they fall. Drag and watch the device; each change reaches the screen
-          within about a frame.
+          scales how fast they fall. Each change reaches the screen within about a frame.
         </p>
       </div>
 
@@ -360,104 +85,32 @@ export default function SettingsPage() {
         <>
           <div className="panel">
             <h3>ADC (advanced)</h3>
-            <SelectSettingRow
-              field="gain"
-              label="Gain"
-              currentValue={settings?.gain ?? null}
-              options={[1, 2, 64, 128]}
-            />
-            <SelectSettingRow
-              field="speed"
-              label="Speed"
-              currentValue={settings?.speed ?? null}
-              options={[10, 80]}
-              unit=" SPS"
-            />
-            <NumberSettingRow
-              field="read_samples"
-              label="Ring buffer window"
-              currentValue={settings?.read_samples ?? null}
-              step="1"
-              unit=" samples"
-            />
+            <SelectSettingRow field="gain" label="Gain" options={[1, 2, 64, 128]} />
+            <SelectSettingRow field="speed" label="Speed" options={[10, 80]} unit=" SPS" />
+            <NumberSettingRow field="read_samples" label="Ring buffer window" step="1" unit=" samples" />
           </div>
 
           <div className="panel">
-            <h3>Topup model (advanced)</h3>
-            <NumberSettingRow
-              field="min_topup_grams"
-              label="Min top-up pulse"
-              currentValue={settings?.min_topup_grams ?? null}
-              step="0.01"
-              unit=" g"
-            />
+            <h3>Top-up (advanced)</h3>
+            <NumberSettingRow field="min_topup_grams" label="Smallest gap to top up" step="0.01" unit=" g" />
           </div>
 
           <div className="panel">
             <h3>Timeouts (advanced)</h3>
-            <NumberSettingRow
-              field="grinding_timeout_ms"
-              label="Grinding safety timeout"
-              currentValue={settings?.grinding_timeout_ms ?? null}
-              step="100"
-              unit=" ms"
-            />
-            <NumberSettingRow
-              field="topup_timeout_ms"
-              label="Top-up timeout"
-              currentValue={settings?.topup_timeout_ms ?? null}
-              step="100"
-              unit=" ms"
-            />
-            <NumberSettingRow
-              field="finalize_timeout_ms"
-              label="Finalize screen duration"
-              currentValue={settings?.finalize_timeout_ms ?? null}
-              step="100"
-              unit=" ms"
-            />
-            <NumberSettingRow
-              field="confirm_timeout_ms"
-              label="Confirm screen timeout"
-              currentValue={settings?.confirm_timeout_ms ?? null}
-              step="100"
-              unit=" ms"
-            />
-            <NumberSettingRow
-              field="stability_min_wait_ms"
-              label="Stability min wait"
-              currentValue={settings?.stability_min_wait_ms ?? null}
-              step="10"
-              unit=" ms"
-            />
-            <NumberSettingRow
-              field="stability_max_wait_ms"
-              label="Stability max wait"
-              currentValue={settings?.stability_max_wait_ms ?? null}
-              step="10"
-              unit=" ms"
-            />
-            <NumberSettingRow
-              field="screensaver_timeout_s"
-              label="Screensaver idle timeout"
-              currentValue={settings?.screensaver_timeout_s ?? null}
-              step="1"
-              unit=" s"
-            />
+            <NumberSettingRow field="grinding_timeout_ms" label="Grinding safety timeout" step="100" unit=" ms" />
+            <NumberSettingRow field="topup_timeout_ms" label="Top-up timeout" step="100" unit=" ms" />
+            <NumberSettingRow field="finalize_timeout_ms" label="Finalize screen duration" step="100" unit=" ms" />
+            <NumberSettingRow field="confirm_timeout_ms" label="Confirm screen timeout" step="100" unit=" ms" />
+            <NumberSettingRow field="stability_min_wait_ms" label="Stability min wait" step="10" unit=" ms" />
+            <NumberSettingRow field="stability_max_wait_ms" label="Stability max wait" step="10" unit=" ms" />
+            <NumberSettingRow field="screensaver_timeout_s" label="Screensaver idle timeout" step="1" unit=" s" />
             <NumberSettingRow
               field="screensaver_wake_weight_delta_g"
               label="Screensaver wake weight delta"
-              currentValue={settings?.screensaver_wake_weight_delta_g ?? null}
               step="0.1"
               unit=" g"
             />
-            <NumberSettingRow
-              field="button_min_hold_ms"
-              label="Button min hold"
-              currentValue={settings?.button_min_hold_ms ?? null}
-              step="1"
-              unit=" ms"
-            />
+            <NumberSettingRow field="button_min_hold_ms" label="Button min hold" step="1" unit=" ms" />
           </div>
         </>
       )}

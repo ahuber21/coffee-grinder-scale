@@ -10,19 +10,21 @@ import {
   Filler,
   type ChartDataset,
 } from "chart.js";
+import {
+  ACCENT_BLUE,
+  ACCENT_GREEN,
+  legendLabels,
+  linearAxis,
+  tooltipTheme,
+  weightLineDataset,
+} from "../lib/chartTheme";
 import { useDeviceSocket } from "../lib/DeviceSocketContext";
 import type { TelemetryMessage } from "../lib/types";
 
 Chart.register(LineController, LineElement, PointElement, LinearScale, Tooltip, Legend, Filler);
 
-// Sessions are identified by session_id (Messages.h: "assigned by
-// dosing_task at CONFIGURED entry"), not by a dedicated "session started"
-// boolean over the wire -- a "target" event is always the first message of
-// a new session, so that's the reset signal for the chart below.
-//
-// Requires target_grams too, not just grams -- raw_sample also carries
-// grams but has no target_grams field, and every call site below reads
-// both off the narrowed type.
+// A "target" event always opens a new session, which is what resets the chart below.
+// The guard needs target_grams as well as grams, because raw_sample carries grams alone.
 type TelemetryWithTarget = Extract<TelemetryMessage, { grams: number; target_grams: number }>;
 
 function hasTargetGrams(m: TelemetryMessage): m is TelemetryWithTarget {
@@ -95,10 +97,8 @@ export default function LivePage() {
 
   const isComplete = sessionMessages.some((m) => m.type === "complete");
 
-  // Derived purely from which telemetry types this session has seen so
-  // far -- there's no explicit FSM-state message over the wire, but the
-  // message sequence maps 1:1 to it: target opens GRINDING, progress marks
-  // the main grind's stop (entering STOPPING/TOPUP), complete closes it out.
+  // No state message exists, but the event sequence implies it: target opens GRINDING,
+  // progress marks the main grind's stop, and complete closes the session.
   const phase: Phase = useMemo(() => {
     if (currentSessionId === null) return "idle";
     if (isComplete) return "done";
@@ -110,7 +110,7 @@ export default function LivePage() {
     latestGrams !== null && targetGrams !== null && targetGrams > 0
       ? Math.max(0, Math.min(1, latestGrams / targetGrams))
       : 0;
-  const meterColor = lerpHex("#0a84ff", "#30d158", progressFrac);
+  const meterColor = lerpHex(ACCENT_BLUE, ACCENT_GREEN, progressFrac);
 
   const recentLogs = useMemo(
     () => telemetryHistory.filter((m) => m.type === "log").slice(-8),
@@ -122,17 +122,7 @@ export default function LivePage() {
     const dataset: ChartDataset<"line"> = {
       label: "Weight (g)",
       data: [],
-      borderColor: "#0a84ff",
-      backgroundColor: "rgba(10, 132, 255, 0.12)",
-      borderWidth: 2,
-      pointRadius: 0,
-      pointHoverRadius: 4,
-      pointHoverBackgroundColor: "#0a84ff",
-      pointHoverBorderColor: "#0b0b0c",
-      pointHoverBorderWidth: 2,
-      tension: 0.2,
-      fill: "origin",
-      parsing: false,
+      ...weightLineDataset(ACCENT_BLUE, "rgba(10, 132, 255, 0.12)", 0.2),
     };
     const targetDataset: ChartDataset<"line"> = {
       label: "Target",
@@ -152,38 +142,19 @@ export default function LivePage() {
         animation: false,
         interaction: { mode: "index", intersect: false },
         scales: {
-          x: {
-            type: "linear",
-            title: { display: true, text: "Time (s)", color: "rgba(235, 235, 245, 0.45)" },
-            ticks: { color: "rgba(235, 235, 245, 0.45)" },
-            grid: { color: "rgba(84, 84, 88, 0.2)" },
-            border: { display: false },
-          },
-          y: {
-            type: "linear",
-            beginAtZero: true,
-            title: { display: true, text: "Weight (g)", color: "rgba(235, 235, 245, 0.45)" },
-            ticks: { color: "rgba(235, 235, 245, 0.45)" },
-            grid: { color: "rgba(84, 84, 88, 0.2)" },
-            border: { display: false },
-          },
+          x: linearAxis("Time (s)"),
+          y: linearAxis("Weight (g)", { beginAtZero: true }),
         },
         plugins: {
-          legend: { labels: { color: "rgba(235, 235, 245, 0.75)", boxWidth: 14, boxHeight: 2 } },
-          tooltip: {
-            backgroundColor: "#1c1c1e",
-            titleColor: "rgba(235, 235, 245, 0.6)",
-            bodyColor: "#ffffff",
-            borderColor: "rgba(84, 84, 88, 0.65)",
-            borderWidth: 1,
-            padding: 10,
-            cornerRadius: 8,
-            displayColors: false,
-            callbacks: {
-              title: (items) => `t = ${(items[0]?.parsed.x ?? 0).toFixed(2)}s`,
-              label: (item) => `${item.dataset.label}: ${(item.parsed.y ?? 0).toFixed(2)} g`,
+          legend: legendLabels(14, { boxHeight: 2 }),
+          tooltip: tooltipTheme(
+            {
+              title: (items: { parsed: { x: number | null } }[]) => `t = ${(items[0]?.parsed.x ?? 0).toFixed(2)}s`,
+              label: (item: { dataset: { label?: string }; parsed: { y: number | null } }) =>
+                `${item.dataset.label}: ${(item.parsed.y ?? 0).toFixed(2)} g`,
             },
-          },
+            false
+          ),
         },
       },
     });
@@ -206,7 +177,7 @@ export default function LivePage() {
     } else {
       chart.data.datasets[1].data = [];
     }
-    const lineColor = isComplete ? "#30d158" : "#0a84ff";
+    const lineColor = isComplete ? ACCENT_GREEN : ACCENT_BLUE;
     const lineDataset = chart.data.datasets[0] as ChartDataset<"line">;
     lineDataset.borderColor = lineColor;
     lineDataset.backgroundColor = isComplete
@@ -272,9 +243,8 @@ export default function LivePage() {
           </button>
         </div>
         <p className="muted" style={{ fontSize: "0.85em" }}>
-          Same effect as the physical single/double buttons, with a custom
-          target weight -- routed through DosingTask's normal correction
-          logic (mode "api_custom" in the session history).
+          Same effect as the physical buttons, with a custom target weight; the usual top-up
+          margin applies, and the session is recorded as a single dose.
         </p>
       </div>
 
