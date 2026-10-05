@@ -21,7 +21,7 @@
 
 #include <Arduino.h>
 
-// nop takes 2 cycles, plus 4 cycles to fetch next instruction
+// ~100ns of nops: each takes 2 cycles, plus 4 to fetch the next instruction.
 #if defined(F_CPU) && (F_CPU == 80000000L)
 #define DELAY_NS_100           \
   __asm__ __volatile__("nop"); \
@@ -49,68 +49,64 @@ class ADS1232 {
 
   bool begin();
 
-  // 1/2/64/128
+  /** Sets the gain: 1, 2, 64 or 128. Any other value is ignored. */
   void setGain(uint8_t gain);
 
-  // 10 or 80 sps
+  /** Sets the conversion rate: 10 or 80 samples per second. */
   void setSpeed(uint8_t sps);
 
   bool powerOn();
   void powerOff();
 
-  // this is the internal calibration method of the ADC ,
-  // not the calculation of the calFactor
+  /** Runs the ADC's internal offset calibration (not the scale calibration factor). */
   void calibrateADC();
 
-  // tare the scale
+  /** Zeroes the scale at the current reading; true only if that reading was stable. */
   bool tare();
 
-  // this is the number that will help us translate voltage
-  // read from the ADC to units (grams,whatever).
+  /** Sets the factor that converts raw counts to units (grams). */
   void setCalFactor(double cal);
 
+  /** Sets how many samples the ring buffer averages (1 to RING_BUFFER_MAX_SIZE). */
   void setRingBufferSize(uint8_t datasetsize);
 
-  // initialize the ring buffer with values
+  /** Fills the ring buffer with fresh readings. */
   void initRingBuffer();
 
-  // get the raw ADC counts
+  /** Raw ADC counts: the ring buffer's mean, or the latest sample while it is unsettled. */
   int32_t getRaw(bool &isStable);
   int32_t getRaw();
 
-  // return the weight in grams, including calibration and tare
+  /** The weight in grams, including calibration and tare. */
   double getUnits();
 
+  /** Reads a conversion if one is ready, without waiting. */
   void readADCIfReady();
 
  protected:
   void resetBuffer();
 
-  bool isReady();  // checks the DOUT pin
+  bool isReady();  ///< DOUT is low when a conversion is ready.
   bool safeWait(uint32_t waitTime = 2000);
   void readADCWithWait();
-  // gets and returns a single ADC value without any processing
+  /** Shifts in one conversion and stores it in the ring buffer. */
   void readADC();
 
   // ADC pins
-  uint8_t pdwnPin;   // keep HIGH for power on, LOW for power off
-  uint8_t sclkPin;   // not regular SPI, read datasheet
-  uint8_t doutPin;   // not regular SPI, read datasheet
-  uint8_t spdPin;    // LOW = 10SPS , HIGH = 80SPS
-  uint8_t gain1Pin;  // 0|0 = 1 , 0|1 = 2 , 1|0 = 64 , 1|1 = 128
-  uint8_t gain0Pin;  // in our case, anything lower than 128 is not worth it.
-                     // Keep both gain0/gain1 HIGH
-  uint8_t tempPin;   // if HIGH, AINP/AINN can be used to measure temp from
-                     // internal temp diodes (datasheet, page 13)
+  uint8_t pdwnPin;   ///< HIGH = power on, LOW = power off.
+  uint8_t sclkPin;   ///< Not regular SPI; see the datasheet.
+  uint8_t doutPin;   ///< Not regular SPI; see the datasheet.
+  uint8_t spdPin;    ///< LOW = 10 SPS, HIGH = 80 SPS.
+  uint8_t gain1Pin;  ///< With gain0Pin: 0|0 = 1, 0|1 = 2, 1|0 = 64, 1|1 = 128.
+  uint8_t gain0Pin;
 
   // ADC config
   int32_t tareRaw;
-  double calFactor;  // see SettingsSnapshot::calibration_factor for why this isn't float
+  double calFactor;  ///< Double, since a float would lose precision multiplying large raw counts.
 
   // ADC values
-  uint8_t ringBufferIndex;
+  uint8_t ringBufferIndex;  ///< Slot of the most recent sample.
   uint8_t ringBufferSize;
   int32_t ringBuffer[RING_BUFFER_MAX_SIZE];
-  // last filtered units value (grams) for delta limiting
-  float _lastUnitsFiltered = NAN;
+  float _lastUnitsFiltered = NAN;  ///< Previous reading, for glitch rejection in getUnits().
 };

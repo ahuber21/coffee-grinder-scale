@@ -164,8 +164,7 @@ void printShadowed(const char *text, int16_t x, int16_t y) {
 }
 
 // --- Falling-clumps background: GRINDING family + OTA_UPDATE ------------------------
-// Small squares fall into a pile that rises as `frac` climbs; only the changed pile band
-// repaints. Density and speed are live-tunable from the Settings page.
+// Squares fall into a pile that rises with `frac`; density and speed are live-tunable.
 
 namespace clumps {
 constexpr uint8_t kDefaultCount = 14;  ///< Clump count at a density multiplier of 1.0.
