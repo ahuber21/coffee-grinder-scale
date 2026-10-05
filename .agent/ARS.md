@@ -2291,11 +2291,10 @@ Format per entry:
 ### AR-081 — Landing learner: shift the main-grind stop so the settled weight lands on the offset target
 
 - **Area**: lib/DosingModel (`LandingLearner`), DosingTask, SettingsTask, NetworkTask, TelemetryTask, webapp Settings page
-- **Status**: implemented, OTA-deployed (firmware + SPA image) 2026-10-05; DB migration 005 written but NOT yet applied (see below)
+- **Status**: implemented, OTA-deployed (firmware + SPA image) 2026-10-05; DB migration 005 applied the same day
 - **What**: the main grind stops at `requested - margin - coast`; its settled landing had mean +0.08g / sd 0.13g against the offset target (91 sessions, measured from the settled weight, see `design/topup-model.md` §7). `LandingLearner` predicts the landing excess per dose mode from the flow rate at the stop (forgetting-weighted regression, intercept shrunk toward 0, ridge on the slope) and `DosingTask` adds it to the coast term. The result is clamped to +-`landing_learner_clamp_ms` (default 500) around the unlearned stop time.
 - **Training**: only on a genuine (`stable`) settle after a `TIME_ESTIMATE` stop; target is `settled - aim + applied_shift`, so it never trains on its own action. Persisted as its own NVS blob (`land_learner`, own version) so the other models' confidence is untouched; honours `discard_training`.
 - **Knobs** (Settings page): `landing_learner_enabled` (true), `landing_learner_rate` (0.05), `landing_learner_clamp_ms` (500). The margin is unchanged (0.5g); topup is unchanged.
 - **Observability**: each session logs a `LAND` console line (error, applied shift, clamp, n, residual sd) and sends a `landing` WS event / PATCH to `v2.sessions` (`settled_weight_g`, `coast_g`, `training_margin_g`, `learner_correction_g`, `learner_clamped`).
-- **Pending**: run `.agent/design/db-schema/005_landing_stats.sql` as the postgres superuser. Until then the landing PATCH fails (best-effort, harmless) and the columns stay empty; the LAND console line works regardless.
 - **Not done on purpose**: promotion bar, switching to margin 0, removing topup (separate sessions). No asymmetric over/undershoot weighting was added; the margin already carries that bias.
 - **Verified**: `pio test -e native` 31/31 (8 new learner tests), firmware builds (flash 95.1%), webapp typecheck/build. Not yet confirmed on real grinds.

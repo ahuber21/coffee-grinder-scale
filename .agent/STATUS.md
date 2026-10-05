@@ -5,9 +5,8 @@ on-device `LandingLearner` that shifts the main-grind stop by its
 predicted landing excess (clamped to +-500ms around the unlearned stop),
 trained only on settled weights, persisted as its own NVS blob, with
 three Settings-page knobs. Topup and the 0.5g margin are untouched.
-OTA-deployed (firmware and SPA). The logging migration
-`design/db-schema/005_landing_stats.sql` is written but not yet applied;
-until then only the console `LAND` lines carry the landing data. Promotion
+OTA-deployed (firmware and SPA); logging migration
+`design/db-schema/005_landing_stats.sql` applied. Promotion
 bar, margin 0 and topup removal are deferred to later sessions. See AR-081.*
 
 *Last updated: 2026-09-16 (latest) — coupling/code-smell sweep of the
