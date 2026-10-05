@@ -1,5 +1,24 @@
 # Status
 
+*Last updated: 2026-10-05 (audit) -- whole-tree maintainability audit.
+Firmware: `DosingTask`'s 360-line loop split into per-concern handlers;
+`DisplayTask`, `ScaleTask`, `InputTask` and `TelemetryTask` restructured;
+every setting is now described once in `lib/Messaging/SettingsSchema.h`
+(NVS, live writes and the WS JSON all loop over it; the `SettingsFieldId`
+enum is gone) with host tests for its invariants; the persisted
+`TopupModelV1` struct is `DosingModelState`; three settings nothing read
+(`min_topup_runtime_ms`, `min_topup_interval_ms`,
+`rate_calculation_percentage`) were removed end to end; ADS1232 driver
+defects fixed (uninitialized `tareRaw`/gain pins, double-modified ring
+index, zero ring size). Webapp: shared chart theme/stats helpers, settings
+rows that read their own value, History split into components, the missing
+`tare_debug`/`landing` message types added. Display changes are proven
+pixel-identical by `tools/display_sim/check_golden.sh`. Comments follow the
+style guide and carry no ticket references. Verified: 42 host tests,
+firmware build, webapp typecheck/build, golden frames; the SPA was not
+viewed in a browser. Known open items: `RAW_SAMPLE` is plumbed end to end
+but never emitted, and API doses are recorded as `single`.*
+
 *Last updated: 2026-10-05 -- built the landing learner (AR-081): an
 on-device `LandingLearner` that shifts the main-grind stop by its
 predicted landing excess (clamped to +-500ms around the unlearned stop),
