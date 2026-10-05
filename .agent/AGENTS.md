@@ -87,6 +87,26 @@ transliterate blindly. Log anything questionable in `ARS.md`.
   tolerated; **overshoot hard-capped at ≤0.3g** and weighted as more
   critical to avoid than undershoot (undershoot → annoying-but-fine
   topup loop; overshoot → manually discarding ground coffee).
+- **Two-phase dosing (offset target + topup)**: because overshoot is the
+  worse failure, the main grind deliberately aims short. The stop
+  threshold is `g_target_grams_corrected` = requested target minus
+  `top_up_margin_single`/`top_up_margin_double` (currently 0.5g, settings
+  keys `margin_sing`/`margin_dbl`). In `v2.sessions`, `requested_weight_g`
+  is the real target and `target_weight_g` is this offset target, so
+  accuracy must be judged against `requested_weight_g`. The main grind
+  never lands exactly on the offset target; TOPUP closes whatever gap is
+  left. `TopupModelV1` is a self-tuning per-0.1g-gap-bucket pulse-duration
+  LUT (corrects overshoot faster than it lengthens for undershoot) that
+  aims to close the remaining gap in a single pulse; sessions can still
+  need several pulses.
+- **Main-grind landing (measured 2026-10-05, 92 sessions since
+  2026-09-21)**: `v2.events` MAIN_GRIND `weight_after_g` minus
+  `target_weight_g` averages -0.25g (sd 0.066g, range -0.34..-0.05g), so
+  the main grind stops about 0.75g short of the real target, never
+  reaches the offset target, and is tight but biased low. Sessions took
+  0-4 topup pulses (1: 42, 2: 35, 3: 11, 4: 3). Whether topup could be
+  dropped by shrinking the margin is open; see the analysis in
+  `design/topup-model.md` §7.
 
 ## Infrastructure access
 

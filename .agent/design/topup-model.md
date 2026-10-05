@@ -612,3 +612,32 @@ persistence should stop being gated on a websocket client being connected
 (today's `RawDataWebSocket` only reaches Postgres opportunistically) —
 this should fall out naturally once ingestion moves to direct
 PostgREST posting (D8) rather than needing special-casing.
+
+## 7. Could topup be eliminated? Main-grind landing data (2026-10-05)
+
+`v2.events` MAIN_GRIND `weight_after_g` is the settled weight right before
+topup, so landing error against the offset target is reconstructable as
+`weight_after_g - sessions.target_weight_g` (gap left for topup =
+`requested_weight_g - weight_after_g`).
+
+92 completed sessions since 2026-09-21, all stopped by `TIME_ESTIMATE`:
+
+| Quantity | Value |
+|---|---|
+| Landing vs offset target, mean | -0.249g |
+| Landing vs offset target, sd | 0.066g |
+| Landing vs offset target, range | -0.34g .. -0.05g |
+| Gap left for topup | ~0.75g |
+| Topup pulses per session (0/1/2/3/4) | 1 / 42 / 35 / 11 / 3 |
+
+The main grind is precise (sd 0.066g) but biased low by 0.25g beyond the
+intended margin, i.e. the coast compensation over-corrects slightly.
+With the bias removed the spread alone would put roughly 85-90% of sessions
+within 0.1g and nearly all within 0.2g, and an overshoot above 0.3g would
+sit about 4.5 sd out. Topup's own contribution is visible in the final
+error by pulse count: sessions needing more pulses end higher.
+
+Caveats: weights are the firmware's own scale readings (no
+`reference_weight_g` rows), the sd comes from one model-version era and has
+not been split by single/double, and the landing spread includes the
+online model still adapting.
