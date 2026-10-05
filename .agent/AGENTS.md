@@ -99,14 +99,15 @@ transliterate blindly. Log anything questionable in `ARS.md`.
   LUT (corrects overshoot faster than it lengthens for undershoot) that
   aims to close the remaining gap in a single pulse; sessions can still
   need several pulses.
-- **Main-grind landing (measured 2026-10-05, 92 sessions since
-  2026-09-21)**: `v2.events` MAIN_GRIND `weight_after_g` minus
-  `target_weight_g` averages -0.25g (sd 0.066g, range -0.34..-0.05g), so
-  the main grind stops about 0.75g short of the real target, never
-  reaches the offset target, and is tight but biased low. Sessions took
-  0-4 topup pulses (1: 42, 2: 35, 3: 11, 4: 3). Whether topup could be
-  dropped by shrinking the margin is open; see the analysis in
-  `design/topup-model.md` §7.
+- **Main-grind landing (measured 2026-10-05, 91 sessions since
+  2026-09-21)**: measure it from the SETTLED weight, i.e. the first TOPUP
+  event's `weight_before_g`. MAIN_GRIND `weight_after_g` is the reading at
+  the instant the relay turns off, before the coast settles, so it sits
+  ~0.33g below the settled weight (sd 0.12g) and must not be compared to
+  the target. Settled landing minus `target_weight_g` averages +0.08g with
+  sd 0.13g (range -0.20..+0.37g, 50% within 0.1g), so the stop is roughly
+  centred on the offset target; the remaining spread is what a tuning
+  learner would attack. See `design/topup-model.md` §7.
 
 ## Infrastructure access
 

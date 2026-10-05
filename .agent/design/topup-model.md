@@ -613,31 +613,26 @@ persistence should stop being gated on a websocket client being connected
 this should fall out naturally once ingestion moves to direct
 PostgREST posting (D8) rather than needing special-casing.
 
-## 7. Could topup be eliminated? Main-grind landing data (2026-10-05)
+## 7. Main-grind landing: how to measure it (2026-10-05)
 
-`v2.events` MAIN_GRIND `weight_after_g` is the settled weight right before
-topup, so landing error against the offset target is reconstructable as
-`weight_after_g - sessions.target_weight_g` (gap left for topup =
-`requested_weight_g - weight_after_g`).
+MAIN_GRIND `weight_after_g` is captured at relay-off, before the coast
+settles (`sendProgressTelemetry` runs before the `STOPPING` settle wait),
+so it is NOT a landing weight. The settled post-grind weight is the first
+TOPUP event's `weight_before_g` (pulse_index 1); a session with no topup
+pulse has no such row. Coast = settled - relay-off weight, and is not
+persisted directly.
 
-92 completed sessions since 2026-09-21, all stopped by `TIME_ESTIMATE`:
+91 completed sessions since 2026-09-21 with at least one topup pulse:
 
 | Quantity | Value |
 |---|---|
-| Landing vs offset target, mean | -0.249g |
-| Landing vs offset target, sd | 0.066g |
-| Landing vs offset target, range | -0.34g .. -0.05g |
-| Gap left for topup | ~0.75g |
-| Topup pulses per session (0/1/2/3/4) | 1 / 42 / 35 / 11 / 3 |
+| Settled landing vs offset target, mean | +0.084g |
+| Settled landing vs offset target, sd | 0.130g |
+| Settled landing vs offset target, range | -0.20g .. +0.37g |
+| Within 0.1g / within 0.05g of the offset target | 50.5% / 33.0% |
+| Coast (settled - relay-off), mean / sd | 0.333g / 0.122g |
 
-The main grind is precise (sd 0.066g) but biased low by 0.25g beyond the
-intended margin, i.e. the coast compensation over-corrects slightly.
-With the bias removed the spread alone would put roughly 85-90% of sessions
-within 0.1g and nearly all within 0.2g, and an overshoot above 0.3g would
-sit about 4.5 sd out. Topup's own contribution is visible in the final
-error by pulse count: sessions needing more pulses end higher.
-
-Caveats: weights are the firmware's own scale readings (no
-`reference_weight_g` rows), the sd comes from one model-version era and has
-not been split by single/double, and the landing spread includes the
-online model still adapting.
+Single and double behave alike (landing +0.07g / +0.10g, sd about 0.13g).
+The stop is roughly centred; the spread (sd 0.13g, mostly coast variation)
+is what a tuning learner has to reduce. Weights are the firmware's own
+scale readings, with no independent reference.
