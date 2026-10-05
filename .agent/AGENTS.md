@@ -11,8 +11,9 @@ A full rewrite of the firmware for a smart coffee-grinder scale (ESP32 +
 load cell, controls a Eureka Mignon grinder by weight, tops up to hit a
 target dose). The existing codebase grew organically — started hand-written,
 increasingly LLM-authored over time — and is being rewritten from scratch on
-a new branch (`rewrite/rtos-fork`) as effectively a permanent fork of
-`main`. It will likely never merge back.
+a new branch (originally `rewrite/rtos-fork`, now `main`); the original
+code lives on as `legacy`, a permanent fork point that will likely never
+merge back.
 
 The owner (Andreas) wants this to be a **showcase of embedded ESP32 best
 practices** — code he can read and learn from, not just code that works.

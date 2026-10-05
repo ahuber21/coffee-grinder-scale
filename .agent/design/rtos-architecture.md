@@ -1,6 +1,6 @@
 # FreeRTOS task/queue architecture — design proposal
 
-Status: design proposal, no implementation. Target: `rewrite/rtos-fork`,
+Status: design proposal, no implementation. Target: `main` (formerly `rewrite/rtos-fork`),
 Arduino-ESP32 (D2 — explicit FreeRTOS tasks, not a framework switch).
 Read against `.agent/AGENTS.md`, `.agent/DECISIONS.md` (D2, D4, D6, D7),
 `.agent/ARS.md` (all entries, esp. AR-001/007/008/009/011/012/013/014/016/021),

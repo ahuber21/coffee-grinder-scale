@@ -173,7 +173,7 @@ summary.*
 ## Where things stand
 
 Planning and design are done; implementation is underway. Branch
-`rewrite/rtos-fork`. Standing rules in `AGENTS.md`, full decision log in
+`main` (the original code is on `legacy`). Standing rules in `AGENTS.md`, full decision log in
 `DECISIONS.md` (D1-D23), all findings in `ARS.md` (AR-001-072, all
 resolved or non-blocking), design docs in `.agent/design/`.
 

@@ -316,7 +316,7 @@ The fix keeps the "adapts over time" property D7 wanted but drops the
 single-formula assumption: `TopupModelV1` v3 stores one tuned pulse
 duration per 0.1g-wide remaining-gap bucket (0.0-1.0g, 10 buckets --
 recovered the pre-rewrite firmware's exact bucket-boundary scheme from
-`git show main:src/main.cpp`, since its manually-tuned values were
+`git show legacy:src/main.cpp`, since its manually-tuned values were
 never in source control, only ever the live device's own EEPROM/NVS),
 each nudged by an online rule (asymmetric: corrects overshoot faster
 than it grows duration for undershoot) from real pulses. This is

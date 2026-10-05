@@ -2,9 +2,8 @@
 
 ESP32 firmware that weighs coffee as it grinds, stops at a target dose,
 then tops up with short pulses to close the gap. Same physical behavior
-as the original project; this branch (`rewrite/rtos-fork`) is a ground-up
-FreeRTOS rewrite, kept as a permanent fork rather than merged back to
-`main`. Full rationale, current status, and design docs live in
+as the original project; `main` is a ground-up FreeRTOS rewrite; the original
+firmware is preserved on the `legacy` branch. Full rationale, current status, and design docs live in
 `.agent/` -- start with `.agent/AGENTS.md`.
 
 <img src="https://github.com/ahuber21/coffee-grinder-scale/blob/main/.doc/shot.png" width=300>

@@ -1010,7 +1010,7 @@ Format per entry:
 - **Status**: fixed
 - **Found**: 2026-09-11, live: pressing LEFT/RIGHT/BACK produced no
   state change. AR-040's debounce logging showed presses never
-  reaching the "accepted" branch. Reading `git show main:src/main.cpp`
+  reaching the "accepted" branch. Reading `git show legacy:src/main.cpp`
   showed the real hardware wiring: LEFT/RIGHT are `INPUT_PULLUP` +
   `FALLING` (active-low), BACK is `INPUT_PULLDOWN` + `RISING`
   (active-high) -- asymmetric by hardware design, not a uniform
@@ -1395,7 +1395,7 @@ Format per entry:
 - **Resolution**: replaced `TopupModel`'s single fitted line with a
   10-bucket (0.1g-wide, 0.0-1.0g) self-tuning lookup table of pulse
   durations -- closer to the pre-rewrite firmware's hand-tuned 6-bucket
-  table (recovered from `git show main:src/main.cpp`), but updated from
+  table (recovered from `git show legacy:src/main.cpp`), but updated from
   real pulses instead of by hand. Each bucket aims for 85% of its own
   upper bound (leaving slack for a smaller-bucket pulse to close the
   remainder) and is nudged by an online rule that corrects overshoot
