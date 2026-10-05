@@ -1,10 +1,9 @@
 #pragma once
 
 /**
- * Message-shape definitions shared by the FreeRTOS tasks. Every struct
- * here is plain, self-contained, and safe to copy across task
- * boundaries by value -- that is what makes both the queue and mailbox
- * patterns in Queues.h safe without additional locking.
+ * Message shapes shared by the FreeRTOS tasks. Every struct here is
+ * plain and self-contained, so it can be copied across task boundaries
+ * by value, which keeps the queue and mailbox patterns in Queues.h lock-free.
  */
 
 #ifdef ARDUINO
@@ -41,12 +40,10 @@ struct ScaleSample {
 };
 
 /**
- * Dosing task's session FSM state and Display task's render mode --
- * one enum for both, since every FSM state maps to exactly one display
- * layout and a second parallel enum would just be duplication that
- * could silently drift out of sync. OTA_UPDATE is the one value Dosing
- * task never assigns; only Network task sets it, while an OTA flash is
- * in progress.
+ * Dosing task's session FSM state and Display task's render mode. One
+ * enum serves both because every state maps to exactly one layout.
+ * OTA_UPDATE is never assigned by Dosing task; Network task sets it
+ * during an OTA flash.
  */
 enum class DisplayMode : uint8_t {
   BOOT,
@@ -94,14 +91,8 @@ enum class TelemetryType : uint8_t {
   COMPLETE,
   LOG_LINE,
   MODEL_STATE,
-  // Debug-only: the tare baseline's raw ADC count and converted grams, one
-  // per session, so the same physical dosing cup's tare can be checked for
-  // consistency across sessions -- not a calibration input, just stats.
-  // See .agent/design/db-schema/002_tare_debug_stats.sql.
-  TARE_DEBUG,
-  // Main-grind landing measurements, once per session, after the post-grind
-  // settle -- see .agent/design/db-schema/005_landing_stats.sql.
-  LANDING,
+  TARE_DEBUG,  ///< The tare baseline, one per session, for checking tare consistency across sessions.
+  LANDING,     ///< Main-grind landing measurements, once per session after the post-grind settle.
 };
 
 /** Which of GRINDING's three stop conditions actually fired -- PROGRESS only. */
@@ -123,58 +114,32 @@ struct TelemetryEvent {
   bool stable;
   char log_line[96];  ///< LOG_LINE only.
   /*
-   * TARGET only, so Telemetry task can populate PostgREST's session
-   * row without a second round trip back to Dosing task. is_double
-   * mirrors whether this session is a double dose; target_grams_corrected
-   * is the coast/margin-corrected stop target Dosing task actually aims
-   * for internally -- target_grams above stays the requested,
-   * uncorrected value the user or caller asked for.
+   * TARGET only: whether this is a double dose, and the margin-corrected
+   * stop target Dosing aims for (target_grams stays the requested dose).
    */
   bool is_double;
   float target_grams_corrected;
 
-  /*
-   * PROGRESS only -- what a completed session's own final_weight_g can
-   * never reveal after the fact: which stop condition actually fired,
-   * and MainGrindModel's plausibility-protected weight estimate (delta
-   * space, matching `grams` above) at that exact instant. See AR-074.
-   */
+  /// PROGRESS only: which stop condition fired, and the model's weight estimate then (delta space).
   GrindStopReason stop_reason;
   float weight_estimate_g;
 
-  /*
-   * TOPUP_PULSE only -- this specific pulse's own inputs, captured at
-   * fire time. Not reconstructable after the fact the way gap_at_fire_g
-   * is (from weight_before_g/target_grams): topup_commanded_duration_ms
-   * reflects TopupModel's online-learned per-bucket duration at that
-   * exact moment, which keeps changing as later pulses retrain it. See
-   * AR-074.
-   */
+  /// TOPUP_PULSE only: the pulse's inputs at fire time, which later retuning makes unrecoverable.
   uint8_t topup_bucket;
   float topup_aim_weight_g;
   uint32_t topup_commanded_duration_ms;
 
-  /*
-   * MODEL_STATE only -- lib/DosingModel's current persisted parameters
-   * (standard deviations, not raw precisions, since that's what a
-   * reader actually wants), sent once at boot and again after every
-   * completed session. Powers the SPA's "how does this work" view.
-   */
+  /// MODEL_STATE only: the persisted model parameters as standard deviations, sent at boot and after each session.
   float rate_hat_g_s;
   float rate_sd_g_s;
   float coast_weight_g;
   float coast_weight_sd_g;
   uint32_t rate_n_effective;
-  /// Per-gap-bucket tuned pulse duration/observation count -- see
-  /// kTopupLutBuckets/kTopupLutBucketWidthG in DosingModel.h.
+  /// Per-gap-bucket tuned pulse duration and observation count (see kTopupLutBuckets).
   float topup_lut_duration_ms[kTopupLutBuckets];
   uint32_t topup_lut_n[kTopupLutBuckets];
 
-  /*
-   * LANDING only (settled weight itself travels in `grams`, delta space):
-   * the coast that settled in after relay-off, the margin this session
-   * aimed short by, and what the landing learner did to the stop point.
-   */
+  /// LANDING only (the settled weight itself travels in `grams`): coast, margin and learner shift.
   float landing_coast_g;
   float landing_margin_g;
   float landing_correction_g;  ///< Applied stop-point shift, positive = stopped earlier.
@@ -188,65 +153,42 @@ constexpr float kMaxDoseGrams = 50.0f;
 struct DoseRequest {
   float requested_grams;
   uint32_t request_id;
-  // Runs the dose normally, but the session's model updates (main-grind
-  // rate, topup LUT, coast) never reach NVS or this boot's in-RAM models --
-  // for dev-time doses (a placed test weight, a deliberately abnormal
-  // grind) that would otherwise poison the estimates every real dose
-  // relies on.
+  /// Runs the dose normally but discards its model updates, for test doses that would skew the estimates.
   bool discard_training;
 };
 
 /**
- * An explicit hardware re-tare request, sent from Dosing task to Scale
- * task once the confirm button is pressed -- guarantees every dose starts
- * from a freshly-zeroed ADC baseline rather than whatever the last
- * opportunistic idle auto-tare happened to leave behind (up to
- * kAutoTareMinIntervalMs/kAutoTareIdleReturnCooldownMs stale). No payload
- * needed; the request itself is the whole message.
+ * A hardware re-tare request from Dosing task to Scale task, so every
+ * dose starts from a fresh zero instead of a possibly stale idle auto-tare.
+ * The request itself is the whole message.
  */
 struct TareRequest {};
 
 /**
- * Scale task's reply to a TareRequest, sent once the retry loop either
- * settles or gives up. `ok == false` means no trustworthy zero point was
- * found within the bounded retry window -- Dosing task must abort the
- * dose rather than start it from an unsettled (or stale) baseline; a
- * dose that never had a valid tare is not a valid run.
+ * Scale task's reply to a TareRequest. `ok == false` means no stable zero
+ * was found in time, and Dosing task must abort the dose.
  */
 struct TareResult {
   bool ok;
 };
 
 /**
- * The single source of truth for tunable settings, distributed to
- * every task via one overwrite mailbox per subscriber. Persisted via
- * the write-through path below rather than a dirty flag, and carries
- * no static topup lookup table -- lib/DosingModel's fitted models
- * cover that entirely.
+ * The single source of truth for tunable settings, distributed to every
+ * task through one overwrite mailbox per subscriber. SettingsSchema.h
+ * describes each member's name, NVS key and validator.
  */
 struct SettingsSnapshot {
   uint32_t version = 0;  ///< Bumped by Settings task on every accepted write.
 
-  // Scale/ADC config (Scale task's slice). 128/10/12 are this device's
-  // actual hardware calibration, not placeholders.
+  // Scale/ADC config (Scale task's slice).
   uint8_t read_samples = 12;
   uint8_t speed = 10;
   uint8_t gain = 128;
   /*
-   * 1.0, not 0.0: ScaleTask forwards this straight into
-   * ADS1232::setCalFactor (units = raw * calFactor), and the driver's
-   * own constructor already defaults calFactor to 1.0 for exactly this
-   * reason -- a fresh/uncalibrated scale should read raw counts
-   * (visibly wrong, but a real number), not silently read 0.0g forever.
-   *
-   * double, not float: this gets multiplied against raw ADC deltas that
-   * can run into the tens of thousands of counts, and a realistic
-   * calibration factor for this hardware has ~6-7 significant digits of
-   * its own (e.g. 0.000924583895...) -- float32's ~7 significant digits
-   * total leaves it with essentially nothing to spare once combined with
-   * that multiplication, silently rounding away real precision on every
-   * write. double carries the extra headroom through storage (NVS),
-   * the WS wire format, and the multiplication itself.
+   * Defaults to 1.0 so an uncalibrated scale reads raw counts (visibly
+   * wrong) rather than a silent 0.0g. A double, because a realistic
+   * factor (~0.000924583895) has more significant digits than a float
+   * keeps once it multiplies ADC deltas in the tens of thousands.
    */
   double calibration_factor = 1.0;
 
@@ -263,22 +205,18 @@ struct SettingsSnapshot {
   uint32_t stability_min_wait_ms = 500;
   uint32_t stability_max_wait_ms = 1500;
   uint32_t screensaver_timeout_s = 60;
-  /// A weight change past this, while SCREENSAVER is active, wakes the display --
-  /// someone approaching/using the machine shouldn't have to press a button first.
+  /// A settled weight change past this wakes the display from SCREENSAVER, no button press needed.
   float screensaver_wake_weight_delta_g = 2.0f;
 
   // Input task's slice.
   uint32_t button_debounce_ms = 150;
   uint32_t button_min_hold_ms = 20;
 
-  // Display task's slice -- both tune the shared falling-clumps animation
-  // (GRINDING family + OTA_UPDATE screens). Multipliers, so 1.0 always
-  // means the default look independent of tuning.
+  // Display task's slice: multipliers on the falling-clumps animation, where 1.0 is the default look.
   float display_clump_density = 1.0f;  ///< Scales how many clumps fall at once.
   float display_clump_gravity = 1.0f;  ///< Scales how fast each clump falls.
 
-  // Dosing task's landing learner, which shifts the main-grind stop point
-  // so the settled weight lands on the margin-offset target.
+  // Dosing task's landing learner, which shifts the main-grind stop so the settled weight hits the offset target.
   bool landing_learner_enabled = true;
   float landing_learner_rate = 0.05f;  ///< Per-session forgetting; evidence window ~1/rate sessions.
   uint32_t landing_learner_clamp_ms = 500;  ///< Max stop-time shift either way vs the unlearned stop.
@@ -301,10 +239,7 @@ enum class PersistBlobId : uint16_t {
   LANDING_LEARNER,
 };
 
-/**
- * A session-boundary persistence request from Dosing task to Settings
- * task, fired once when a session finishes -- never per-sample.
- */
+/** A persistence request from Dosing task to Settings task, sent once when a session finishes. */
 struct PersistRequest {
   PersistBlobId blob_id;
   DosingModelState payload;                ///< Valid when blob_id == DOSING_MODEL.

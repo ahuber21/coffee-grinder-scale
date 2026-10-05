@@ -2,10 +2,8 @@
 
 #include <Arduino.h>
 #include <WiFi.h>
-// WiFiManager.h must come before ESPAsyncWebServer.h: it pulls in the
-// synchronous WebServer.h, whose WEBSERVER_H include guard is what makes
-// ESPAsyncWebServer.h skip redefining the HTTP_GET/POST/... enum -- reversed,
-// the two libraries' enums conflict at compile time.
+// WiFiManager.h must precede ESPAsyncWebServer.h: WebServer.h's include guard is what stops
+// the latter redefining the HTTP method enum.
 #include <WiFiManager.h>
 #include <ArduinoJson.h>
 #include <ArduinoOTA.h>
@@ -48,9 +46,7 @@ AsyncWebSocket g_ws("/ws");
 
 uint32_t g_next_dose_request_id = 1;
 
-// Cached so a newly-connecting client can be caught up immediately --
-// MODEL_STATE only broadcasts on boot/session-complete, unlike settings,
-// which every connect already gets replayed from its own mailbox.
+// MODEL_STATE only broadcasts at boot and session end, so the last one is cached to replay to new clients.
 bool g_have_model_state = false;
 TelemetryEvent g_last_model_state{};
 
@@ -290,9 +286,7 @@ void onWsEvent(AsyncWebSocket *server, AsyncWebSocketClient *client, AwsEventTyp
       if (xQueuePeek(g_settings_mailbox_network, &snap, 0) == pdTRUE) {
         client->text(buildSettingsJson(snap));
       }
-      // Model state only broadcasts on boot/session-complete, so a
-      // client connecting between those moments would otherwise see
-      // nothing for a possibly very long time -- replay the last one.
+      // Replay the cached model state; otherwise a new client would see none until the next session ends.
       if (g_have_model_state) {
         client->text(buildTelemetryJson(g_last_model_state));
       }
@@ -317,10 +311,7 @@ void onWsEvent(AsyncWebSocket *server, AsyncWebSocketClient *client, AwsEventTyp
   }
 }
 
-// OTA refusal happens at the networkTaskFn loop (not calling handle() while
-// grinding), not in onStart() -- onStart() fires after Update.begin() erases.
-
-/** ArduinoOTA onStart callback: refuses (backstop only, see above) or begins. */
+/** ArduinoOTA onStart callback: a backstop refusal while grinding, otherwise begins the flash. */
 void handleOtaStart() {
   if (!otaSafeToStart()) {
     Serial.println("[Network] OTA refused: grind in progress");
@@ -332,9 +323,7 @@ void handleOtaStart() {
   DisplayCommand cmd{};
   cmd.mode = DisplayMode::OTA_UPDATE;
   cmd.ota_percent = 0;
-  // The one deliberate second writer to the display mailbox -- Dosing
-  // task never assigns OTA_UPDATE, and this only fires during an
-  // actual OTA flash.
+  // The one deliberate second writer to the display mailbox; Dosing never assigns OTA_UPDATE.
   xQueueOverwrite(g_display_mailbox, &cmd);
 }
 
@@ -377,9 +366,7 @@ void setupWifi() {
   });
   wm.setSaveConfigCallback([]() { Serial.println("[Network] WiFi credentials saved"); });
 
-  // Blocks here until WiFi is connected or the portal saves new
-  // credentials. Only Network task blocks; every other task is already
-  // running independently.
+  // Blocks until WiFi connects or the portal saves credentials; the other tasks run independently.
   wm.autoConnect(kApName);
 
   if (portalWebServerStarted) {
@@ -468,9 +455,7 @@ void handleGetDosage(AsyncWebServerRequest *request) {
  * API/WS endpoint, and 404 is the honest answer for anything else.
  */
 void setupWebServer() {
-  // formatOnFail=true: a device that's never had its filesystem image
-  // uploaded has a raw/erased partition, not a missing one -- format
-  // it as LittleFS on first mount rather than failing forever.
+  // formatOnFail: a device with no filesystem image yet has a raw partition, which this formats on first mount.
   if (!LittleFS.begin(true)) {
     Serial.println("[Network] LittleFS mount failed -- SPA assets unavailable");
   }
@@ -534,9 +519,7 @@ void networkTaskFn(void *) {
 
     g_ws.cleanupClients();
 
-    // Only pump ArduinoOTA's protocol handling while it's safe to --
-    // see the OTA section above for why this, not onStart alone, is the
-    // real "refuse before it starts" gate.
+    // Not pumping ArduinoOTA while a grind runs is the real refusal; onStart fires after the erase.
     if (otaSafeToStart()) {
       ArduinoOTA.handle();
     }
