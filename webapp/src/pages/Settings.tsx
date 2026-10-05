@@ -391,12 +391,6 @@ export default function SettingsPage() {
               step="0.01"
               unit=" g"
             />
-            <NumberSettingRow
-              field="rate_calculation_percentage"
-              label="Rate calculation fraction"
-              currentValue={settings?.rate_calculation_percentage ?? null}
-              step="0.01"
-            />
           </div>
 
           <div className="panel">
@@ -440,20 +434,6 @@ export default function SettingsPage() {
               field="stability_max_wait_ms"
               label="Stability max wait"
               currentValue={settings?.stability_max_wait_ms ?? null}
-              step="10"
-              unit=" ms"
-            />
-            <NumberSettingRow
-              field="min_topup_runtime_ms"
-              label="Min top-up pulse runtime"
-              currentValue={settings?.min_topup_runtime_ms ?? null}
-              step="10"
-              unit=" ms"
-            />
-            <NumberSettingRow
-              field="min_topup_interval_ms"
-              label="Min top-up pulse interval"
-              currentValue={settings?.min_topup_interval_ms ?? null}
               step="10"
               unit=" ms"
             />

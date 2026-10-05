@@ -256,15 +256,12 @@ struct SettingsSnapshot {
   float top_up_margin_single = 0.3f;
   float top_up_margin_double = 0.5f;
   float min_topup_grams = 0.08f;
-  float rate_calculation_percentage = 0.75f;
   uint32_t topup_timeout_ms = 1000;
   uint32_t grinding_timeout_ms = 30000;
   uint32_t finalize_timeout_ms = 8000;
   uint32_t confirm_timeout_ms = 2000;
   uint32_t stability_min_wait_ms = 500;
   uint32_t stability_max_wait_ms = 1500;
-  uint32_t min_topup_runtime_ms = 500;
-  uint32_t min_topup_interval_ms = 1000;
   uint32_t screensaver_timeout_s = 60;
   /// A weight change past this, while SCREENSAVER is active, wakes the display --
   /// someone approaching/using the machine shouldn't have to press a button first.
@@ -291,57 +288,11 @@ struct SettingsSnapshot {
   bool wifi_reboot_flag = false;
 };
 
-/**
- * One value per SettingsSnapshot field a write request can target.
- * Deliberately a subset, not exhaustive coverage -- extend alongside
- * SettingsTask.cpp's applyWrite() and NetworkTask.cpp's
- * settingsFieldFromName() when a new field needs a live write path.
- */
-enum class SettingsFieldId : uint16_t {
-  CALIBRATION_FACTOR,
-  TARGET_DOSE_SINGLE,
-  TARGET_DOSE_DOUBLE,
-  TOP_UP_MARGIN_SINGLE,
-  TOP_UP_MARGIN_DOUBLE,
-  BUTTON_DEBOUNCE_MS,
-  WIFI_RESET_FLAG,
-  WIFI_REBOOT_FLAG,
-  READ_SAMPLES,
-  SPEED,
-  GAIN,
-  MIN_TOPUP_GRAMS,
-  RATE_CALCULATION_PERCENTAGE,
-  TOPUP_TIMEOUT_MS,
-  GRINDING_TIMEOUT_MS,
-  FINALIZE_TIMEOUT_MS,
-  CONFIRM_TIMEOUT_MS,
-  STABILITY_MIN_WAIT_MS,
-  STABILITY_MAX_WAIT_MS,
-  MIN_TOPUP_RUNTIME_MS,
-  MIN_TOPUP_INTERVAL_MS,
-  SCREENSAVER_TIMEOUT_S,
-  SCREENSAVER_WAKE_WEIGHT_DELTA_G,
-  BUTTON_MIN_HOLD_MS,
-  DISPLAY_CLUMP_DENSITY,
-  DISPLAY_CLUMP_GRAVITY,
-  LANDING_LEARNER_ENABLED,
-  LANDING_LEARNER_RATE,
-  LANDING_LEARNER_CLAMP_MS,
-};
-
-/** A single validated field write, sent from Network task to Settings task. */
+/** One field write, sent from Network task to Settings task, which alone validates it. */
 struct SettingsWriteRequest {
-  SettingsFieldId field_id;
-  union {
-    // double, not float -- calibration_factor needs the extra precision
-    // (see SettingsSnapshot's own comment); every other field that reads
-    // this member is unaffected, since a double carries any float value
-    // through unchanged and narrows back losslessly for those.
-    double f;
-    uint32_t u;
-    bool b;
-  } value;
-  uint32_t request_id;  ///< For an ack/error reply back to the WS client.
+  uint16_t field_index;  ///< Index into settingsTable() (SettingsSchema.h).
+  double value;          ///< The stored value; booleans are 0 or 1.
+  uint32_t request_id;   ///< For an ack/error reply back to the WS client.
 };
 
 /** Identifies which persisted blob a PersistRequest carries. */

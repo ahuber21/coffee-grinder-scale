@@ -95,15 +95,12 @@ export interface SettingsMessage {
   read_samples: number;
   speed: number;
   gain: number;
-  rate_calculation_percentage: number;
   topup_timeout_ms: number;
   grinding_timeout_ms: number;
   finalize_timeout_ms: number;
   confirm_timeout_ms: number;
   stability_min_wait_ms: number;
   stability_max_wait_ms: number;
-  min_topup_runtime_ms: number;
-  min_topup_interval_ms: number;
   button_min_hold_ms: number;
   display_clump_density: number;
   display_clump_gravity: number;
@@ -137,15 +134,12 @@ export type WritableSettingsField =
   | "speed"
   | "gain"
   | "min_topup_grams"
-  | "rate_calculation_percentage"
   | "topup_timeout_ms"
   | "grinding_timeout_ms"
   | "finalize_timeout_ms"
   | "confirm_timeout_ms"
   | "stability_min_wait_ms"
   | "stability_max_wait_ms"
-  | "min_topup_runtime_ms"
-  | "min_topup_interval_ms"
   | "screensaver_timeout_s"
   | "screensaver_wake_weight_delta_g"
   | "button_min_hold_ms"

@@ -20,6 +20,7 @@
 
 #include "Messages.h"
 #include "Queues.h"
+#include "SettingsSchema.h"
 #include "TaskConfig.h"
 #include "defines.h"  // SERVER_PORT
 
@@ -39,6 +40,8 @@ constexpr const char *kMdnsHostname = "eureka";
 constexpr uint16_t kOtaPort = 3232;
 
 constexpr size_t kMaxWsClients = 4;  ///< One connection cap, enforced in one place.
+
+constexpr const char *kGramsOutOfRange = "grams out of range (0, 50]";  ///< Keep in step with kMaxDoseGrams.
 
 AsyncWebServer g_server(SERVER_PORT);
 AsyncWebSocket g_ws("/ws");
@@ -148,42 +151,26 @@ String buildTelemetryJson(const TelemetryEvent &ev) {
   return out;
 }
 
-// ArduinoJson prints 9 decimal places (not significant digits); for values
-// ~1e-4, this loses precision. Scale to 1e6 for the wire so 9 decimals matter.
-constexpr double CALIBRATION_FACTOR_WIRE_SCALE = 1e6;
-
 /** Serializes the broadcast subset of SettingsSnapshot into WS envelope JSON. */
-String buildSettingsJson(const SettingsSnapshot &s) {
+String buildSettingsJson(const SettingsSnapshot &snap) {
   JsonDocument doc;
   doc["type"] = "settings";
-  doc["version"] = s.version;
-  doc["calibration_factor_x1e6"] = s.calibration_factor * CALIBRATION_FACTOR_WIRE_SCALE;
-  doc["target_dose_single"] = s.target_dose_single;
-  doc["target_dose_double"] = s.target_dose_double;
-  doc["top_up_margin_single"] = s.top_up_margin_single;
-  doc["top_up_margin_double"] = s.top_up_margin_double;
-  doc["min_topup_grams"] = s.min_topup_grams;
-  doc["button_debounce_ms"] = s.button_debounce_ms;
-  doc["screensaver_timeout_s"] = s.screensaver_timeout_s;
-  doc["screensaver_wake_weight_delta_g"] = s.screensaver_wake_weight_delta_g;
-  doc["read_samples"] = s.read_samples;
-  doc["speed"] = s.speed;
-  doc["gain"] = s.gain;
-  doc["rate_calculation_percentage"] = s.rate_calculation_percentage;
-  doc["topup_timeout_ms"] = s.topup_timeout_ms;
-  doc["grinding_timeout_ms"] = s.grinding_timeout_ms;
-  doc["finalize_timeout_ms"] = s.finalize_timeout_ms;
-  doc["confirm_timeout_ms"] = s.confirm_timeout_ms;
-  doc["stability_min_wait_ms"] = s.stability_min_wait_ms;
-  doc["stability_max_wait_ms"] = s.stability_max_wait_ms;
-  doc["min_topup_runtime_ms"] = s.min_topup_runtime_ms;
-  doc["min_topup_interval_ms"] = s.min_topup_interval_ms;
-  doc["button_min_hold_ms"] = s.button_min_hold_ms;
-  doc["display_clump_density"] = s.display_clump_density;
-  doc["display_clump_gravity"] = s.display_clump_gravity;
-  doc["landing_learner_enabled"] = s.landing_learner_enabled;
-  doc["landing_learner_rate"] = s.landing_learner_rate;
-  doc["landing_learner_clamp_ms"] = s.landing_learner_clamp_ms;
+  doc["version"] = snap.version;
+  size_t count = 0;
+  const SettingDescriptor *table = settingsTable(count);
+  for (size_t i = 0; i < count; ++i) {
+    const SettingDescriptor &d = table[i];
+    if (!d.broadcast) continue;
+    double value = readSetting(snap, d);
+    // Stored types are kept on the wire, so a float prints as 0.3 rather than 0.300000012.
+    switch (d.type) {
+      case SettingType::U8:
+      case SettingType::U32: doc[d.name] = static_cast<uint32_t>(value); break;
+      case SettingType::F32: doc[d.name] = static_cast<float>(value); break;
+      case SettingType::F64: doc[d.name] = value * d.wire_scale; break;
+      case SettingType::BOOL: doc[d.name] = value != 0.0; break;
+    }
+  }
   String out;
   serializeJson(doc, out);
   return out;
@@ -221,127 +208,6 @@ void sendRawRead(AsyncWebSocketClient *client, uint32_t request_id) {
   client->text(out);
 }
 
-/** Maps a "settings_write" request's field name to a SettingsFieldId. */
-bool settingsFieldFromName(const char *name, SettingsFieldId &out) {
-  if (strcmp(name, "calibration_factor_x1e6") == 0) {
-    out = SettingsFieldId::CALIBRATION_FACTOR;
-    return true;
-  }
-  if (strcmp(name, "target_dose_single") == 0) {
-    out = SettingsFieldId::TARGET_DOSE_SINGLE;
-    return true;
-  }
-  if (strcmp(name, "target_dose_double") == 0) {
-    out = SettingsFieldId::TARGET_DOSE_DOUBLE;
-    return true;
-  }
-  if (strcmp(name, "top_up_margin_single") == 0) {
-    out = SettingsFieldId::TOP_UP_MARGIN_SINGLE;
-    return true;
-  }
-  if (strcmp(name, "top_up_margin_double") == 0) {
-    out = SettingsFieldId::TOP_UP_MARGIN_DOUBLE;
-    return true;
-  }
-  if (strcmp(name, "button_debounce_ms") == 0) {
-    out = SettingsFieldId::BUTTON_DEBOUNCE_MS;
-    return true;
-  }
-  if (strcmp(name, "wifi_reset_flag") == 0) {
-    out = SettingsFieldId::WIFI_RESET_FLAG;
-    return true;
-  }
-  if (strcmp(name, "wifi_reboot_flag") == 0) {
-    out = SettingsFieldId::WIFI_REBOOT_FLAG;
-    return true;
-  }
-  if (strcmp(name, "read_samples") == 0) {
-    out = SettingsFieldId::READ_SAMPLES;
-    return true;
-  }
-  if (strcmp(name, "speed") == 0) {
-    out = SettingsFieldId::SPEED;
-    return true;
-  }
-  if (strcmp(name, "gain") == 0) {
-    out = SettingsFieldId::GAIN;
-    return true;
-  }
-  if (strcmp(name, "min_topup_grams") == 0) {
-    out = SettingsFieldId::MIN_TOPUP_GRAMS;
-    return true;
-  }
-  if (strcmp(name, "rate_calculation_percentage") == 0) {
-    out = SettingsFieldId::RATE_CALCULATION_PERCENTAGE;
-    return true;
-  }
-  if (strcmp(name, "topup_timeout_ms") == 0) {
-    out = SettingsFieldId::TOPUP_TIMEOUT_MS;
-    return true;
-  }
-  if (strcmp(name, "grinding_timeout_ms") == 0) {
-    out = SettingsFieldId::GRINDING_TIMEOUT_MS;
-    return true;
-  }
-  if (strcmp(name, "finalize_timeout_ms") == 0) {
-    out = SettingsFieldId::FINALIZE_TIMEOUT_MS;
-    return true;
-  }
-  if (strcmp(name, "confirm_timeout_ms") == 0) {
-    out = SettingsFieldId::CONFIRM_TIMEOUT_MS;
-    return true;
-  }
-  if (strcmp(name, "stability_min_wait_ms") == 0) {
-    out = SettingsFieldId::STABILITY_MIN_WAIT_MS;
-    return true;
-  }
-  if (strcmp(name, "stability_max_wait_ms") == 0) {
-    out = SettingsFieldId::STABILITY_MAX_WAIT_MS;
-    return true;
-  }
-  if (strcmp(name, "min_topup_runtime_ms") == 0) {
-    out = SettingsFieldId::MIN_TOPUP_RUNTIME_MS;
-    return true;
-  }
-  if (strcmp(name, "min_topup_interval_ms") == 0) {
-    out = SettingsFieldId::MIN_TOPUP_INTERVAL_MS;
-    return true;
-  }
-  if (strcmp(name, "screensaver_timeout_s") == 0) {
-    out = SettingsFieldId::SCREENSAVER_TIMEOUT_S;
-    return true;
-  }
-  if (strcmp(name, "screensaver_wake_weight_delta_g") == 0) {
-    out = SettingsFieldId::SCREENSAVER_WAKE_WEIGHT_DELTA_G;
-    return true;
-  }
-  if (strcmp(name, "button_min_hold_ms") == 0) {
-    out = SettingsFieldId::BUTTON_MIN_HOLD_MS;
-    return true;
-  }
-  if (strcmp(name, "display_clump_density") == 0) {
-    out = SettingsFieldId::DISPLAY_CLUMP_DENSITY;
-    return true;
-  }
-  if (strcmp(name, "display_clump_gravity") == 0) {
-    out = SettingsFieldId::DISPLAY_CLUMP_GRAVITY;
-    return true;
-  }
-  if (strcmp(name, "landing_learner_enabled") == 0) {
-    out = SettingsFieldId::LANDING_LEARNER_ENABLED;
-    return true;
-  }
-  if (strcmp(name, "landing_learner_rate") == 0) {
-    out = SettingsFieldId::LANDING_LEARNER_RATE;
-    return true;
-  }
-  if (strcmp(name, "landing_learner_clamp_ms") == 0) {
-    out = SettingsFieldId::LANDING_LEARNER_CLAMP_MS;
-    return true;
-  }
-  return false;
-}
-
 /**
  * Parses one inbound WS text frame and dispatches "settings_write" /
  * "dose_request". Network task only does cheap syntactic validation
@@ -360,48 +226,23 @@ void handleWsMessage(AsyncWebSocketClient *client, const uint8_t *data, size_t l
   uint32_t request_id = doc["request_id"] | 0;
 
   if (strcmp(type, "settings_write") == 0) {
-    const char *fieldName = doc["field"] | "";
-    SettingsFieldId fieldId;
-    if (!settingsFieldFromName(fieldName, fieldId)) {
+    int index = findSettingByName(doc["field"] | "");
+    if (index < 0) {
       sendError(client, "unknown settings field", request_id);
       return;
     }
+    size_t count = 0;
+    const SettingDescriptor &d = settingsTable(count)[index];
     SettingsWriteRequest req{};
-    req.field_id = fieldId;
+    req.field_index = static_cast<uint16_t>(index);
     req.request_id = request_id;
-    if (fieldId == SettingsFieldId::WIFI_RESET_FLAG ||
-        fieldId == SettingsFieldId::WIFI_REBOOT_FLAG ||
-        fieldId == SettingsFieldId::LANDING_LEARNER_ENABLED) {
-      req.value.b = doc["value"] | false;
-    } else if (fieldId == SettingsFieldId::CALIBRATION_FACTOR) {
-      // The wire value is calibration_factor_x1e6 (see buildSettingsJson
-      // and CALIBRATION_FACTOR_WIRE_SCALE's own comment) -- divide back
-      // down to the true factor immediately, so every internal consumer
-      // (SettingsSnapshot, NVS, ADS1232::calFactor) only ever sees the
-      // real, unscaled value.
-      req.value.f = (doc["value"] | static_cast<double>(NAN)) / CALIBRATION_FACTOR_WIRE_SCALE;
-    } else if (fieldId == SettingsFieldId::TARGET_DOSE_SINGLE ||
-               fieldId == SettingsFieldId::TARGET_DOSE_DOUBLE ||
-               fieldId == SettingsFieldId::TOP_UP_MARGIN_SINGLE ||
-               fieldId == SettingsFieldId::TOP_UP_MARGIN_DOUBLE ||
-               fieldId == SettingsFieldId::MIN_TOPUP_GRAMS ||
-               fieldId == SettingsFieldId::RATE_CALCULATION_PERCENTAGE ||
-               fieldId == SettingsFieldId::SCREENSAVER_WAKE_WEIGHT_DELTA_G ||
-               fieldId == SettingsFieldId::DISPLAY_CLUMP_DENSITY ||
-               fieldId == SettingsFieldId::DISPLAY_CLUMP_GRAVITY ||
-               fieldId == SettingsFieldId::LANDING_LEARNER_RATE) {
-      // static_cast<double>, not the bare NAN macro (which is float-typed)
-      // -- ArduinoJson's operator| deduces its parse target type from the
-      // fallback's type, so a float fallback here would parse (and
-      // truncate) the JSON number as a float before it ever reaches the
-      // double-typed union member below, defeating the whole point.
-      req.value.f = doc["value"] | static_cast<double>(NAN);
+    if (d.type == SettingType::BOOL) {
+      req.value = (doc["value"] | false) ? 1.0 : 0.0;
     } else {
-      // Every remaining field (button/ADC/timeout settings) is uint32_t.
-      req.value.u = doc["value"] | static_cast<uint32_t>(0);
+      // A double fallback makes ArduinoJson parse the number as a double; a float one would truncate it.
+      req.value = (doc["value"] | static_cast<double>(NAN)) / d.wire_scale;
     }
-    // This is only a syntactic "does this look like a request" check --
-    // Settings task is the sole authority on whether the value is legal.
+    // Settings task alone decides whether the value is legal.
     if (xQueueSend(g_settings_write_q, &req, 0) != pdTRUE) {
       sendError(client, "settings queue full, try again", request_id);
     }
@@ -418,7 +259,7 @@ void handleWsMessage(AsyncWebSocketClient *client, const uint8_t *data, size_t l
     // Dosing task re-validates this range itself; this is just a
     // fast-fail check so a bad request doesn't queue up for nothing.
     if (!std::isfinite(grams) || grams <= 0.0f || grams > kMaxDoseGrams) {
-      sendError(client, "grams out of range (0, 50]", request_id);
+      sendError(client, kGramsOutOfRange, request_id);
       return;
     }
     DoseRequest req{grams, request_id != 0 ? request_id : g_next_dose_request_id++,
@@ -595,8 +436,8 @@ void handleGetDosage(AsyncWebServerRequest *request) {
   }
 
   float grams = request->getParam("grams")->value().toFloat();
-  if (!std::isfinite(grams) || grams <= 0.0f || grams > 50.0f) {
-    doc["error"] = "grams out of range (0, 50]";
+  if (!std::isfinite(grams) || grams <= 0.0f || grams > kMaxDoseGrams) {
+    doc["error"] = kGramsOutOfRange;
     serializeJson(doc, out);
     request->send(400, "application/json", out);
     return;
