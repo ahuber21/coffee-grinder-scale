@@ -98,6 +98,26 @@ export function fetchCompletedDosesForMode(
   );
 }
 
+export interface LandingOutcome {
+  settled_weight_g: number;
+  target_weight_g: number;
+}
+
+// Main-grind landing: the settled weight right after the main grind, before
+// any topup, against the margin-offset stop target (target_weight_g -- the
+// value the grind actually aims for, unlike the requested weight). Only
+// sessions that recorded a settled weight exist here, i.e. grinds on the
+// landing-learner firmware or later (see 005_landing_stats.sql).
+export function fetchLandingForMode(
+  mode: "single" | "double",
+  limit = 500
+): Promise<LandingOutcome[]> {
+  return get<LandingOutcome[]>(
+    `/sessions?mode=eq.${mode}&settled_weight_g=not.is.null` +
+      `&order=started_at.desc&limit=${limit}&select=settled_weight_g,target_weight_g`
+  );
+}
+
 export function fetchSessionEvents(sessionId: string): Promise<SessionEvent[]> {
   return get<SessionEvent[]>(
     `/events?session_id=eq.${sessionId}&order=pulse_index.asc`

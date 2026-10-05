@@ -16,6 +16,7 @@ import {
   fetchSessionEvents,
   fetchSessionRawSamples,
   fetchCompletedDosesForMode,
+  fetchLandingForMode,
   patchReferenceWeight,
   type Session,
   type SessionEvent,
@@ -50,10 +51,14 @@ function DeltaHistogram({
   label,
   deltas,
   color,
+  xLabel = "Δ from target (g)",
+  emptyText = "No completed sessions yet.",
 }: {
   label: string;
   deltas: number[];
   color: string;
+  xLabel?: string;
+  emptyText?: string;
 }) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const chartRef = useRef<Chart | null>(null);
@@ -142,7 +147,7 @@ function DeltaHistogram({
             type: "linear",
             min: -HISTOGRAM_RANGE_G,
             max: HISTOGRAM_RANGE_G,
-            title: { display: true, text: "Δ from target (g)", color: "rgba(235, 235, 245, 0.45)" },
+            title: { display: true, text: xLabel, color: "rgba(235, 235, 245, 0.45)" },
             ticks: { color: "rgba(235, 235, 245, 0.45)" },
             grid: { color: "rgba(84, 84, 88, 0.2)" },
             border: { display: false },
@@ -176,13 +181,13 @@ function DeltaHistogram({
       },
     });
     return () => chartRef.current?.destroy();
-  }, [deltas, fit, label, color]);
+  }, [deltas, fit, label, color, xLabel]);
 
   return (
     <div>
       <h4 style={{ margin: "0 0 0.5rem" }}>{label}</h4>
       {deltas.length === 0 ? (
-        <p className="muted">No completed sessions yet.</p>
+        <p className="muted">{emptyText}</p>
       ) : (
         <>
           <canvas ref={canvasRef} height={200} />
@@ -450,6 +455,8 @@ export default function HistoryPage() {
   const [selected, setSelected] = useState<Session | null>(null);
   const [singleDeltas, setSingleDeltas] = useState<number[] | null>(null);
   const [doubleDeltas, setDoubleDeltas] = useState<number[] | null>(null);
+  const [singleLanding, setSingleLanding] = useState<number[] | null>(null);
+  const [doubleLanding, setDoubleLanding] = useState<number[] | null>(null);
 
   useEffect(() => {
     fetchRecentSessions(50)
@@ -464,6 +471,12 @@ export default function HistoryPage() {
     fetchCompletedDosesForMode("double")
       .then((doses) => setDoubleDeltas(doses.map((d) => d.final_weight_g - d.requested_weight_g)))
       .catch(() => setDoubleDeltas([]));
+    fetchLandingForMode("single")
+      .then((rows) => setSingleLanding(rows.map((r) => r.settled_weight_g - r.target_weight_g)))
+      .catch(() => setSingleLanding([]));
+    fetchLandingForMode("double")
+      .then((rows) => setDoubleLanding(rows.map((r) => r.settled_weight_g - r.target_weight_g)))
+      .catch(() => setDoubleLanding([]));
   }, []);
 
   const stats = useMemo(() => {
@@ -511,6 +524,38 @@ export default function HistoryPage() {
         >
           <DeltaHistogram label="Single dose" deltas={singleDeltas ?? []} color="#0a84ff" />
           <DeltaHistogram label="Double dose" deltas={doubleDeltas ?? []} color="#ff9f0a" />
+        </div>
+      </div>
+
+      <div className="panel">
+        <h3>Main-grind landing (landing learner)</h3>
+        <p className="muted" style={{ fontSize: "0.85em" }}>
+          Settled weight right after the main grind, before any top-up, minus the stop target
+          (requested dose minus the top-up margin). The learner's job is to pull this curve
+          narrower and onto zero. Only grinds that recorded a settled weight appear here, i.e.
+          the learner era onward.
+        </p>
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))",
+            gap: "1.5rem",
+          }}
+        >
+          <DeltaHistogram
+            label="Single dose"
+            deltas={singleLanding ?? []}
+            color="#0a84ff"
+            xLabel="Δ from stop target (g)"
+            emptyText="No landing data yet."
+          />
+          <DeltaHistogram
+            label="Double dose"
+            deltas={doubleLanding ?? []}
+            color="#ff9f0a"
+            xLabel="Δ from stop target (g)"
+            emptyText="No landing data yet."
+          />
         </div>
       </div>
 
