@@ -81,7 +81,7 @@ struct DosingModelState {
   /// Per-bucket pulse duration (ms): bucket i covers gaps in (i*0.1g, (i+1)*0.1g].
   float topup_lut_duration_ms[kTopupLutBuckets];
   uint32_t topup_lut_n[kTopupLutBuckets];  ///< Observation count per bucket.
-  uint32_t rate_n_effective;               ///< Decayed effective sample count.
+  uint32_t rate_n_effective;               ///< Decayed effective session count.
   int64_t last_updated;                    ///< Seconds since epoch; 0 == never updated.
   float coast_weight_hat;                  ///< Main-grind post-relay-off "coast", grams.
   float coast_weight_precision;            ///< Inverse-variance of coast_weight_hat itself.
@@ -133,6 +133,12 @@ class MainGrindModel {
     double half_life_days = 0.0;
     /// Minimum in-session points before the session fit is trusted at all.
     int min_session_points = 3;
+    /// Session-to-session sd of the plateau rate (g/s); each grind is one observation of this quality.
+    double session_rate_sd = 0.09;
+    /// Sessions of evidence kept: per-grind forgetting is 1 - 1/window, and it caps the persisted precision.
+    double session_window = 30.0;
+    /// Floor on the in-session slope sd (g/s): consecutive samples are correlated, so the raw fit is overconfident.
+    double min_live_slope_sd = 0.03;
     /// A folded-in rate outside this range is discarded.
     double min_plausible_rate = 0.3;
     double max_plausible_rate = 2.5;
@@ -176,9 +182,10 @@ class MainGrindModel {
   double predictStopTimeMsWithCoast(double target_weight_g, double coast_weight_g) const;
 
   /**
-   * Folds this session's fit into the persisted state (recency-decayed
-   * first) and resets for the next grind. Returns false, leaving persisted
-   * state untouched, if the resulting rate would be implausible.
+   * Folds this session's slope into the persisted state as one observation
+   * of `session_rate_sd` quality (after forgetting) and resets for the next
+   * grind. Returns false, leaving persisted state untouched, if the
+   * resulting rate would be implausible.
    */
   bool finalizeSession(int64_t now_epoch_s);
 
@@ -198,6 +205,8 @@ class MainGrindModel {
   Config m_cfg;
 
   double m_rate_hat;
+  double maxRatePrecision() const;
+
   double m_rate_precision;
   uint32_t m_rate_n_effective;
   int64_t m_last_updated;

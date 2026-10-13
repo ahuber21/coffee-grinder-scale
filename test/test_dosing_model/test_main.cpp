@@ -152,6 +152,57 @@ void test_main_grind_model_converges_to_known_rate(void) {
   TEST_ASSERT_DOUBLE_WITHIN(0.05, true_rate, model.persistedRateHat());
 }
 
+/** Runs one noisy 500Hz grind at `rate` and folds it into `state`. */
+static DosingModelState runGrindSession(const DosingModelState &state, double rate, std::mt19937 &rng,
+                                        int64_t now_s) {
+  MainGrindModel model(state);
+  model.startSession();
+  std::normal_distribution<double> noise(0.0, 0.05);
+  for (double t_ms = 0.0; t_ms <= 10000.0; t_ms += 2.0) {
+    double t_s = t_ms / 1000.0;
+    double truth = t_s < 0.9 ? 0.0 : rate * (t_s - 0.9);
+    model.addSample(t_ms, truth + noise(rng));
+  }
+  TEST_ASSERT_TRUE(model.finalizeSession(now_s));
+  return model.dumpPersisted(state);
+}
+
+void test_main_grind_model_rate_uncertainty_stays_realistic(void) {
+  std::mt19937 rng = makeRng();
+  DosingModelState state = makeDefaultDosingModelState();
+  for (int i = 0; i < 300; ++i) {
+    state = runGrindSession(state, 0.96, rng, 2000000000LL + i * 60);
+  }
+  double sd = 1.0 / std::sqrt(state.rate_precision);
+  TEST_ASSERT_TRUE(sd > 0.01);
+  TEST_ASSERT_TRUE(state.rate_n_effective <= 30);
+  TEST_ASSERT_DOUBLE_WITHIN(0.02, 0.96, state.rate_hat);
+}
+
+void test_main_grind_model_keeps_adapting_after_many_sessions(void) {
+  std::mt19937 rng = makeRng();
+  DosingModelState state = makeDefaultDosingModelState();
+  for (int i = 0; i < 100; ++i) {
+    state = runGrindSession(state, 1.0, rng, 2000000000LL + i * 60);
+  }
+  for (int i = 0; i < 60; ++i) {
+    state = runGrindSession(state, 0.8, rng, 2000100000LL + i * 60);
+  }
+  TEST_ASSERT_DOUBLE_WITHIN(0.05, 0.8, state.rate_hat);
+}
+
+void test_main_grind_model_clamps_a_saturated_persisted_precision(void) {
+  DosingModelState saturated = makeDefaultDosingModelState();
+  saturated.rate_hat = 0.9645f;
+  saturated.rate_precision = 2.0e9f;
+  saturated.rate_n_effective = 1253574;
+  MainGrindModel model(saturated);
+  DosingModelState out = model.dumpPersisted(saturated);
+  TEST_ASSERT_EQUAL_FLOAT(0.9645f, out.rate_hat);
+  TEST_ASSERT_TRUE(out.rate_precision <= 30.0f / (0.09f * 0.09f) + 1.0f);
+  TEST_ASSERT_TRUE(out.rate_n_effective <= 30);
+}
+
 void test_main_grind_model_predicts_sane_stop_time(void) {
   // Noiseless, known rate: stop-time prediction should match closed form.
   DosingModelState persisted = makeDefaultDosingModelState();
@@ -548,6 +599,9 @@ int main(int argc, char **argv) {
   RUN_TEST(test_main_grind_model_ignores_sudden_weight_spike);
   RUN_TEST(test_main_grind_model_accepts_persistent_step_change_after_reject_window);
   RUN_TEST(test_main_grind_model_nonpositive_rate_never_predicts_immediate_stop);
+  RUN_TEST(test_main_grind_model_rate_uncertainty_stays_realistic);
+  RUN_TEST(test_main_grind_model_keeps_adapting_after_many_sessions);
+  RUN_TEST(test_main_grind_model_clamps_a_saturated_persisted_precision);
 
   RUN_TEST(test_topup_model_rejects_hard_bound_outlier);
   RUN_TEST(test_topup_model_falls_back_to_default_seed_for_invalid_persisted_bucket);

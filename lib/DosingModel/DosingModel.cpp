@@ -112,7 +112,14 @@ MainGrindModel::MainGrindModel(const DosingModelState &persisted, Config cfg)
       m_rate_hat(persisted.rate_hat),
       m_rate_precision(persisted.rate_precision),
       m_rate_n_effective(persisted.rate_n_effective),
-      m_last_updated(persisted.last_updated) {}
+      m_last_updated(persisted.last_updated) {
+  m_rate_precision = std::min(m_rate_precision, maxRatePrecision());
+  m_rate_n_effective = std::min(m_rate_n_effective, static_cast<uint32_t>(m_cfg.session_window));
+}
+
+double MainGrindModel::maxRatePrecision() const {
+  return m_cfg.session_window / (m_cfg.session_rate_sd * m_cfg.session_rate_sd);
+}
 
 void MainGrindModel::startSession() {
   m_session_fit.reset();
@@ -149,8 +156,7 @@ void MainGrindModel::addSample(double runtime_ms, double weight_g) {
 double MainGrindModel::sessionPrecision() const {
   if (!m_session_fit.hasFit()) return 0.0;
   if (m_session_fit.effectiveWeight() < m_cfg.min_session_points) return 0.0;
-  double var = m_session_fit.slopeVariance();
-  if (!(var > 0.0)) return 0.0;
+  double var = std::max(m_session_fit.slopeVariance(), m_cfg.min_live_slope_sd * m_cfg.min_live_slope_sd);
   return 1.0 / var;
 }
 
@@ -184,8 +190,9 @@ double MainGrindModel::predictStopTimeMsWithCoast(double target_weight_g,
 }
 
 bool MainGrindModel::finalizeSession(int64_t now_epoch_s) {
-  double decayed_precision = m_rate_precision;
-  double decayed_n = static_cast<double>(m_rate_n_effective);
+  double keep = 1.0 - 1.0 / m_cfg.session_window;
+  double decayed_precision = m_rate_precision * keep;
+  double decayed_n = static_cast<double>(m_rate_n_effective) * keep;
 
   if (m_cfg.half_life_days > 0.0 && m_last_updated != 0 && now_epoch_s > m_last_updated) {
     double elapsed_days = (now_epoch_s - m_last_updated) / kSecondsPerDay;
@@ -194,18 +201,17 @@ bool MainGrindModel::finalizeSession(int64_t now_epoch_s) {
     decayed_n *= factor;
   }
 
-  double session_precision = sessionPrecision();
   double new_rate_hat = m_rate_hat;
   double new_precision = decayed_precision;
   double new_n = decayed_n;
 
-  if (session_precision > 0.0) {
-    double total_precision = decayed_precision + session_precision;
-    new_rate_hat = (decayed_precision * m_rate_hat +
-                    session_precision * m_session_fit.slope()) /
+  if (sessionPrecision() > 0.0) {
+    double obs_precision = 1.0 / (m_cfg.session_rate_sd * m_cfg.session_rate_sd);
+    double total_precision = decayed_precision + obs_precision;
+    new_rate_hat = (decayed_precision * m_rate_hat + obs_precision * m_session_fit.slope()) /
                    total_precision;
-    new_precision = total_precision;
-    new_n = decayed_n + m_session_fit.effectiveWeight();
+    new_precision = std::min(total_precision, maxRatePrecision());
+    new_n = decayed_n + 1.0;
   }
 
   if (new_rate_hat < m_cfg.min_plausible_rate ||

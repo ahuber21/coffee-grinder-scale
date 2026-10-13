@@ -1,5 +1,11 @@
 # Status
 
+*Last updated: 2026-10-13 (later) -- fixed the main-grind rate model
+(AR-082): its precision grew per sample, so the persisted rate showed
+0.9645 +/- 0.00002 from 1.25M "sessions" and could not adapt. Sessions are
+now single observations with a 30-session window. Host tests and the
+firmware build pass; not flashed yet.*
+
 *Last updated: 2026-10-13 -- found why History showed almost no landing
 data: PostgREST's schema cache was never reloaded after migration 005, so
 landing PATCHes were rejected until the DB host rebooted on 10-12. The 37
