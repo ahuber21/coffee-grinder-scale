@@ -1,5 +1,14 @@
 # Status
 
+*Last updated: 2026-10-13 -- found why History showed almost no landing
+data: PostgREST's schema cache was never reloaded after migration 005, so
+landing PATCHes were rejected until the DB host rebooted on 10-12. The 37
+missing sessions were backfilled from events; the learner's on-device
+training was unaffected. Over all 46 sessions since the deploy, settled
+landing vs the offset target is +0.03g mean, sd 0.15g, so the learner has
+not visibly improved on the baseline yet. The learner's own session count is
+still only visible on the serial `LAND` line. See AR-081.*
+
 *Last updated: 2026-10-05 (audit) -- whole-tree maintainability audit.
 Firmware: `DosingTask`'s 360-line loop split into per-concern handlers;
 `DisplayTask`, `ScaleTask`, `InputTask` and `TelemetryTask` restructured;

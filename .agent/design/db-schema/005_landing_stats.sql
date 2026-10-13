@@ -30,3 +30,6 @@ COMMIT;
 
 GRANT UPDATE (settled_weight_g, coast_g, training_margin_g, learner_correction_g, learner_clamped)
     ON v2.sessions TO postgrest_anon;
+
+-- PostgREST caches the schema; without this the device's PATCHes naming the new columns are rejected.
+NOTIFY pgrst, 'reload schema';

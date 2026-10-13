@@ -158,6 +158,12 @@ Never write a real address, hostname or credential into a tracked file.
   create a new one if the task needs a different privilege shape (e.g. the
   PostgREST INSERT-only role) rather than reusing root.**
 
+**Migrations**: every migration that adds or changes `v2` columns ends with
+`NOTIFY pgrst, 'reload schema';`. PostgREST caches the schema, and the device
+never reads PATCH responses, so a missed reload drops the new fields silently.
+Verify with one real PATCH or a select of the new columns before calling a
+migration applied.
+
 ## Sister repo
 
 `../2023-12-10-espresso-scale-eureka` is a second checkout of the *same*
