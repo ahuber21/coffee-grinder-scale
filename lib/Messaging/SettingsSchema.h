@@ -91,7 +91,7 @@ inline const SettingDescriptor *settingsTable(size_t &count) {
        true, 1.0},
       {"speed", "speed", SettingType::U8, SETTING_OFFSET(speed), v::speedSps, true, 1.0},
       {"gain", "gain", SettingType::U8, SETTING_OFFSET(gain), v::gain, true, 1.0},
-      {"grinding_timeout_ms", "grind_to_ms", SettingType::U32, SETTING_OFFSET(grinding_timeout_ms),
+      {"grinding_overrun_ms", "grind_over_ms", SettingType::U32, SETTING_OFFSET(grinding_overrun_ms),
        v::timeoutMs, true, 1.0},
       {"finalize_timeout_ms", "final_to_ms", SettingType::U32, SETTING_OFFSET(finalize_timeout_ms),
        v::timeoutMs, true, 1.0},

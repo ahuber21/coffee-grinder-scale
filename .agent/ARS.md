@@ -2320,4 +2320,5 @@ Format per entry:
 - **Learner history**: each finished session POSTs the rate, coast and per-mode learner fit to `v2.model_snapshots`; the Model page charts them. The first row is a baseline decoded from the backup; earlier evolution was not recorded.
 - **Confounder**: the device was running firmware from before AR-082 (saturated rate precision, sd 0.00002, 1.56M "sessions") until this flash, so the adapting rate model and margin 0 start together.
 - **Open**: `CoastModel` still adds each observation's precision without a cap (precision 9023, sd 0.0105 at the flash), the same defect AR-082 fixed for the rate: the coast estimate has effectively stopped adapting. The learner's intercept absorbs a drifting coast meanwhile.
+- **Hard stop**: the fixed 30 s `grinding_timeout_ms` became `grinding_overrun_ms` (default 4000): the grind is cut at target / stored rate + the allowance, so it scales with the dose and cannot run on when the live prediction fails.
 - **Open**: the dose is never verified on a real grind yet; no top-up means a mis-stop is final (the 500 ms clamp bounds the learner, not the unlearned stop).

@@ -180,7 +180,7 @@ struct SettingsSnapshot {
   // Dosing config (Dosing task's slice).
   float target_dose_single = 18.0f;
   float target_dose_double = 36.0f;
-  uint32_t grinding_timeout_ms = 30000;
+  uint32_t grinding_overrun_ms = 4000;  ///< Allowance on top of the naive grind time before the hard stop.
   uint32_t finalize_timeout_ms = 8000;
   uint32_t confirm_timeout_ms = 2000;
   uint32_t stability_max_wait_ms = 1500;

@@ -157,6 +157,14 @@ void test_main_grind_model_clamps_a_saturated_persisted_precision(void) {
   TEST_ASSERT_TRUE(out.rate_n_effective <= 30);
 }
 
+void test_main_grind_model_hard_timeout_is_naive_time_plus_overrun(void) {
+  DosingModelState persisted = makeDefaultDosingModelState();
+  persisted.rate_hat = 0.96f;
+  MainGrindModel model(persisted);
+  TEST_ASSERT_DOUBLE_WITHIN(1.0, 18000.0 / 0.96 + 4000.0, model.hardTimeoutMs(18.0, 4000.0));
+  TEST_ASSERT_DOUBLE_WITHIN(1.0, 18000.0 / 0.96, model.hardTimeoutMs(18.0, 0.0));
+}
+
 void test_main_grind_model_predicts_sane_stop_time(void) {
   // Noiseless, known rate: stop-time prediction should match closed form.
   DosingModelState persisted = makeDefaultDosingModelState();
@@ -529,6 +537,7 @@ int main(int argc, char **argv) {
   RUN_TEST(test_cold_start_coast_model_reports_prior);
 
   RUN_TEST(test_main_grind_model_converges_to_known_rate);
+  RUN_TEST(test_main_grind_model_hard_timeout_is_naive_time_plus_overrun);
   RUN_TEST(test_main_grind_model_predicts_sane_stop_time);
   RUN_TEST(test_main_grind_model_predicts_earlier_stop_time_with_coast);
   RUN_TEST(test_main_grind_model_ignores_sudden_weight_drop);

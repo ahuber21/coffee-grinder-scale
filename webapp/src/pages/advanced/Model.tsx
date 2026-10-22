@@ -180,8 +180,10 @@ export default function ModelPage() {
         <Formula>{"stop_time = elapsed + (target − already_ground − coast − learner_shift) / rate"}</Formula>
         <p className="muted" style={{ fontSize: "0.85em" }}>
           Every scale sample during the grind re-solves this. The grind stops as soon as elapsed
-          time reaches the prediction, the raw weight reaches the target directly, or the
-          grinding safety timeout elapses, whichever comes first. The learner's shift never moves
+          time reaches the prediction, the raw weight reaches the target directly, or the hard
+          stop is reached, whichever comes first. The hard stop is the naive grind time (target
+          divided by the stored rate, ignoring coast and the learner) plus an allowance
+          {settings ? ` (currently ${settings.grinding_overrun_ms} ms, set on the Settings page)` : ""}. The learner's shift never moves
           the stop by more than the clamp
           {settings ? ` (currently ±${settings.landing_learner_clamp_ms} ms)` : ""} from the
           unlearned stop time.

@@ -232,6 +232,12 @@ bool MainGrindModel::finalizeSession(int64_t now_epoch_s) {
   return true;
 }
 
+double MainGrindModel::hardTimeoutMs(double target_weight_g, double overrun_ms) const {
+  // The stored rate is kept inside the plausible range, so this floor only guards a corrupt value.
+  double rate = std::max(m_rate_hat, m_cfg.min_plausible_rate);
+  return 1000.0 * target_weight_g / rate + overrun_ms;
+}
+
 DosingModelState MainGrindModel::dumpPersisted(const DosingModelState &base) const {
   DosingModelState out = base;
   out.rate_hat = static_cast<float>(m_rate_hat);

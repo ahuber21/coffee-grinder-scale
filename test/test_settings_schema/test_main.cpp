@@ -101,13 +101,13 @@ void test_integer_settings_reject_fractions_negatives_and_overflow(void) {
   TEST_ASSERT_FALSE(settingAccepts(row("button_debounce_ms"), 150.5));
   TEST_ASSERT_FALSE(settingAccepts(row("button_debounce_ms"), -1.0));
   TEST_ASSERT_FALSE(settingAccepts(row("read_samples"), 300.0));
-  TEST_ASSERT_FALSE(settingAccepts(row("grinding_timeout_ms"), 5e9));
+  TEST_ASSERT_FALSE(settingAccepts(row("grinding_overrun_ms"), 5e9));
 }
 
 void test_non_finite_values_are_rejected(void) {
   TEST_ASSERT_FALSE(settingAccepts(row("target_dose_single"), NAN));
   TEST_ASSERT_FALSE(settingAccepts(row("target_dose_single"), INFINITY));
-  TEST_ASSERT_FALSE(settingAccepts(row("grinding_timeout_ms"), NAN));
+  TEST_ASSERT_FALSE(settingAccepts(row("grinding_overrun_ms"), NAN));
 }
 
 void test_bool_settings_accept_only_zero_or_one(void) {

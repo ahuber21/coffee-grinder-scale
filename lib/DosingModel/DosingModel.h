@@ -197,6 +197,14 @@ class MainGrindModel {
 
   double persistedRateHat() const { return m_rate_hat; }
 
+  /**
+   * Hard upper bound on a grind's runtime: the time `target_weight_g` takes at
+   * the stored rate with no coast, learner or live fit, plus `overrun_ms`. It
+   * depends on nothing that can drift within a session, so it still bounds the
+   * grind when the live prediction goes wrong.
+   */
+  double hardTimeoutMs(double target_weight_g, double overrun_ms) const;
+
   /** Returns `base` with the persisted rate fields overwritten by this model's state. */
   DosingModelState dumpPersisted(const DosingModelState &base) const;
 

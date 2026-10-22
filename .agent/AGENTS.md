@@ -226,8 +226,8 @@ source of truth.
     normal, ongoing operation. GRINDING's raw-weight fallback exists
     specifically to catch "the primary time estimate is wrong while
     flow is still ongoing"; gating it on stability meant it could no
-    longer catch that at all, leaving grinding_timeout_ms (tens of
-    seconds) as the only remaining backstop — trading a rare, small
+    longer catch that at all, leaving the hard grind timeout (naive grind time
+    plus `grinding_overrun_ms`) as the only remaining backstop — trading a rare, small
     undershoot for a much worse rare, large overshoot (this project's
     stated worse failure mode, D7). The correct fix here is protecting
     the *value* being compared, not gating the *decision*:

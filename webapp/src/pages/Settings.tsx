@@ -89,7 +89,7 @@ export default function SettingsPage() {
 
           <div className="panel">
             <h3>Timeouts (advanced)</h3>
-            <NumberSettingRow field="grinding_timeout_ms" label="Grinding safety timeout" step="100" unit=" ms" />
+            <NumberSettingRow field="grinding_overrun_ms" label="Grinding hard-stop allowance" step="100" unit=" ms" />
             <NumberSettingRow field="finalize_timeout_ms" label="Finalize screen duration" step="100" unit=" ms" />
             <NumberSettingRow field="confirm_timeout_ms" label="Confirm screen timeout" step="100" unit=" ms" />
             <NumberSettingRow field="stability_max_wait_ms" label="Settle timeout" step="10" unit=" ms" />

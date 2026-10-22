@@ -417,7 +417,8 @@ void handleGrindingSample(const ScaleSample &s) {
   bool time_estimate_fired = runtime_ms >= predicted_stop_ms;
   bool raw_weight_fallback_fired =
       g_main_grind_model->currentWeightEstimate() >= g_target_grams;
-  bool safety_timeout_fired = runtime_ms >= g_settings.grinding_timeout_ms;
+  bool safety_timeout_fired =
+      runtime_ms >= g_main_grind_model->hardTimeoutMs(g_target_grams, g_settings.grinding_overrun_ms);
 
   if (time_estimate_fired) {
     stopGrinding(s, runtime_ms, GrindStopReason::TIME_ESTIMATE);

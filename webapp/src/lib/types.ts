@@ -100,7 +100,7 @@ export interface SettingsMessage {
   read_samples: number;
   speed: number;
   gain: number;
-  grinding_timeout_ms: number;
+  grinding_overrun_ms: number;
   finalize_timeout_ms: number;
   confirm_timeout_ms: number;
   stability_max_wait_ms: number;
