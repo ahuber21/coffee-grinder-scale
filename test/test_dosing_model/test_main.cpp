@@ -45,10 +45,6 @@ void test_dosing_model_state_roundtrips_through_byte_copy(void) {
   original.version = kDosingModelVersion;
   original.rate_hat = 1.0123f;
   original.rate_precision = 123.45f;
-  for (int i = 0; i < kTopupLutBuckets; ++i) {
-    original.topup_lut_duration_ms[i] = 350.0f + 10.0f * i;
-    original.topup_lut_n[i] = static_cast<uint32_t>(i);
-  }
   original.rate_n_effective = 18;
   original.last_updated = 1234567890LL;
   original.coast_weight_hat = 0.49f;
@@ -63,10 +59,6 @@ void test_dosing_model_state_roundtrips_through_byte_copy(void) {
   TEST_ASSERT_EQUAL_UINT8(original.version, restored.version);
   TEST_ASSERT_EQUAL_FLOAT(original.rate_hat, restored.rate_hat);
   TEST_ASSERT_EQUAL_FLOAT(original.rate_precision, restored.rate_precision);
-  for (int i = 0; i < kTopupLutBuckets; ++i) {
-    TEST_ASSERT_EQUAL_FLOAT(original.topup_lut_duration_ms[i], restored.topup_lut_duration_ms[i]);
-    TEST_ASSERT_EQUAL_UINT32(original.topup_lut_n[i], restored.topup_lut_n[i]);
-  }
   TEST_ASSERT_EQUAL_UINT32(original.rate_n_effective, restored.rate_n_effective);
   TEST_ASSERT_EQUAL_INT64(original.last_updated, restored.last_updated);
   TEST_ASSERT_EQUAL_FLOAT(original.coast_weight_hat, restored.coast_weight_hat);
@@ -74,17 +66,6 @@ void test_dosing_model_state_roundtrips_through_byte_copy(void) {
 }
 
 // --- Cold start ----------------------------------------------------------------
-
-void test_cold_start_topup_model_reports_prior(void) {
-  // Every bucket is seeded as deadtime + 1000*aim_fraction*bucket_upper/slope.
-  DosingModelState persisted = makeDefaultDosingModelState();
-  TopupModel model(persisted);
-
-  double expected_bucket0 = 310.0 + 1000.0 * 0.85 * 0.1 / 1.05;
-  double expected_bucket9 = 310.0 + 1000.0 * 0.85 * 1.0 / 1.05;
-  TEST_ASSERT_DOUBLE_WITHIN(1e-3, expected_bucket0, model.durationForBucket(0));
-  TEST_ASSERT_DOUBLE_WITHIN(1e-3, expected_bucket9, model.durationForBucket(9));
-}
 
 void test_cold_start_main_grind_model_reports_prior(void) {
   DosingModelState persisted = makeDefaultDosingModelState();
@@ -98,34 +79,7 @@ void test_cold_start_coast_model_reports_prior(void) {
   TEST_ASSERT_DOUBLE_WITHIN(1e-6, 0.49, model.currentCoastEstimate());
 }
 
-// --- Convergence on synthetic data matching topup-model.md's real numbers ------
-
-void test_topup_lut_converges_toward_bucket_aim_weight(void) {
-  // A deterministic pulse response, to check the update rule converges on the bucket's aim weight.
-  const double true_slope = 1.05;  // g/s -- matches TopupPriors::kTopupSlope
-  const double true_deadtime_ms = 310.0;
-
-  const int bucket = 4;  // gap in (0.4, 0.5]
-  const double gap_g = 0.45;
-  const double bucket_upper = (bucket + 1) * 0.1;
-  const double aim_weight = 0.85 * bucket_upper;  // TopupModel::Config's default aim_fraction
-
-  DosingModelState persisted = makeDefaultDosingModelState();
-  // Deliberately wrong starting point (well below what's needed) so
-  // convergence is actually exercised, not already correct at seed time.
-  persisted.topup_lut_duration_ms[bucket] = 350.0f;
-  TopupModel model(persisted);
-
-  for (int i = 0; i < 200; ++i) {
-    double duration_ms = model.durationForBucket(bucket);
-    double weight_added = std::max(0.0, true_slope * (duration_ms - true_deadtime_ms) / 1000.0);
-    model.recordPulse(gap_g, weight_added);
-  }
-
-  double final_duration = model.durationForBucket(bucket);
-  double final_weight = std::max(0.0, true_slope * (final_duration - true_deadtime_ms) / 1000.0);
-  TEST_ASSERT_DOUBLE_WITHIN(0.01, aim_weight, final_weight);
-}
+// --- Convergence on synthetic data ---------------------------------------------
 
 void test_main_grind_model_converges_to_known_rate(void) {
   const double true_rate = 1.0;
@@ -362,22 +316,6 @@ void test_main_grind_model_nonpositive_rate_never_predicts_immediate_stop(void) 
   TEST_ASSERT_FALSE(1000.0 >= predicted);  // never "already there"
 }
 
-// --- Outlier rejection ---------------------------------------------------------
-
-void test_topup_model_rejects_hard_bound_outlier(void) {
-  DosingModelState persisted = makeDefaultDosingModelState();
-  TopupModel model(persisted);
-  double duration_before = model.durationForBucket(TopupModel::bucketForGap(0.45));
-
-  // A real sensor-glitch magnitude seen in the field.
-  TopupModel::PulseResult r = model.recordPulse(0.45, 483.0);
-
-  TEST_ASSERT_TRUE(r.hard_rejected);
-  TEST_ASSERT_FALSE(r.accepted);
-  TEST_ASSERT_DOUBLE_WITHIN(1e-6, duration_before,
-                             model.durationForBucket(TopupModel::bucketForGap(0.45)));
-}
-
 // --- Recency decay -------------------------------------------------------------
 
 // --- CoastModel ------------------------------------------------------------
@@ -457,48 +395,31 @@ void test_coast_model_recency_decay_reduces_old_observations_influence(void) {
   TEST_ASSERT_TRUE(decaying_gap < steady_gap);
 }
 
-// --- computeTopupDecision ----------------------------------------------------
+// --- Version-3 blob migration --------------------------------------------------
 
-void test_bucket_for_gap_maps_correctly(void) {
-  TEST_ASSERT_EQUAL_INT(0, TopupModel::bucketForGap(0.05));
-  TEST_ASSERT_EQUAL_INT(0, TopupModel::bucketForGap(0.1));   // upper edge included
-  TEST_ASSERT_EQUAL_INT(1, TopupModel::bucketForGap(0.11));  // just past the edge
-  TEST_ASSERT_EQUAL_INT(4, TopupModel::bucketForGap(0.45));
-  TEST_ASSERT_EQUAL_INT(9, TopupModel::bucketForGap(1.0));
-  TEST_ASSERT_EQUAL_INT(9, TopupModel::bucketForGap(1.5));  // clamped, no bucket beyond 1.0g
+// The device's persisted blob as it was read back on 2026-10-22.
+const uint8_t kDeviceV3Blob[kDosingModelV3Bytes] = {
+    0x03, 0x00, 0x00, 0x00, 0x8b, 0x25, 0x76, 0x3f, 0x71, 0xc7, 0x20, 0x4f, 0x25, 0xf3, 0xd8, 0x43, 0x48, 0x70, 0xdd, 0x43, 0xf5, 0x98, 0xd7, 0x43, 0xe5, 0x99, 0x25, 0x44, 0x7c, 0xc2, 0x3d, 0x44, 0xa0, 0x2e, 0x3b, 0x44, 0x93, 0x39, 0x59, 0x44, 0x31, 0x43, 0x54, 0x44, 0xf5, 0xc7, 0x84, 0x44, 0x7c, 0x0b, 0x9e, 0x44, 0x11, 0x00, 0x00, 0x00, 0x6f, 0x00, 0x00, 0x00, 0x48, 0x00, 0x00, 0x00, 0x34, 0x00, 0x00, 0x00, 0x42, 0x00, 0x00, 0x00, 0x2d, 0x00, 0x00, 0x00, 0x15, 0x00, 0x00, 0x00, 0x0a, 0x00, 0x00, 0x00, 0x05, 0x00, 0x00, 0x00, 0x0b, 0x00, 0x00, 0x00, 0x41, 0xd5, 0x17, 0x00, 0xd1, 0x6b, 0x35, 0x00, 0x00, 0x00, 0x00, 0x00, 0x05, 0xd8, 0xa6, 0x3e, 0xc0, 0xfd, 0x0c, 0x46};
+
+void test_migration_carries_rate_and_coast_from_a_real_v3_blob(void) {
+  DosingModelState migrated{};
+  TEST_ASSERT_TRUE(migrateDosingModelV3(kDeviceV3Blob, sizeof(kDeviceV3Blob), migrated));
+  TEST_ASSERT_EQUAL_UINT8(kDosingModelVersion, migrated.version);
+  TEST_ASSERT_FLOAT_WITHIN(1e-4, 0.9615f, migrated.rate_hat);
+  TEST_ASSERT_EQUAL_UINT32(1561921, migrated.rate_n_effective);
+  TEST_ASSERT_FLOAT_WITHIN(1e-3, 0.326f, migrated.coast_weight_hat);
+  TEST_ASSERT_FLOAT_WITHIN(1.0f, 9023.4f, migrated.coast_weight_precision);
+  TEST_ASSERT_EQUAL_INT64(3501009, migrated.last_updated);
 }
 
-void test_decision_fires_using_bucket_duration_and_aim_weight(void) {
-  DosingModelState persisted = makeDefaultDosingModelState();
-  TopupModel model(persisted);
-
-  TopupModel::Decision d = model.computeTopupDecision(0.45);  // bucket 4
-
-  TEST_ASSERT_TRUE(d.should_fire);
-  TEST_ASSERT_EQUAL_INT(4, d.bucket);
-  TEST_ASSERT_DOUBLE_WITHIN(1e-6, 0.85 * 0.5, d.aim_weight_g);
-  TEST_ASSERT_UINT32_WITHIN(1, static_cast<uint32_t>(model.durationForBucket(4) + 0.5),
-                             d.duration_ms);
-}
-
-void test_decision_fires_even_for_a_tiny_0_1g_gap(void) {
-  // Topup still tries to close a 0.1g gap; only min_topup_grams (in DosingTask) gates "basically zero".
-  DosingModelState persisted = makeDefaultDosingModelState();
-  TopupModel model(persisted);
-
-  TopupModel::Decision d = model.computeTopupDecision(0.1);
-  TEST_ASSERT_TRUE(d.should_fire);
-  TEST_ASSERT_EQUAL_INT(0, d.bucket);
-}
-
-void test_topup_model_falls_back_to_default_seed_for_invalid_persisted_bucket(void) {
-  // An out-of-bounds persisted duration (corrupt NVS) is reseeded, not trusted.
-  DosingModelState persisted = makeDefaultDosingModelState();
-  double expected = persisted.topup_lut_duration_ms[3];
-  persisted.topup_lut_duration_ms[3] = 50.0f;  // below the 350ms hygiene floor
-
-  TopupModel model(persisted);
-  TEST_ASSERT_DOUBLE_WITHIN(1e-3, expected, model.durationForBucket(3));
+void test_migration_rejects_other_sizes_and_versions(void) {
+  DosingModelState out = makeDefaultDosingModelState();
+  uint8_t wrong_version[kDosingModelV3Bytes];
+  std::memcpy(wrong_version, kDeviceV3Blob, sizeof(wrong_version));
+  wrong_version[0] = 2;
+  TEST_ASSERT_FALSE(migrateDosingModelV3(wrong_version, sizeof(wrong_version), out));
+  TEST_ASSERT_FALSE(migrateDosingModelV3(kDeviceV3Blob, sizeof(kDeviceV3Blob) - 1, out));
+  TEST_ASSERT_FLOAT_WITHIN(1e-6, ModelPriors::kRateHat, out.rate_hat);
 }
 
 // --- LandingLearner ------------------------------------------------------------
@@ -576,6 +497,23 @@ void test_landing_learner_forgets_old_evidence(void) {
 }
 
 
+void test_landing_learner_params_describe_the_fit_that_predict_uses(void) {
+  LandingLearner l(makeDefaultLandingLearnerState());
+  TEST_ASSERT_EQUAL_UINT32(0, l.params(false).sessions);
+  for (int i = 0; i < 60; ++i) {
+    double rate = 0.9 + 0.002 * (i % 20);
+    l.record(true, rate, 0.1 + 0.5 * (rate - 0.92));
+  }
+  LandingLearner::Params p = l.params(true);
+  TEST_ASSERT_EQUAL_UINT32(60, p.sessions);
+  TEST_ASSERT_TRUE(p.effective_sessions > 10.0f);
+  TEST_ASSERT_FLOAT_WITHIN(0.01f, 0.919f, p.mean_rate_g_s);
+  TEST_ASSERT_DOUBLE_WITHIN(1e-5, l.predict(true, p.mean_rate_g_s), p.intercept_g);
+  TEST_ASSERT_DOUBLE_WITHIN(1e-4, l.predict(true, p.mean_rate_g_s + 1.0) - p.intercept_g,
+                            p.slope_g_per_g_s);
+  TEST_ASSERT_EQUAL_UINT32(0, l.params(false).sessions);
+}
+
 int main(int argc, char **argv) {
   (void)argc;
   (void)argv;
@@ -587,11 +525,9 @@ int main(int argc, char **argv) {
 
   RUN_TEST(test_dosing_model_state_roundtrips_through_byte_copy);
 
-  RUN_TEST(test_cold_start_topup_model_reports_prior);
   RUN_TEST(test_cold_start_main_grind_model_reports_prior);
   RUN_TEST(test_cold_start_coast_model_reports_prior);
 
-  RUN_TEST(test_topup_lut_converges_toward_bucket_aim_weight);
   RUN_TEST(test_main_grind_model_converges_to_known_rate);
   RUN_TEST(test_main_grind_model_predicts_sane_stop_time);
   RUN_TEST(test_main_grind_model_predicts_earlier_stop_time_with_coast);
@@ -603,8 +539,9 @@ int main(int argc, char **argv) {
   RUN_TEST(test_main_grind_model_keeps_adapting_after_many_sessions);
   RUN_TEST(test_main_grind_model_clamps_a_saturated_persisted_precision);
 
-  RUN_TEST(test_topup_model_rejects_hard_bound_outlier);
-  RUN_TEST(test_topup_model_falls_back_to_default_seed_for_invalid_persisted_bucket);
+
+  RUN_TEST(test_migration_carries_rate_and_coast_from_a_real_v3_blob);
+  RUN_TEST(test_migration_rejects_other_sizes_and_versions);
 
   RUN_TEST(test_coast_model_shifts_meaningfully_with_consistent_observations);
   RUN_TEST(test_coast_model_rejects_negative_observation);
@@ -619,9 +556,7 @@ int main(int argc, char **argv) {
   RUN_TEST(test_landing_learner_rejects_glitch_observations);
   RUN_TEST(test_landing_learner_state_roundtrips_through_byte_copy);
   RUN_TEST(test_landing_learner_forgets_old_evidence);
-  RUN_TEST(test_bucket_for_gap_maps_correctly);
-  RUN_TEST(test_decision_fires_using_bucket_duration_and_aim_weight);
-  RUN_TEST(test_decision_fires_even_for_a_tiny_0_1g_gap);
+  RUN_TEST(test_landing_learner_params_describe_the_fit_that_predict_uses);
 
   return UNITY_END();
 }

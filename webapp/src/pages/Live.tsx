@@ -243,8 +243,8 @@ export default function LivePage() {
           </button>
         </div>
         <p className="muted" style={{ fontSize: "0.85em" }}>
-          Same effect as the physical buttons, with a custom target weight; the usual top-up
-          margin applies, and the session is recorded as a single dose.
+          Same effect as the physical buttons, with a custom target weight; the session is
+          recorded as a single dose.
         </p>
       </div>
 

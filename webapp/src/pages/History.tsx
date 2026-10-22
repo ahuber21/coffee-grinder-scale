@@ -28,16 +28,13 @@ function useDeltas(load: () => Promise<number[]>): number[] | null {
   return deltas;
 }
 
-/**
- * Final weight minus the requested weight. The requested weight, not the
- * main-grind stop target, because topup's job is closing that margin.
- */
+/** Final weight minus the requested weight. */
 const finalError = (mode: "single" | "double") => () =>
   fetchCompletedDosesForMode(mode).then((doses) =>
     doses.map((d) => d.final_weight_g - d.requested_weight_g)
   );
 
-/** Settled main-grind weight minus the stop target, before any topup. */
+/** Settled main-grind weight minus the stop target. */
 const landingError = (mode: "single" | "double") => () =>
   fetchLandingForMode(mode).then((rows) => rows.map((r) => r.settled_weight_g - r.target_weight_g));
 
@@ -104,10 +101,10 @@ export default function HistoryPage() {
       <div className="panel">
         <h3>Main-grind landing (landing learner)</h3>
         <p className="muted" style={{ fontSize: "0.85em" }}>
-          Settled weight right after the main grind, before any top-up, minus the stop target
-          (requested dose minus the top-up margin). The learner's job is to pull this curve
-          narrower and onto zero. Only grinds that recorded a settled weight appear here, i.e.
-          the learner era onward.
+          Settled weight right after the main grind minus the stop target, which is the requested
+          dose (earlier sessions aimed 0.5 g below it and finished with top-up pulses). The
+          learner's job is to pull this curve narrower and onto zero. Only grinds that recorded
+          a settled weight appear here, i.e. the learner era onward.
         </p>
         <div style={twoColumnGrid}>
           <DeltaHistogram

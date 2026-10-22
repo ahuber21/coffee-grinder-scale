@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstring>
 #include <limits>
 
 namespace {
@@ -10,17 +11,6 @@ constexpr double kMinWeight = 1e-9;
 constexpr double kSecondsPerDay = 86400.0;
 /// Floor on residual variance, so a near-perfect fit gives a huge but finite precision.
 constexpr double kMinResidualVariance = 1e-6;
-
-/** The weight a topup pulse for `bucket` aims to add. */
-double aimWeightForBucket(int bucket, double aim_fraction) {
-  return aim_fraction * (bucket + 1) * kTopupLutBucketWidthG;
-}
-
-/** Initial pulse duration for `bucket`, from the prior deadtime and slope. */
-double seedDurationMs(int bucket, double aim_fraction) {
-  return TopupPriors::kTopupDeadtimeMs +
-         1000.0 * aimWeightForBucket(bucket, aim_fraction) / TopupPriors::kTopupSlope;
-}
 }  // namespace
 
 // --- WeightedLinearFit ------------------------------------------------------
@@ -86,20 +76,33 @@ double WeightedLinearFit::slopeVariance() const {
 DosingModelState makeDefaultDosingModelState() {
   DosingModelState m{};
   m.version = kDosingModelVersion;
-  m.rate_hat = TopupPriors::kRateHat;
-  m.rate_precision = 1.0f / (TopupPriors::kRateSd * TopupPriors::kRateSd);
-  m.rate_n_effective = TopupPriors::kRateN0;
+  m.rate_hat = ModelPriors::kRateHat;
+  m.rate_precision = 1.0f / (ModelPriors::kRateSd * ModelPriors::kRateSd);
+  m.rate_n_effective = ModelPriors::kRateN0;
   m.last_updated = 0;
-  m.coast_weight_hat = TopupPriors::kCoastWeightHat;
+  m.coast_weight_hat = ModelPriors::kCoastWeightHat;
   m.coast_weight_precision =
-      1.0f / (TopupPriors::kCoastWeightSd * TopupPriors::kCoastWeightSd);
-
-  TopupModel::Config default_cfg;
-  for (int i = 0; i < kTopupLutBuckets; ++i) {
-    m.topup_lut_duration_ms[i] = static_cast<float>(seedDurationMs(i, default_cfg.aim_fraction));
-    m.topup_lut_n[i] = 0;
-  }
+      1.0f / (ModelPriors::kCoastWeightSd * ModelPriors::kCoastWeightSd);
   return m;
+}
+
+bool migrateDosingModelV3(const void *bytes, size_t len, DosingModelState &out) {
+  // Field offsets of the version-3 layout, which no struct describes any more.
+  constexpr size_t kVersion = 0, kRateHat = 4, kRatePrecision = 8, kRateNEff = 92,
+                   kLastUpdated = 96, kCoastHat = 104, kCoastPrecision = 108;
+  if (len != kDosingModelV3Bytes) return false;
+  const uint8_t *raw = static_cast<const uint8_t *>(bytes);
+  if (raw[kVersion] != 3) return false;
+
+  DosingModelState migrated = makeDefaultDosingModelState();
+  std::memcpy(&migrated.rate_hat, raw + kRateHat, sizeof(float));
+  std::memcpy(&migrated.rate_precision, raw + kRatePrecision, sizeof(float));
+  std::memcpy(&migrated.rate_n_effective, raw + kRateNEff, sizeof(uint32_t));
+  std::memcpy(&migrated.last_updated, raw + kLastUpdated, sizeof(int64_t));
+  std::memcpy(&migrated.coast_weight_hat, raw + kCoastHat, sizeof(float));
+  std::memcpy(&migrated.coast_weight_precision, raw + kCoastPrecision, sizeof(float));
+  out = migrated;
+  return true;
 }
 
 // --- MainGrindModel ----------------------------------------------------------
@@ -238,83 +241,6 @@ DosingModelState MainGrindModel::dumpPersisted(const DosingModelState &base) con
   return out;
 }
 
-// --- TopupModel ---------------------------------------------------------------
-
-TopupModel::TopupModel(const DosingModelState &persisted) : TopupModel(persisted, Config()) {}
-
-TopupModel::TopupModel(const DosingModelState &persisted, Config cfg) : m_cfg(cfg) {
-  for (int i = 0; i < kTopupLutBuckets; ++i) {
-    double duration = persisted.topup_lut_duration_ms[i];
-    // An implausible entry is reseeded rather than commanding a 0ms pulse.
-    if (!(duration >= m_cfg.hygiene_min_duration_ms && duration <= m_cfg.hygiene_max_duration_ms)) {
-      duration = seedDurationMs(i, m_cfg.aim_fraction);
-    }
-    m_duration_ms[i] = duration;
-    m_n[i] = persisted.topup_lut_n[i];
-  }
-}
-
-int TopupModel::bucketForGap(double gap_g) {
-  int bucket = static_cast<int>(std::ceil(gap_g / kTopupLutBucketWidthG)) - 1;
-  if (bucket < 0) bucket = 0;
-  if (bucket >= kTopupLutBuckets) bucket = kTopupLutBuckets - 1;
-  return bucket;
-}
-
-TopupModel::Decision TopupModel::computeTopupDecision(double gap_g) const {
-  Decision d;
-  d.bucket = bucketForGap(gap_g);
-  d.aim_weight_g = aimWeightForBucket(d.bucket, m_cfg.aim_fraction);
-
-  double duration_ms = m_duration_ms[d.bucket];
-  // recordPulse already clamps to these bounds; this guarantees no pulse outside them fires.
-  if (duration_ms < m_cfg.hygiene_min_duration_ms || duration_ms > m_cfg.hygiene_max_duration_ms) {
-    return d;
-  }
-
-  d.should_fire = true;
-  d.duration_ms = static_cast<uint32_t>(duration_ms + 0.5);
-  return d;
-}
-
-TopupModel::PulseResult TopupModel::recordPulse(double gap_at_fire_g, double weight_increment_g) {
-  PulseResult r;
-
-  // Hard bounds first, so sensor-glitch garbage can't influence anything.
-  if (weight_increment_g < m_cfg.reject_hard_min_g ||
-      weight_increment_g > m_cfg.reject_hard_max_g) {
-    r.hard_rejected = true;
-    return r;
-  }
-
-  int bucket = bucketForGap(gap_at_fire_g);
-  double aim_weight = aimWeightForBucket(bucket, m_cfg.aim_fraction);
-  double error = aim_weight - weight_increment_g;  // > 0 means this pulse undershot.
-
-  double learn_rate = error > 0.0 ? m_cfg.learn_rate_undershoot : m_cfg.learn_rate_overshoot;
-  double adjustment_ms = learn_rate * error * 1000.0 / TopupPriors::kTopupSlope;
-
-  double new_duration = m_duration_ms[bucket] + adjustment_ms;
-  if (new_duration < m_cfg.hygiene_min_duration_ms) new_duration = m_cfg.hygiene_min_duration_ms;
-  if (new_duration > m_cfg.hygiene_max_duration_ms) new_duration = m_cfg.hygiene_max_duration_ms;
-
-  m_duration_ms[bucket] = new_duration;
-  if (m_n[bucket] < UINT32_MAX) m_n[bucket] += 1;
-
-  r.accepted = true;
-  r.bucket = bucket;
-  return r;
-}
-
-DosingModelState TopupModel::dumpPersisted(const DosingModelState &base) const {
-  DosingModelState out = base;
-  for (int i = 0; i < kTopupLutBuckets; ++i) {
-    out.topup_lut_duration_ms[i] = static_cast<float>(m_duration_ms[i]);
-    out.topup_lut_n[i] = m_n[i];
-  }
-  return out;
-}
-
 // --- CoastModel ----------------------------------------------------------------
 
 CoastModel::CoastModel(const DosingModelState &persisted)
@@ -346,7 +272,7 @@ CoastModel::RecordResult CoastModel::recordCoast(double observed_coast_g,
 
   // Normal-normal blend; the observation carries the fixed precision 1/observation_sd^2.
   double obs_sd = m_cfg.observation_sd > 0.0 ? m_cfg.observation_sd
-                                              : TopupPriors::kCoastWeightSd;
+                                              : ModelPriors::kCoastWeightSd;
   double obs_precision = 1.0 / (obs_sd * obs_sd);
   double total_precision = decayed_precision + obs_precision;
 
@@ -387,13 +313,25 @@ double LandingLearner::predict(bool is_double, double rate_g_s) const {
   const LandingLearnerState::Mode &m = m_state.mode[is_double ? 1 : 0];
   if (!(m.sw > kMinWeight)) return 0.0;
 
-  double mean_x = m.sx / m.sw;
+  Params p = params(is_double);
+  return p.intercept_g + p.slope_g_per_g_s * (rate_g_s - p.mean_rate_g_s);
+}
+
+LandingLearner::Params LandingLearner::params(bool is_double) const {
+  const LandingLearnerState::Mode &m = m_state.mode[is_double ? 1 : 0];
+  Params p;
+  p.sessions = m.n;
+  p.effective_sessions = static_cast<float>(m.sw);
+  if (!(m.sw > kMinWeight)) return p;
+
   double sxx_c = m.sxx - m.sx * m.sx / m.sw;
   double sxy_c = m.sxy - m.sx * m.sy / m.sw;
-  double slope = sxy_c / (sxx_c + m_cfg.ridge);
   double prior = m_cfg.prior_weight * m_cfg.prior_weight / (m_cfg.prior_weight + m.n);
-  double intercept = m.sy / (m.sw + prior);
-  return intercept + slope * (rate_g_s - mean_x);
+  p.mean_rate_g_s = static_cast<float>(m.sx / m.sw);
+  p.intercept_g = static_cast<float>(m.sy / (m.sw + prior));
+  p.slope_g_per_g_s = static_cast<float>(sxy_c / (sxx_c + m_cfg.ridge));
+  p.residual_sd_g = static_cast<float>(residualSd(is_double));
+  return p;
 }
 
 bool LandingLearner::record(bool is_double, double rate_g_s, double uncorrected_error_g) {

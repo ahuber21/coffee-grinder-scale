@@ -528,7 +528,7 @@ void drawIdleLayout(float currentGrams, uint16_t connColor, bool force) {
   drawConnectionIndicator(connColor);
 }
 
-// --- GRINDING/TOPUP/STOPPING/FINALIZE layout --------------------------------------------
+// --- GRINDING/STOPPING/FINALIZE layout --------------------------------------------
 // Current weight (top), target below, elapsed time at the bottom; the modes differ only in color.
 
 /** Cache of the grinding-family layout's last-drawn text and colors. */
@@ -650,7 +650,6 @@ void defaultColorsFor(DisplayMode mode, uint16_t *current, uint16_t *target, uin
   *target = kColorSecondary;
   *time = kColorSecondary;
   switch (mode) {
-    case DisplayMode::TOPUP:
     case DisplayMode::STOPPING:
       *current = kColorAccentBlue;
       break;
@@ -863,7 +862,6 @@ void renderMode(const DisplayCommand &cmd, bool force) {
       break;
 
     case DisplayMode::GRINDING:
-    case DisplayMode::TOPUP:
     case DisplayMode::STOPPING:
     case DisplayMode::FINALIZE: {
       uint16_t defCurrent, defTarget, defTime;

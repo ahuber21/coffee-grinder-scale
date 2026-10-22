@@ -77,32 +77,25 @@ transliterate blindly. Log anything questionable in `ARS.md`.
   New `sessions`-style schema needed (target weight, mode, linked
   topup/progress/raw-data) — the old schema silently discarded target
   weight, which is being fixed.
-- **Topup algorithm**: replace the static 6-bucket lookup table with a
-  fitted, recency-weighted model built from `topup(runtime_ms →
-  weight_increment)` and `progress(runtime_ms → weight)` history (7,647 /
-  121,847 rows respectively as of the audit). Neither needs the missing
-  target linkage to be useful. Targets: "spot on" = |error| < 0.1g for
-  80% of sessions (relaxed from 0.05g by D24 -- real session data showed
-  0.05g wasn't a meaningful target given the topup mechanism's own
-  physical granularity), 95% within Δ0.2g, remaining 5% outliers
-  tolerated; **overshoot hard-capped at ≤0.3g** and weighted as more
-  critical to avoid than undershoot (undershoot → annoying-but-fine
-  topup loop; overshoot → manually discarding ground coffee).
-- **Two-phase dosing (offset target + topup)**: because overshoot is the
-  worse failure, the main grind deliberately aims short. The stop
-  threshold is `g_target_grams_corrected` = requested target minus
-  `top_up_margin_single`/`top_up_margin_double` (currently 0.5g, settings
-  keys `margin_sing`/`margin_dbl`). In `v2.sessions`, `requested_weight_g`
-  is the real target and `target_weight_g` is this offset target, so
-  accuracy must be judged against `requested_weight_g`. The main grind
-  never lands exactly on the offset target; TOPUP closes whatever gap is
-  left. `TopupModel` (persisted in `DosingModelState`) is a self-tuning per-0.1g-gap-bucket pulse-duration
-  LUT (corrects overshoot faster than it lengthens for undershoot) that
-  aims to close the remaining gap in a single pulse; sessions can still
-  need several pulses.
+- **Accuracy targets**: "spot on" = |error| < 0.1g for 80% of sessions
+  (relaxed from 0.05g by D24 -- real session data showed 0.05g wasn't a
+  meaningful target given the physical granularity of a relay pulse),
+  95% within Δ0.2g, remaining 5% outliers tolerated; **overshoot is
+  weighted as more critical to avoid than undershoot** (a short dose can be
+  topped up by hand; an over-dose means discarding ground coffee).
+- **Single-shot dosing (since 2026-10-22)**: there is no top-up phase. The
+  main grind stops at the requested dose minus the predicted coast and the
+  landing learner's shift, the weight settles, and the dose is FINALIZEd. In
+  `v2.sessions`, `requested_weight_g` and `target_weight_g` are equal from
+  this point; earlier sessions have `target_weight_g` = requested - 0.5g and
+  were followed by TOPUP events. The top-up phase, `TopupModel`, the margin
+  settings and the per-pulse DB columns were removed; the last commit that has
+  them is tagged `topup-final`, and `.agent/backups/` holds the device's
+  learned values from just before the switch (see its README to roll back).
 - **Main-grind landing (measured 2026-10-05, 91 sessions since
-  2026-09-21)**: measure it from the SETTLED weight, i.e. the first TOPUP
-  event's `weight_before_g`. MAIN_GRIND `weight_after_g` is the reading at
+  2026-09-21, while top-up existed)**: measure it from the SETTLED weight
+  (`v2.sessions.settled_weight_g`; for older sessions the first TOPUP
+  event's `weight_before_g`). MAIN_GRIND `weight_after_g` is the reading at
   the instant the relay turns off, before the coast settles, so it sits
   ~0.33g below the settled weight (sd 0.12g) and must not be compared to
   the target. Settled landing minus `target_weight_g` averages +0.08g with
@@ -243,17 +236,15 @@ source of truth.
     sample rise or drop (`max_plausible_rise_g`/`max_plausible_drop_g`)
     before it's compared against anything — no stability requirement,
     because none is available while genuinely grinding. The same
-    reasoning applies to `TopupModel`'s hard bounds and `CoastModel`'s
-    plausibility bounds: independent, magnitude/statistical rejection,
+    reasoning applies to `CoastModel`'s plausibility bounds: independent, magnitude/statistical rejection,
     not a stability gate.
-  - **A process that is idle or between discrete pulses** (TOPUP's
-    DECIDING/SETTLING phases, with the relay *off* between pulses;
-    SCREENSAVER waiting for a cup to be placed/removed; FINALIZE waiting
+  - **A process that is idle** (STOPPING waiting for the coast to settle
+    with the relay *off*; SCREENSAVER waiting for a cup to be placed/removed; FINALIZE waiting
     to see if the cup was lifted) genuinely can and does settle once the
     one-time disturbance passes, because nothing is continuously acting
     on the scale. Gating on `sample.stable` here is correct and doesn't
-    starve anything — see `handleTopupSample`'s DECIDING/SETTLING
-    phases for the reference pattern (`stable || elapsed >=
+    starve anything — see `stateSettledOrTimedOut` in `DosingTask.cpp`
+    for the reference pattern (`stable || elapsed >=
     stability_max_wait_ms` when the wait must also be bounded; no bound
     needed when an independent unconditional exit already exists, like
     a button press or an overall timeout).

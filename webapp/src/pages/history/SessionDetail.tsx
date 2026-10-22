@@ -11,7 +11,7 @@ import {
 
 Chart.register(LineController, LineElement, PointElement, LinearScale, Tooltip, Filler);
 
-/** One session's weight curve and its main-grind and topup pulse events. */
+/** One session's weight curve and its recorded events. */
 export default function SessionDetail({ session }: { session: Session }) {
   const [events, setEvents] = useState<SessionEvent[] | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -69,7 +69,7 @@ export default function SessionDetail({ session }: { session: Session }) {
       <h3>Session {session.session_id.slice(0, 8)}</h3>
       <p className="muted">
         {formatTimestamp(session.started_at)} · {session.mode} · requested{" "}
-        {session.requested_weight_g}g, main-grind stop {session.target_weight_g}g
+        {session.requested_weight_g}g, stop target {session.target_weight_g}g
         {session.final_weight_g !== null && `, final ${session.final_weight_g}g`}
       </p>
       {error && <p style={{ color: "var(--red)" }}>{error}</p>}

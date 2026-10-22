@@ -51,7 +51,6 @@ enum class DisplayMode : uint8_t {
   CONFIRM,
   TARE,
   GRINDING,
-  TOPUP,
   STOPPING,
   FINALIZE,
   SCREENSAVER,
@@ -86,7 +85,6 @@ enum class TelemetryType : uint8_t {
   TARGET,
   PROGRESS,
   RAW_SAMPLE,
-  TOPUP_PULSE,
   FINALIZE,
   COMPLETE,
   LOG_LINE,
@@ -109,25 +107,15 @@ struct TelemetryEvent {
   uint32_t runtime_ms;  ///< Session-relative.
   float grams;
   float target_grams;
-  float delta_grams;  ///< TOPUP_PULSE only.
   int32_t raw_adc;
   bool stable;
   char log_line[96];  ///< LOG_LINE only.
-  /*
-   * TARGET only: whether this is a double dose, and the margin-corrected
-   * stop target Dosing aims for (target_grams stays the requested dose).
-   */
+  /// TARGET only: whether this is a double dose.
   bool is_double;
-  float target_grams_corrected;
 
   /// PROGRESS only: which stop condition fired, and the model's weight estimate then (delta space).
   GrindStopReason stop_reason;
   float weight_estimate_g;
-
-  /// TOPUP_PULSE only: the pulse's inputs at fire time, which later retuning makes unrecoverable.
-  uint8_t topup_bucket;
-  float topup_aim_weight_g;
-  uint32_t topup_commanded_duration_ms;
 
   /// MODEL_STATE only: the persisted model parameters as standard deviations, sent at boot and after each session.
   float rate_hat_g_s;
@@ -135,13 +123,10 @@ struct TelemetryEvent {
   float coast_weight_g;
   float coast_weight_sd_g;
   uint32_t rate_n_effective;
-  /// Per-gap-bucket tuned pulse duration and observation count (see kTopupLutBuckets).
-  float topup_lut_duration_ms[kTopupLutBuckets];
-  uint32_t topup_lut_n[kTopupLutBuckets];
+  LandingLearner::Params learner[2];  ///< Landing learner fit per dose mode; 0 = single, 1 = double.
 
-  /// LANDING only (the settled weight itself travels in `grams`): coast, margin and learner shift.
+  /// LANDING only (the settled weight itself travels in `grams`): coast and learner shift.
   float landing_coast_g;
-  float landing_margin_g;
   float landing_correction_g;  ///< Applied stop-point shift, positive = stopped earlier.
   bool landing_clamped;
 };
@@ -195,14 +180,9 @@ struct SettingsSnapshot {
   // Dosing config (Dosing task's slice).
   float target_dose_single = 18.0f;
   float target_dose_double = 36.0f;
-  float top_up_margin_single = 0.3f;
-  float top_up_margin_double = 0.5f;
-  float min_topup_grams = 0.08f;
-  uint32_t topup_timeout_ms = 1000;
   uint32_t grinding_timeout_ms = 30000;
   uint32_t finalize_timeout_ms = 8000;
   uint32_t confirm_timeout_ms = 2000;
-  uint32_t stability_min_wait_ms = 500;
   uint32_t stability_max_wait_ms = 1500;
   uint32_t screensaver_timeout_s = 60;
   /// A settled weight change past this wakes the display from SCREENSAVER, no button press needed.
@@ -216,7 +196,7 @@ struct SettingsSnapshot {
   float display_clump_density = 1.0f;  ///< Scales how many clumps fall at once.
   float display_clump_gravity = 1.0f;  ///< Scales how fast each clump falls.
 
-  // Dosing task's landing learner, which shifts the main-grind stop so the settled weight hits the offset target.
+  // Dosing task's landing learner, which shifts the main-grind stop so the settled weight hits the target.
   bool landing_learner_enabled = true;
   float landing_learner_rate = 0.05f;  ///< Per-session forgetting; evidence window ~1/rate sessions.
   uint32_t landing_learner_clamp_ms = 500;  ///< Max stop-time shift either way vs the unlearned stop.

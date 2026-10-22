@@ -4,6 +4,7 @@
 #include <Preferences.h>
 #include <atomic>
 #include <cmath>
+#include <cstring>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 
@@ -28,7 +29,7 @@ constexpr const char *kNvsNamespace = "settings";
 constexpr uint32_t kSettingsSchemaVersion = 2;
 
 constexpr const char *kKeySchemaVer = "schema_ver";
-/// Keeps the name from before the state struct was renamed, so stored models still load.
+/// The NVS key stored blobs already live under, so existing models still load.
 constexpr const char *kKeyDosingModel = "topup_model";
 constexpr const char *kKeyLandingLearner = "land_learner";
 
@@ -118,11 +119,6 @@ void saveSettingsToNvs(const SettingsSnapshot &snap) {
 /** Plausibility bounds for a persisted DosingModelState blob. */
 bool isPlausibleDosingModel(const DosingModelState &m) {
   if (!std::isfinite(m.rate_hat) || m.rate_hat < 0.3f || m.rate_hat > 2.5f) return false;
-  for (int i = 0; i < kTopupLutBuckets; ++i) {
-    if (!std::isfinite(m.topup_lut_duration_ms[i]) || m.topup_lut_duration_ms[i] < 0.0f ||
-        m.topup_lut_duration_ms[i] > 5000.0f)
-      return false;
-  }
   return std::isfinite(m.coast_weight_hat) && m.coast_weight_hat >= 0.0f &&
          m.coast_weight_hat <= 3.0f;
 }
@@ -157,6 +153,37 @@ bool loadBlobFromNvs(const char *key, const char *what, uint32_t expected_versio
   if (got != sizeof(loaded) || loaded.version != expected_version || !plausible(loaded)) {
     Serial.printf("[Settings] %s NVS blob missing/stale/implausible -- starting from defaults\n",
                   what);
+    return false;
+  }
+  out = loaded;
+  return true;
+}
+
+/**
+ * Loads the dosing model blob: a current-layout blob as is, or a version-3 blob
+ * through migrateDosingModelV3. A missing, stale or implausible one returns false.
+ */
+bool loadDosingModelFromNvs(DosingModelState &out) {
+  if (!g_prefs.begin(kNvsNamespace, /*readOnly=*/true)) {
+    Serial.println("[Settings] NVS namespace not found -- dosing model starts from defaults");
+    return false;
+  }
+  uint8_t raw[256];
+  size_t len = g_prefs.getBytesLength(kKeyDosingModel);
+  size_t got = len > 0 && len <= sizeof(raw) ? g_prefs.getBytes(kKeyDosingModel, raw, sizeof(raw)) : 0;
+  g_prefs.end();
+
+  DosingModelState loaded{};
+  bool ok = false;
+  if (got == sizeof(DosingModelState)) {
+    std::memcpy(&loaded, raw, sizeof(loaded));
+    ok = loaded.version == kDosingModelVersion;
+  } else if (got > 0 && migrateDosingModelV3(raw, got, loaded)) {
+    Serial.println("[Settings] dosing model migrated from the version-3 blob");
+    ok = true;
+  }
+  if (!ok || !isPlausibleDosingModel(loaded)) {
+    Serial.println("[Settings] dosing model NVS blob missing/stale/implausible -- starting from defaults");
     return false;
   }
   out = loaded;
@@ -295,8 +322,7 @@ void settingsTaskFn(void *) {
   captureBootBackup(g_settings);
 
   g_dosing_model = makeDefaultDosingModelState();
-  if (!loadBlobFromNvs(kKeyDosingModel, "dosing model", kDosingModelVersion,
-                       isPlausibleDosingModel, g_dosing_model)) {
+  if (!loadDosingModelFromNvs(g_dosing_model)) {
     g_dosing_model = makeDefaultDosingModelState();
   }
   g_landing_learner = makeDefaultLandingLearnerState();

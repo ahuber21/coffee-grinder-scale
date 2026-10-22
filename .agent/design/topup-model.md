@@ -1,5 +1,9 @@
 # Topup/dosing model — design proposal (D7)
 
+> Historical. The top-up phase described here was removed on 2026-10-22; the last
+> commit that has it is tagged `topup-final`. The data and the coast/rate analysis
+> below still describe the grinder.
+
 Analysis-only. No firmware or database changes made. All numbers below come
 from live queries against `coffee_grinder.public.topup` (7,647 rows),
 `coffee_grinder.public.progress` (121,847 rows), and

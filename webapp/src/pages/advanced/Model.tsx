@@ -1,45 +1,116 @@
-import { useEffect, useMemo, useRef } from "react";
-import {
-  Chart,
-  LineController,
-  LineElement,
-  PointElement,
-  LinearScale,
-  Tooltip,
-  Legend,
-  type ChartDataset,
-} from "chart.js";
-import { legendLabels, linearAxis } from "../../lib/chartTheme";
+import { useEffect, useMemo, useState } from "react";
+import ParamChart, { type ParamSeries } from "../../components/ParamChart";
+import { ACCENT_BLUE, ACCENT_GREEN, ACCENT_ORANGE } from "../../lib/chartTheme";
 import { useDeviceSocket } from "../../lib/DeviceSocketContext";
-import type { TelemetryModelState } from "../../lib/types";
+import { formatTimestamp } from "../../lib/format";
+import { fetchModelSnapshots, type ModelSnapshot } from "../../lib/postgrest";
+import type { LearnerParams, TelemetryModelState } from "../../lib/types";
 
-Chart.register(LineController, LineElement, PointElement, LinearScale, Tooltip, Legend);
-
-// TopupModel::Config values (lib/DosingModel/DosingModel.h), repeated here for the explanation
-// because no channel reports them. Keep in step by hand.
-const AIM_FRACTION = 0.85;
-const LEARN_RATE_UNDERSHOOT = 0.3;
-const LEARN_RATE_OVERSHOOT = 0.6;
-const HYGIENE_MIN_DURATION_MS = 350;
-const HYGIENE_MAX_DURATION_MS = 5000;
-const BUCKET_WIDTH_G = 0.1;
+// LandingLearner::Config and MainGrindModel::Config values (lib/DosingModel/DosingModel.h),
+// repeated here for the explanation because no channel reports them. Keep in step by hand.
+const LEARNER_PRIOR_WEIGHT = 3;
+const LEARNER_RIDGE = 0.02;
+const LEARNER_MAX_ABS_ERROR_G = 1.0;
+const RATE_SESSION_WINDOW = 30;
+const RATE_SESSION_SD = 0.09;
+const RATE_DEADTIME_S = 0.9;
 
 function Formula({ children }: { children: string }) {
   return <div className="formula">{children}</div>;
 }
 
-// Buckets are ordered by gap size, so they get one hue from light to dark rather than a rainbow.
-function bucketColor(i: number): string {
-  const lightness = 74 - i * 4.2;
-  return `hsl(210, 85%, ${lightness}%)`;
+function Stat({ label, value, unit, note }: { label: string; value: string; unit?: string; note?: string }) {
+  return (
+    <div>
+      <div className="muted" style={{ fontSize: "0.8em" }}>
+        {label}
+      </div>
+      <div className="big-number" style={{ fontSize: "1.5rem" }}>
+        {value}
+        {unit && (
+          <span className="muted" style={{ fontSize: "0.55em" }}>
+            {" "}
+            {unit}
+          </span>
+        )}
+      </div>
+      {note && (
+        <div className="muted" style={{ fontSize: "0.8em" }}>
+          {note}
+        </div>
+      )}
+    </div>
+  );
 }
 
-export default function ModelPage() {
-  const { telemetryHistory } = useDeviceSocket();
-  const lutCanvasRef = useRef<HTMLCanvasElement | null>(null);
-  const lutChartRef = useRef<Chart | null>(null);
+const statGrid = {
+  display: "grid",
+  gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))",
+  gap: "1rem",
+  margin: "0.8rem 0",
+};
 
-  const model = useMemo<TelemetryModelState | null>(() => {
+/** A snapshot's learner columns for one dose mode, in the shape the live model_state uses. */
+function learnerOf(s: ModelSnapshot, mode: "single" | "double"): LearnerParams {
+  return {
+    sessions: s[`${mode}_sessions`],
+    effective_sessions: s[`${mode}_effective_sessions`],
+    mean_rate_g_s: s[`${mode}_mean_rate_g_s`],
+    intercept_g: s[`${mode}_intercept_g`],
+    slope_g_per_g_s: s[`${mode}_slope_g_per_g_s`],
+    residual_sd_g: s[`${mode}_residual_sd_g`],
+  };
+}
+
+interface CurrentModel {
+  rate_hat_g_s: number;
+  rate_sd_g_s: number;
+  rate_n_effective: number;
+  coast_g: number;
+  coast_sd_g: number;
+  learner: [LearnerParams, LearnerParams];
+  source: string;
+}
+
+function fromSnapshot(s: ModelSnapshot): CurrentModel {
+  return {
+    rate_hat_g_s: s.rate_hat_g_s,
+    rate_sd_g_s: s.rate_sd_g_s,
+    rate_n_effective: s.rate_n_effective,
+    coast_g: s.coast_g,
+    coast_sd_g: s.coast_sd_g,
+    learner: [learnerOf(s, "single"), learnerOf(s, "double")],
+    source: `last session snapshot, ${formatTimestamp(s.taken_at)}`,
+  };
+}
+
+function fromLive(m: TelemetryModelState): CurrentModel {
+  return {
+    rate_hat_g_s: m.rate_hat_g_s,
+    rate_sd_g_s: m.rate_sd_g_s,
+    rate_n_effective: m.rate_n_effective,
+    coast_g: m.coast_weight_g,
+    coast_sd_g: m.coast_weight_sd_g,
+    learner: [m.learner[0], m.learner[1]],
+    source: "live from the device",
+  };
+}
+
+const fmt = (v: number, digits = 3) => v.toFixed(digits);
+const signed = (v: number, digits = 3) => `${v >= 0 ? "+" : ""}${v.toFixed(digits)}`;
+
+export default function ModelPage() {
+  const { telemetryHistory, settings } = useDeviceSocket();
+  const [snapshots, setSnapshots] = useState<ModelSnapshot[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    fetchModelSnapshots()
+      .then(setSnapshots)
+      .catch((e) => setError(String(e)));
+  }, []);
+
+  const live = useMemo<TelemetryModelState | null>(() => {
     for (let i = telemetryHistory.length - 1; i >= 0; i--) {
       const m = telemetryHistory[i];
       if (m.type === "model_state") return m;
@@ -47,184 +118,246 @@ export default function ModelPage() {
     return null;
   }, [telemetryHistory]);
 
-  // Every model_state seen since this page connected, so the chart can show how each bucket moved.
-  const modelHistory = useMemo<TelemetryModelState[]>(
-    () => telemetryHistory.filter((m): m is TelemetryModelState => m.type === "model_state"),
-    [telemetryHistory]
+  const current: CurrentModel | null = live
+    ? fromLive(live)
+    : snapshots && snapshots.length > 0
+      ? fromSnapshot(snapshots[snapshots.length - 1])
+      : null;
+
+  const captions = useMemo(
+    () =>
+      (snapshots ?? []).map(
+        (s, i) => `#${i} · ${formatTimestamp(s.taken_at)}${s.note ? ` · ${s.note}` : ""}`
+      ),
+    [snapshots]
   );
 
-  useEffect(() => {
-    if (!lutCanvasRef.current) return;
-    const datasets: ChartDataset<"line">[] = Array.from({ length: 10 }, (_, i) => ({
-      label: `(${(i * BUCKET_WIDTH_G).toFixed(1)}, ${((i + 1) * BUCKET_WIDTH_G).toFixed(1)}]g`,
-      data: [],
-      borderColor: bucketColor(i),
-      backgroundColor: bucketColor(i),
-      borderWidth: 2,
-      pointRadius: 2,
-      fill: false,
-      parsing: false,
-    }));
-    lutChartRef.current = new Chart(lutCanvasRef.current, {
-      type: "line",
-      data: { datasets },
-      options: {
-        responsive: true,
-        animation: false,
-        scales: {
-          x: linearAxis("Reading # (this session)", { stepSize: 1 }),
-          y: linearAxis("Duration (ms)"),
-        },
-        plugins: { legend: legendLabels(12, { font: { size: 10 } }) },
-      },
-    });
-    return () => lutChartRef.current?.destroy();
-  }, []);
-
-  useEffect(() => {
-    const chart = lutChartRef.current;
-    if (!chart) return;
-    for (let bucket = 0; bucket < 10; bucket++) {
-      chart.data.datasets[bucket].data = modelHistory.map((m, i) => ({
-        x: i,
-        y: m.topup_lut_duration_ms[bucket],
-      }));
-    }
-    chart.update();
-  }, [modelHistory]);
-
-  if (!model) {
-    return (
-      <div className="panel">
-        <p className="muted">
-          No model state reported yet -- this arrives once at boot and again after every
-          completed dose.
-        </p>
-      </div>
-    );
-  }
+  const charts = useMemo(() => {
+    const rows = snapshots ?? [];
+    const col = (pick: (s: ModelSnapshot) => number) => rows.map(pick);
+    const band = (center: number[], sd: number[], sign: 1 | -1) =>
+      center.map((c, i) => c + sign * sd[i]);
+    const rate = col((s) => s.rate_hat_g_s);
+    const rateSd = col((s) => s.rate_sd_g_s);
+    const coast = col((s) => s.coast_g);
+    const coastSd = col((s) => s.coast_sd_g);
+    const pair = (label: string, pick: (s: ModelSnapshot, mode: "single" | "double") => number): ParamSeries[] => [
+      { label: `Single ${label}`, color: ACCENT_BLUE, values: col((s) => pick(s, "single")) },
+      { label: `Double ${label}`, color: ACCENT_ORANGE, values: col((s) => pick(s, "double")) },
+    ];
+    const rateSeries: ParamSeries[] = [
+      { label: "Rate", color: ACCENT_GREEN, values: rate },
+      { label: "± 1 sd", color: ACCENT_GREEN, values: band(rate, rateSd, 1), band: true },
+      { label: "", color: ACCENT_GREEN, values: band(rate, rateSd, -1), band: true },
+    ];
+    const coastSeries: ParamSeries[] = [
+      { label: "Coast", color: ACCENT_GREEN, values: coast },
+      { label: "± 1 sd", color: ACCENT_GREEN, values: band(coast, coastSd, 1), band: true },
+      { label: "", color: ACCENT_GREEN, values: band(coast, coastSd, -1), band: true },
+    ];
+    return {
+      rateSeries,
+      coastSeries,
+      intercept: pair("shift", (s, m) => s[`${m}_intercept_g`]),
+      slope: pair("slope", (s, m) => s[`${m}_slope_g_per_g_s`]),
+      residual: pair("residual sd", (s, m) => s[`${m}_residual_sd_g`]),
+      effective: pair("effective sessions", (s, m) => s[`${m}_effective_sessions`]),
+      lifetime: pair("lifetime sessions", (s, m) => s[`${m}_sessions`]),
+    };
+  }, [snapshots]);
 
   return (
     <>
       <div className="panel">
-        <h3>What this page is</h3>
+        <h3>How the stop point is chosen</h3>
         <p>
-          The main grind stop time is predicted from a small statistical model fitted from real
-          sessions, and a landing learner then corrects where it stops. The final top-up is a
-          self-tuning lookup table: one pulse duration per remaining-gap size, each nudged toward
-          whatever has worked in real pulses, because short relay pulses are too clumpy for a
-          single formula to predict. This page shows the models' current values and the logic
-          that uses them.
-        </p>
-      </div>
-
-      <div className="panel">
-        <h3>Main grind rate</h3>
-        <p className="muted">
-          How fast coffee falls once the grinder has been running long enough for the chute to
-          be primed (~0.9s). Fitted per-session as a running average -- every session counts
-          equally, with no recency weighting, since this grinder's mechanical behavior doesn't
-          drift with age.
-        </p>
-        <div className="big-number" style={{ fontSize: "1.8rem" }}>
-          {model.rate_hat_g_s.toFixed(3)} <span className="muted" style={{ fontSize: "0.55em" }}>g/s</span>
-        </div>
-        <p className="muted">
-          ±{model.rate_sd_g_s.toFixed(3)} g/s uncertainty · {model.rate_n_effective} effective
-          sessions
+          The grinder runs once, with no top-up afterwards, so the stop time has to be right.
+          Three small models cooperate: the <strong>rate</strong> of the grind, the
+          <strong> coast</strong> that lands after the relay switches off, and the
+          <strong> landing learner</strong>, which corrects whatever systematic error is left,
+          separately for single and double doses.
         </p>
         <Formula>{"stop_time = elapsed + (target − already_ground − coast − learner_shift) / rate"}</Formula>
         <p className="muted" style={{ fontSize: "0.85em" }}>
-          Every scale sample during the grind re-solves this for the predicted stop time. The
-          grind stops as soon as elapsed time reaches that prediction, the raw weight reaches the
-          target directly, or the grinding safety timeout elapses, whichever comes first.
+          Every scale sample during the grind re-solves this. The grind stops as soon as elapsed
+          time reaches the prediction, the raw weight reaches the target directly, or the
+          grinding safety timeout elapses, whichever comes first. The learner's shift never moves
+          the stop by more than the clamp
+          {settings ? ` (currently ±${settings.landing_learner_clamp_ms} ms)` : ""} from the
+          unlearned stop time.
         </p>
       </div>
 
-      <div className="panel">
-        <h3>Post-relay-off coast</h3>
-        <p className="muted">
-          Coffee keeps landing on the scale for a moment after the grinder relay switches off.
-          The stop-time formula above subtracts this from the target so the coast lands you on
-          target instead of past it.
-        </p>
-        <div className="big-number" style={{ fontSize: "1.8rem" }}>
-          {model.coast_weight_g.toFixed(3)} <span className="muted" style={{ fontSize: "0.55em" }}>g</span>
+      {!current && (
+        <div className="panel">
+          <p className="muted">
+            {error
+              ? `Could not load the model history: ${error}`
+              : "No model state yet -- the device reports it at boot and after every dose, and the history fills in as doses complete."}
+          </p>
         </div>
-        <p className="muted">±{model.coast_weight_sd_g.toFixed(3)} g uncertainty</p>
-      </div>
+      )}
+
+      {current && (
+        <>
+          <div className="panel">
+            <h3>Current values</h3>
+            <p className="muted" style={{ fontSize: "0.85em" }}>
+              Source: {current.source}.
+            </p>
+            <div style={statGrid}>
+              <Stat
+                label="Grind rate"
+                value={fmt(current.rate_hat_g_s)}
+                unit="g/s"
+                note={`± ${fmt(current.rate_sd_g_s)} · ${current.rate_n_effective} sessions`}
+              />
+              <Stat
+                label="Coast after relay off"
+                value={fmt(current.coast_g)}
+                unit="g"
+                note={`± ${fmt(current.coast_sd_g)}`}
+              />
+            </div>
+            <div className="table-scroll">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Landing learner</th>
+                    <th>Sessions</th>
+                    <th>Effective</th>
+                    <th>Mean rate</th>
+                    <th>Shift at mean rate</th>
+                    <th>Slope</th>
+                    <th>Residual sd</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {(["Single", "Double"] as const).map((name, i) => {
+                    const p = current.learner[i];
+                    return (
+                      <tr key={name}>
+                        <td>{name}</td>
+                        <td>{p.sessions}</td>
+                        <td>{fmt(p.effective_sessions, 1)}</td>
+                        <td>{fmt(p.mean_rate_g_s)} g/s</td>
+                        <td>{signed(p.intercept_g)} g</td>
+                        <td>{signed(p.slope_g_per_g_s)} g per g/s</td>
+                        <td>{fmt(p.residual_sd_g)} g</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </>
+      )}
 
       <div className="panel">
         <h3>Landing learner</h3>
         <p className="muted">
-          After each grind the weight settles a little above or below the offset target. The
-          learner predicts that landing error from the grind's flow rate, separately for single
-          and double doses, and moves the stop point to cancel it (bounded by the stop-time
-          clamp on the Settings page). Each session's error, applied shift and running spread
-          appear in the console as a LAND line, and the History page plots the landing error.
+          After each grind the weight settles a little above or below the target. The learner
+          fits that landing error against the grind's flow rate at the stop, separately for
+          single and double doses, and moves the stop point to cancel what it expects. It trains
+          only on genuine settled weights from time-estimate stops, and always on the error the
+          session would have had without its own correction, so it never trains on its own action.
         </p>
-      </div>
-
-      <div className="panel">
-        <h3>Top-up pulses</h3>
-        <p className="muted">
-          Once the main grind stops (deliberately a little short of target), short relay pulses
-          close the remaining gap. Which duration to fire is looked up by the current gap's
-          bucket, not computed from a formula -- each bucket covers a {BUCKET_WIDTH_G.toFixed(1)}g
-          range and is independently self-tuning.
-        </p>
-        <Formula>{`bucket = ceil(gap / ${BUCKET_WIDTH_G.toFixed(1)}g)  -- e.g. a 0.45g gap uses bucket 5's duration`}</Formula>
-        <Formula>{`aim_weight = ${AIM_FRACTION} × bucket_upper_bound  (leaves slack for the remainder to land in a smaller bucket)`}</Formula>
-        <Formula>{`error = aim_weight − weight_this_pulse_added
-duration += (error > 0 ? ${LEARN_RATE_UNDERSHOOT} : ${LEARN_RATE_OVERSHOOT}) × error × 1000 / slope`}</Formula>
-        <p className="muted" style={{ fontSize: "0.85em" }}>
-          Overshoot is corrected faster ({LEARN_RATE_OVERSHOOT}) than undershoot is grown (
-          {LEARN_RATE_UNDERSHOOT}) after every real pulse -- overshoot is the worse outcome, so
-          the table is quicker to back off than to push a duration back up. Every duration is
-          also clamped to {HYGIENE_MIN_DURATION_MS}-{HYGIENE_MAX_DURATION_MS}ms regardless of
-          what the update rule alone would produce: the relay is a physical, clicky switch, not
-          solid-state -- below ~{HYGIENE_MIN_DURATION_MS}ms it just stalls the motor and produces
-          zero output rather than a smaller pulse.
-        </p>
+        <Formula>{"excess(rate) = intercept + slope × (rate − mean_rate)\nshift = excess(rate at stop), moved into stop time via the coast term"}</Formula>
+        <Formula>{`each session: every sum is multiplied by (1 − learning_rate), then the new (rate, error) pair is added
+intercept = Σwy / (Σw + prior),  prior = ${LEARNER_PRIOR_WEIGHT}² / (${LEARNER_PRIOR_WEIGHT} + lifetime_sessions)
+slope = Sxy / (Sxx + ${LEARNER_RIDGE})   (centred sums; the ridge keeps it near zero until the rate varies)`}</Formula>
         <div className="table-scroll">
           <table>
-            <thead>
-              <tr>
-                <th>Gap bucket</th>
-                <th>Duration</th>
-                <th>Aim weight</th>
-                <th>Pulses seen</th>
-              </tr>
-            </thead>
             <tbody>
-              {model.topup_lut_duration_ms.map((duration, i) => {
-                const bucketUpper = (i + 1) * BUCKET_WIDTH_G;
-                const bucketLower = i * BUCKET_WIDTH_G;
-                return (
-                  <tr key={i}>
-                    <td>
-                      ({bucketLower.toFixed(1)}, {bucketUpper.toFixed(1)}]g
-                    </td>
-                    <td>{duration.toFixed(0)}ms</td>
-                    <td>{(AIM_FRACTION * bucketUpper).toFixed(3)}g</td>
-                    <td>{model.topup_lut_n[i]}</td>
-                  </tr>
-                );
-              })}
+              <tr>
+                <td>Active</td>
+                <td>{settings ? (settings.landing_learner_enabled ? "yes" : "no") : "--"}</td>
+                <td className="muted">Settings page</td>
+              </tr>
+              <tr>
+                <td>Learning rate</td>
+                <td>{settings ? settings.landing_learner_rate : "--"}</td>
+                <td className="muted">
+                  per-session forgetting; evidence window is about 1 / rate sessions
+                </td>
+              </tr>
+              <tr>
+                <td>Stop-time clamp</td>
+                <td>{settings ? `±${settings.landing_learner_clamp_ms} ms` : "--"}</td>
+                <td className="muted">Settings page</td>
+              </tr>
+              <tr>
+                <td>Prior weight</td>
+                <td>{LEARNER_PRIOR_WEIGHT} sessions</td>
+                <td className="muted">shrinks the intercept toward 0 early on</td>
+              </tr>
+              <tr>
+                <td>Slope ridge</td>
+                <td>{LEARNER_RIDGE}</td>
+                <td className="muted">shrinks the slope toward 0</td>
+              </tr>
+              <tr>
+                <td>Glitch limit</td>
+                <td>±{LEARNER_MAX_ABS_ERROR_G} g</td>
+                <td className="muted">larger landing errors are not used for training</td>
+              </tr>
             </tbody>
           </table>
         </div>
       </div>
 
       <div className="panel">
-        <h3>Top-up duration history</h3>
-        <p className="muted" style={{ fontSize: "0.85em" }}>
-          Every bucket's tuned duration, once per reading (boot, then after every completed
-          session) seen since this page connected -- not a persisted log, so reloading the page
-          or a device reboot starts a fresh chart. Useful for watching a bucket settle in after a
-          few real doses land in it.
+        <h3>Grind rate and coast</h3>
+        <p className="muted">
+          <strong>Rate</strong>: how fast coffee falls once the chute is primed (after about{" "}
+          {RATE_DEADTIME_S} s). Every session fits its own line and counts as one observation of
+          quality ±{RATE_SESSION_SD} g/s; older sessions fade over a window of{" "}
+          {RATE_SESSION_WINDOW} sessions, which also caps how certain the estimate can become.
+          During a grind the stored rate is blended with the live fit, weighted by their
+          certainty.
         </p>
-        <canvas ref={lutCanvasRef} height={220} />
+        <p className="muted">
+          <strong>Coast</strong>: coffee keeps landing for a moment after the relay opens. It
+          is one number per session (settled weight minus the weight at relay-off) blended into
+          the stored estimate, and the stop formula subtracts it from the target.
+        </p>
+      </div>
+
+      <div className="panel">
+        <h3>Parameter history</h3>
+        <p className="muted" style={{ fontSize: "0.85em" }}>
+          One point per finished session, from the database
+          {snapshots ? ` (${snapshots.length} snapshots)` : ""}. The first point is the device
+          state read back just before the top-up was removed; earlier history was not recorded.
+          Hover a point for its date.
+        </p>
+        {error && <p style={{ color: "var(--red)" }}>{error}</p>}
+        {!snapshots && !error && <p className="muted">Loading from PostgREST...</p>}
+        {snapshots && snapshots.length === 0 && (
+          <p className="muted">No snapshots recorded yet.</p>
+        )}
+        {snapshots && snapshots.length > 0 && (
+          <>
+            <h4>Grind rate (g/s)</h4>
+            <ParamChart yLabel="g/s" captions={captions} series={charts.rateSeries} digits={4} />
+            <h4>Coast (g)</h4>
+            <ParamChart yLabel="g" captions={captions} series={charts.coastSeries} digits={4} />
+            <h4>Learner shift at the mean rate (g, positive = stops earlier)</h4>
+            <ParamChart yLabel="g" captions={captions} series={charts.intercept} digits={4} />
+            <h4>Learner slope (g per g/s)</h4>
+            <ParamChart yLabel="g per g/s" captions={captions} series={charts.slope} digits={4} />
+            <h4>Learner residual sd (g)</h4>
+            <ParamChart yLabel="g" captions={captions} series={charts.residual} digits={4} />
+            <h4>Learner evidence (sessions)</h4>
+            <ParamChart
+              yLabel="sessions"
+              captions={captions}
+              series={[...charts.effective, ...charts.lifetime]}
+              digits={1}
+            />
+          </>
+        )}
       </div>
     </>
   );

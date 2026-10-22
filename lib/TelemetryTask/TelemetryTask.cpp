@@ -26,11 +26,10 @@
  *   TARGET       POST  /sessions     opens a session under a fresh UUIDv4
  *                                    (the event's own session_id is a local counter)
  *   PROGRESS     POST  /events       the MAIN_GRIND row, sent once the relay is off
- *   TOPUP_PULSE  POST  /events       one TOPUP row per settled pulse; the event carries
- *                                    no pulse timestamps, so both are set to its runtime_ms
  *   TARE_DEBUG   POST  /tare_debug   the session's tare baseline
  *   RAW_SAMPLE   POST  /raw_samples  handled, but Dosing task does not emit it yet
  *   LANDING      PATCH /sessions     settled weight, coast and learner correction
+ *   MODEL_STATE  POST  /model_snapshots  the model parameters after a session (none at boot)
  *   FINALIZE     none                marks a normal finish, so COMPLETE can tell it from an abort
  *   COMPLETE     PATCH /sessions     final weight and outcome
  *
@@ -44,13 +43,12 @@ constexpr uint32_t kHttpTimeoutMs = 2000;
 
 // Labels stored in v2.sessions; kept stable so session history stays comparable.
 constexpr const char *kFirmwareVersion = "rtos-rewrite-dev";
-constexpr const char *kModelVersion = "TopupModelV1";
+constexpr const char *kModelVersion = "ModelV4";
 
 // Current-session assembly state.
 bool g_session_open = false;
 char g_session_uuid[37] = {0};  ///< 8-4-4-4-12 hex digits plus NUL.
 float g_main_grind_weight_before = 0.0f;
-int g_pulse_index = 0;
 bool g_finalize_seen = false;
 
 /** Fills `out` with a random UUIDv4 string, for a new session's PostgREST id. */
@@ -121,11 +119,7 @@ void postSessionStart(const TelemetryEvent &ev) {
   makeUuidV4(g_session_uuid);
   g_session_open = true;
   g_main_grind_weight_before = ev.grams;
-  g_pulse_index = 0;
   g_finalize_seen = false;
-
-  float target_weight_g =
-      ev.target_grams_corrected > 0.0f ? ev.target_grams_corrected : ev.target_grams;
 
   char body[320];
   snprintf(body, sizeof(body),
@@ -133,7 +127,7 @@ void postSessionStart(const TelemetryEvent &ev) {
            "\"target_weight_g\":%.4f,\"firmware_version\":\"%s\","
            "\"model_version\":\"%s\"}",
            g_session_uuid, ev.is_double ? "double" : "single", ev.target_grams,
-           target_weight_g, kFirmwareVersion, kModelVersion);
+           ev.target_grams, kFirmwareVersion, kModelVersion);
 
   postgrestRequest("POST", "/sessions", String(body));
 }
@@ -170,32 +164,6 @@ void postMainGrindEvent(const TelemetryEvent &ev) {
 }
 
 /**
- * TOPUP_PULSE -> POST /events: one topup pulse's row, complete in one
- * call. The bucket, aim and commanded duration are the pulse's inputs at
- * fire time; TopupModel keeps retuning them, so they can't be recovered later.
- */
-void postTopupPulseEvent(const TelemetryEvent &ev) {
-  if (!g_session_open) return;
-
-  g_pulse_index++;
-  float weight_before = ev.grams - ev.delta_grams;
-
-  char body[384];
-  snprintf(body, sizeof(body),
-           "{\"session_id\":\"%s\",\"event_type\":\"TOPUP\",\"pulse_index\":%d,"
-           "\"relay_on_at_ms\":%u,\"relay_off_at_ms\":%u,"
-           "\"weight_before_g\":%.4f,\"weight_after_g\":%.4f,"
-           "\"topup_bucket\":%u,\"topup_aim_weight_g\":%.4f,"
-           "\"topup_commanded_duration_ms\":%u}",
-           g_session_uuid, g_pulse_index, static_cast<unsigned>(ev.runtime_ms),
-           static_cast<unsigned>(ev.runtime_ms), weight_before, ev.grams,
-           static_cast<unsigned>(ev.topup_bucket), ev.topup_aim_weight_g,
-           static_cast<unsigned>(ev.topup_commanded_duration_ms));
-
-  postgrestRequest("POST", "/events", String(body));
-}
-
-/**
  * TARE_DEBUG -> POST /tare_debug: this session's tare baseline (raw ADC
  * count and grams). Observational only; the firmware never reads it back.
  */
@@ -213,15 +181,13 @@ void postTareDebug(const TelemetryEvent &ev) {
 void postRawSample(const TelemetryEvent &ev) {
   if (!g_session_open) return;
 
-  const char *grinder_state = g_pulse_index == 0 ? "MAIN_GRIND" : "TOPUP_SETTLE";
-
   char body[256];
   snprintf(body, sizeof(body),
            "{\"session_id\":\"%s\",\"timestamp_ms\":%u,\"raw_value\":%ld,"
            "\"filtered_value\":%.4f,\"stable\":%s,\"grinder_state\":\"%s\"}",
            g_session_uuid, static_cast<unsigned>(ev.runtime_ms),
            static_cast<long>(ev.raw_adc), ev.grams, ev.stable ? "true" : "false",
-           grinder_state);
+           "MAIN_GRIND");
 
   postgrestRequest("POST", "/raw_samples", String(body));
 }
@@ -232,13 +198,45 @@ void patchSessionLanding(const TelemetryEvent &ev) {
 
   char body[256];
   snprintf(body, sizeof(body),
-           "{\"settled_weight_g\":%.4f,\"coast_g\":%.4f,\"training_margin_g\":%.4f,"
+           "{\"settled_weight_g\":%.4f,\"coast_g\":%.4f,"
            "\"learner_correction_g\":%.4f,\"learner_clamped\":%s}",
-           ev.grams, ev.landing_coast_g, ev.landing_margin_g, ev.landing_correction_g,
+           ev.grams, ev.landing_coast_g, ev.landing_correction_g,
            ev.landing_clamped ? "true" : "false");
 
   String path = String("/sessions?session_id=eq.") + g_session_uuid;
   postgrestRequest("PATCH", path, String(body));
+}
+
+/**
+ * MODEL_STATE -> POST /model_snapshots: the model parameters as they stand after this session,
+ * so the Model page can chart how they moved. The boot-time event has no session and is skipped.
+ */
+void postModelSnapshot(const TelemetryEvent &ev) {
+  if (!g_session_open) return;
+
+  char body[900];
+  int n = snprintf(body, sizeof(body),
+                   "{\"session_id\":\"%s\",\"rate_hat_g_s\":%.5f,\"rate_sd_g_s\":%.5f,"
+                   "\"rate_n_effective\":%u,\"coast_g\":%.5f,\"coast_sd_g\":%.5f",
+                   g_session_uuid, ev.rate_hat_g_s, ev.rate_sd_g_s,
+                   static_cast<unsigned>(ev.rate_n_effective), ev.coast_weight_g,
+                   ev.coast_weight_sd_g);
+  static const char *const kPrefix[2] = {"single", "double"};
+  for (int i = 0; i < 2 && n > 0 && n < static_cast<int>(sizeof(body)); ++i) {
+    const LandingLearner::Params &p = ev.learner[i];
+    n += snprintf(body + n, sizeof(body) - n,
+                  ",\"%s_sessions\":%u,\"%s_effective_sessions\":%.4f,"
+                  "\"%s_mean_rate_g_s\":%.5f,\"%s_intercept_g\":%.5f,"
+                  "\"%s_slope_g_per_g_s\":%.5f,\"%s_residual_sd_g\":%.5f",
+                  kPrefix[i], static_cast<unsigned>(p.sessions), kPrefix[i], p.effective_sessions,
+                  kPrefix[i], p.mean_rate_g_s, kPrefix[i], p.intercept_g, kPrefix[i],
+                  p.slope_g_per_g_s, kPrefix[i], p.residual_sd_g);
+  }
+  if (n > 0 && n < static_cast<int>(sizeof(body)) - 1) {
+    body[n] = '}';
+    body[n + 1] = '\0';
+    postgrestRequest("POST", "/model_snapshots", String(body));
+  }
 }
 
 /** COMPLETE -> PATCH /sessions: closes the session out with its outcome. */
@@ -281,9 +279,6 @@ void telemetryTaskFn(void *) {
         case TelemetryType::PROGRESS:
           postMainGrindEvent(ev);
           break;
-        case TelemetryType::TOPUP_PULSE:
-          postTopupPulseEvent(ev);
-          break;
         case TelemetryType::RAW_SAMPLE:
           postRawSample(ev);
           break;
@@ -295,6 +290,9 @@ void telemetryTaskFn(void *) {
           break;
         case TelemetryType::LANDING:
           patchSessionLanding(ev);
+          break;
+        case TelemetryType::MODEL_STATE:
+          postModelSnapshot(ev);
           break;
         case TelemetryType::COMPLETE:
           patchSessionFinal(ev);

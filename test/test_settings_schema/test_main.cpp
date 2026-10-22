@@ -125,7 +125,7 @@ void test_validators_enforce_their_ranges(void) {
   TEST_ASSERT_FALSE(settingAccepts(row("landing_learner_rate"), 0.9));
   TEST_ASSERT_TRUE(settingAccepts(row("landing_learner_rate"), 0.05));
   TEST_ASSERT_FALSE(settingAccepts(row("landing_learner_clamp_ms"), 5000.0));
-  TEST_ASSERT_FALSE(settingAccepts(row("top_up_margin_single"), -0.1));
+  TEST_ASSERT_FALSE(settingAccepts(row("target_dose_single"), 0.0));
 }
 
 void test_lookup_by_name(void) {

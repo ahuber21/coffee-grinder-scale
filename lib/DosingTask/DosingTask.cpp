@@ -22,16 +22,10 @@ namespace {
  *  state maps to exactly one display layout (OTA_UPDATE is never assigned here). */
 using DosingState = DisplayMode;
 
-/** Sub-state within DosingState::TOPUP -- one pulse's decide/fire/settle cycle. */
-enum class TopupPhase { DECIDING, PULSING, SETTLING };
-
 /// A cup-lift swing this large in the delta weight dismisses the finished-dose screen.
 constexpr float kCupLiftDeltaG = 3.0f;
 /// Last-resort cap on any non-idle state, for gaps the per-state timeouts miss.
 constexpr uint32_t kMaxStateDurationMs = 60000;
-/// The topup loop as a whole gives up after this many topup_timeout_ms.
-constexpr uint32_t kTopupLoopTimeoutFactor = 10;
-
 // Session-scoped state, written by this task only.
 
 DosingState g_state = DosingState::BOOT;
@@ -49,24 +43,14 @@ bool g_is_double = false;
 bool g_session_discard_training = false;  ///< This session's model updates are thrown away at FINALIZE.
 ButtonId g_pending_confirm_button = ButtonId::LEFT;
 
-float g_target_grams = 0.0f;            ///< Full requested target.
-float g_target_grams_corrected = 0.0f;  ///< Target minus topup margin -- the actual stop threshold.
-float g_grams_on_grind_start = 0.0f;    ///< Software tare baseline for this session.
+float g_target_grams = 0.0f;          ///< The requested dose, which is also the stop threshold.
+float g_grams_on_grind_start = 0.0f;  ///< Software tare baseline for this session.
 uint32_t g_grinder_started_ms = 0;
 uint32_t g_grinder_stopped_ms = 0;
 uint32_t g_frozen_elapsed_ms = 0;  ///< Elapsed time at FINALIZE entry -- the timer stops here.
 float g_weight_at_relay_off = 0.0f;
 
 uint32_t g_state_entered_ms = 0;
-
-TopupPhase g_topup_phase = TopupPhase::DECIDING;
-uint32_t g_topup_deciding_entered_ms = 0;  ///< DECIDING's stable-or-timeout timer; SETTLING uses g_state_entered_ms.
-uint32_t g_topup_pulse_start_ms = 0;
-uint32_t g_topup_pulse_duration_ms = 0;
-float g_topup_weight_before_pulse = 0.0f;
-float g_topup_gap_at_fire = 0.0f;           ///< Gap at DECIDING time, for recordPulse's bucket lookup.
-int g_topup_bucket_at_fire = -1;            ///< This pulse's bucket, for TOPUP_PULSE telemetry.
-double g_topup_aim_weight_at_fire_g = 0.0;  ///< This pulse's aim, for TOPUP_PULSE telemetry.
 
 uint32_t g_tare_requested_after_seq = 0;  ///< sample_seq at TareRequest send.
 
@@ -81,7 +65,6 @@ uint32_t g_last_coffee_ms = 0;              ///< When the last session completed
 // and written back at FINALIZE.
 DosingModelState g_persisted_model;
 MainGrindModel *g_main_grind_model = nullptr;
-TopupModel *g_topup_model = nullptr;
 CoastModel *g_coast_model = nullptr;
 
 LandingLearnerState g_persisted_learner;
@@ -117,7 +100,6 @@ const char *dosingStateName(DosingState s) {
     case DosingState::CONFIRM: return "CONFIRM";
     case DosingState::TARE: return "TARE";
     case DosingState::GRINDING: return "GRINDING";
-    case DosingState::TOPUP: return "TOPUP";
     case DosingState::STOPPING: return "STOPPING";
     case DosingState::FINALIZE: return "FINALIZE";
     case DosingState::SCREENSAVER: return "SCREENSAVER";
@@ -188,13 +170,8 @@ void transitionTo(DosingState next) {
   setDosingActiveBit();
 }
 
-/** Sets the requested and margin-corrected targets for a dose of `base_grams`, by g_is_double's margin. */
-void setSessionTarget(float base_grams) {
-  float margin =
-      g_is_double ? g_settings.top_up_margin_double : g_settings.top_up_margin_single;
-  g_target_grams = base_grams;
-  g_target_grams_corrected = base_grams - margin;
-}
+/** Sets the dose target, which is also where the main grind aims. */
+void setSessionTarget(float base_grams) { g_target_grams = base_grams; }
 
 /** The configured button-dose target for g_is_double. */
 float configuredTargetGrams() {
@@ -218,7 +195,7 @@ void sendDisplayCommand() {
   cmd.mode = g_state;
   // Session screens show the delta from the tare baseline, so the cup's own
   // weight never leaks onto a layout sized for 0..target_grams.
-  bool shows_session_delta = g_state == DosingState::GRINDING || g_state == DosingState::TOPUP ||
+  bool shows_session_delta = g_state == DosingState::GRINDING ||
                              g_state == DosingState::STOPPING || g_state == DosingState::FINALIZE;
   cmd.current_grams =
       g_have_sample ? (shows_session_delta ? g_last_sample.grams - g_grams_on_grind_start
@@ -249,14 +226,11 @@ void sendDisplayCommand() {
 }
 
 /** Pushes a plain session event (TARGET, FINALIZE, COMPLETE, ...) to Telemetry task. */
-void sendTelemetry(TelemetryType type, float grams = 0, float target = 0, float delta = 0) {
+void sendTelemetry(TelemetryType type, float grams = 0, float target = 0) {
   TelemetryEvent ev = makeEvent(type);
   ev.grams = grams;
   ev.target_grams = target;
-  ev.delta_grams = delta;
-  // Only the TARGET handler reads these two.
-  ev.is_double = g_is_double;
-  ev.target_grams_corrected = g_target_grams_corrected;
+  ev.is_double = g_is_double;  // Only the TARGET handler reads this.
   sendEvent(ev);
 }
 
@@ -274,29 +248,12 @@ void sendProgressTelemetry(GrindStopReason reason, float delta_weight, double we
   sendEvent(ev);
 }
 
-/**
- * Sends TOPUP_PULSE telemetry with the pulse's decision inputs as they
- * were at fire time; TopupModel keeps retuning its per-bucket durations,
- * so they can't be recovered later.
- */
-void sendTopupPulseTelemetry(float delta_weight, float weight_added, int bucket,
-                             double aim_weight_g, uint32_t commanded_duration_ms) {
-  TelemetryEvent ev = makeEvent(TelemetryType::TOPUP_PULSE);
-  ev.grams = delta_weight;
-  ev.target_grams = g_target_grams;
-  ev.delta_grams = weight_added;
-  ev.topup_bucket = static_cast<uint8_t>(bucket);
-  ev.topup_aim_weight_g = static_cast<float>(aim_weight_g);
-  ev.topup_commanded_duration_ms = commanded_duration_ms;
-  sendEvent(ev);
-}
-
 /** Converts a precision (inverse variance) to a standard deviation, 0 if unset. */
 float sdFromPrecision(float precision) {
   return precision > 0.0f ? 1.0f / sqrtf(precision) : 0.0f;
 }
 
-/** Sends the current persisted model's parameters, for the SPA's algorithm view. */
+/** Sends the current model parameters, for the SPA's Model page and the per-session history. */
 void sendModelStateTelemetry(const DosingModelState &model) {
   TelemetryEvent ev = makeEvent(TelemetryType::MODEL_STATE);
   ev.rate_hat_g_s = model.rate_hat;
@@ -304,10 +261,8 @@ void sendModelStateTelemetry(const DosingModelState &model) {
   ev.coast_weight_g = model.coast_weight_hat;
   ev.coast_weight_sd_g = sdFromPrecision(model.coast_weight_precision);
   ev.rate_n_effective = model.rate_n_effective;
-  for (int i = 0; i < kTopupLutBuckets; ++i) {
-    ev.topup_lut_duration_ms[i] = model.topup_lut_duration_ms[i];
-    ev.topup_lut_n[i] = model.topup_lut_n[i];
-  }
+  ev.learner[0] = g_landing_learner->params(false);
+  ev.learner[1] = g_landing_learner->params(true);
   sendEvent(ev);
 }
 
@@ -320,19 +275,12 @@ bool stateSettledOrTimedOut() {
          millis() - g_state_entered_ms >= g_settings.stability_max_wait_ms;
 }
 
-/** True once `s` is stable, or `stability_max_wait_ms` has passed since `since_ms`. */
-bool sampleSettledOrTimedOut(const ScaleSample &s, uint32_t since_ms) {
-  return s.stable || s.millis - since_ms >= g_settings.stability_max_wait_ms;
-}
-
 /** Builds the models from the persisted blobs, discarding any in-RAM state. */
 void rebuildModels() {
   delete g_main_grind_model;
-  delete g_topup_model;
   delete g_coast_model;
   delete g_landing_learner;
   g_main_grind_model = new MainGrindModel(g_persisted_model);
-  g_topup_model = new TopupModel(g_persisted_model);
   g_coast_model = new CoastModel(g_persisted_model);
   g_landing_learner = new LandingLearner(g_persisted_learner);
 }
@@ -349,6 +297,8 @@ void loadModels() {
   xQueueOverwrite(g_dosing_model_mailbox, &g_persisted_model);
   xQueueOverwrite(g_landing_learner_mailbox, &g_persisted_learner);
   rebuildModels();
+  // The models bound what they load (e.g. a saturated rate precision), so report and re-persist their view.
+  g_persisted_model = g_main_grind_model->dumpPersisted(g_persisted_model);
   sendModelStateTelemetry(g_persisted_model);
 }
 
@@ -356,7 +306,6 @@ void loadModels() {
 void persistModels() {
   DosingModelState blob = g_persisted_model;
   blob = g_main_grind_model->dumpPersisted(blob);
-  blob = g_topup_model->dumpPersisted(blob);
   blob = g_coast_model->dumpPersisted(blob);
   g_persisted_model = blob;
 
@@ -383,7 +332,7 @@ void persistModels() {
  */
 void recordLanding(double observed_coast_g, bool settled_stable) {
   float settled_delta = g_last_sample.grams - g_grams_on_grind_start;
-  float landing_error_g = settled_delta - g_target_grams_corrected;
+  float landing_error_g = settled_delta - g_target_grams;
 
   bool trained = false;
   if (settled_stable && g_stop_reason == GrindStopReason::TIME_ESTIMATE) {
@@ -396,7 +345,6 @@ void recordLanding(double observed_coast_g, bool settled_stable) {
   ev.grams = settled_delta;
   ev.target_grams = g_target_grams;
   ev.landing_coast_g = static_cast<float>(observed_coast_g);
-  ev.landing_margin_g = g_target_grams - g_target_grams_corrected;
   ev.landing_correction_g = g_learner_applied_g;
   ev.landing_clamped = g_learner_clamped;
   sendEvent(ev);
@@ -421,7 +369,7 @@ double learnedStopMs(double unlearned_stop_ms, double coast_estimate) {
   }
   double shift_g = g_landing_learner->predict(g_is_double, g_last_rate_g_s);
   double learned_ms = g_main_grind_model->predictStopTimeMsWithCoast(
-      g_target_grams_corrected, coast_estimate + shift_g);
+      g_target_grams, coast_estimate + shift_g);
   double clamp_ms = g_settings.landing_learner_clamp_ms;
   double clamped_ms = std::max(unlearned_stop_ms - clamp_ms,
                                std::min(learned_ms, unlearned_stop_ms + clamp_ms));
@@ -441,7 +389,7 @@ void stopGrinding(const ScaleSample &s, uint32_t runtime_ms, GrindStopReason rea
   double weight_estimate = g_main_grind_model->currentWeightEstimate();
   logLine("GRIND stop:%s rt=%ums est=%.3fg tgt=%.3fg base=%.3fg",
        kReasonNames[static_cast<int>(reason)], static_cast<unsigned>(runtime_ms), weight_estimate,
-       g_target_grams_corrected, g_grams_on_grind_start);
+       g_target_grams, g_grams_on_grind_start);
 
   // The plausibility-filtered estimate, not s.grams; this value trains CoastModel.
   g_weight_at_relay_off = g_grams_on_grind_start + weight_estimate;
@@ -458,17 +406,17 @@ void handleGrindingSample(const ScaleSample &s) {
   uint32_t runtime_ms = s.millis - g_grinder_started_ms;
   g_main_grind_model->addSample(runtime_ms, s.grams - g_grams_on_grind_start);
 
-  // The model works in delta space, so the corrected target is used as-is.
+  // The model works in delta space, so the target is used as-is.
   double coast_estimate = g_coast_model->currentCoastEstimate();
   double unlearned_stop_ms =
-      g_main_grind_model->predictStopTimeMsWithCoast(g_target_grams_corrected, coast_estimate);
+      g_main_grind_model->predictStopTimeMsWithCoast(g_target_grams, coast_estimate);
   g_last_rate_g_s = g_main_grind_model->currentRateEstimate();
   double predicted_stop_ms = learnedStopMs(unlearned_stop_ms, coast_estimate);
 
   // The fallback deliberately ignores s.stable: the relay is always on here.
   bool time_estimate_fired = runtime_ms >= predicted_stop_ms;
   bool raw_weight_fallback_fired =
-      g_main_grind_model->currentWeightEstimate() >= g_target_grams_corrected;
+      g_main_grind_model->currentWeightEstimate() >= g_target_grams;
   bool safety_timeout_fired = runtime_ms >= g_settings.grinding_timeout_ms;
 
   if (time_estimate_fired) {
@@ -477,75 +425,6 @@ void handleGrindingSample(const ScaleSample &s) {
     stopGrinding(s, runtime_ms, GrindStopReason::RAW_WEIGHT_FALLBACK);
   } else if (safety_timeout_fired) {
     stopGrinding(s, runtime_ms, GrindStopReason::SAFETY_TIMEOUT);
-  }
-}
-
-/** Ends the topup loop and moves to FINALIZE, announcing the finalize to Telemetry. */
-void finishTopup(float delta_weight) {
-  sendTelemetry(TelemetryType::FINALIZE, delta_weight, g_target_grams);
-  transitionTo(DosingState::FINALIZE);
-}
-
-/** Per-sample TOPUP update: drives the DECIDING/PULSING/SETTLING pulse cycle. */
-void handleTopupSample(const ScaleSample &s) {
-  float delta_weight = s.grams - g_grams_on_grind_start;
-  float gap = g_target_grams - delta_weight;
-
-  switch (g_topup_phase) {
-    case TopupPhase::DECIDING: {
-      // Decide only on a settled reading, bounded so a noisy sensor can't stall every decision.
-      if (!sampleSettledOrTimedOut(s, g_topup_deciding_entered_ms)) {
-        break;
-      }
-      if (gap <= g_settings.min_topup_grams) {
-        logLine("TOPUP: gap=%.4fg <= min_topup_grams, finalizing without a pulse", gap);
-        finishTopup(delta_weight);
-        return;
-      }
-      TopupModel::Decision decision = g_topup_model->computeTopupDecision(gap);
-      if (!decision.should_fire) {
-        // Safety net: every bucket normally has a clamped, in-bounds duration.
-        finishTopup(delta_weight);
-        return;
-      }
-      g_topup_gap_at_fire = gap;
-      g_topup_bucket_at_fire = decision.bucket;
-      g_topup_aim_weight_at_fire_g = decision.aim_weight_g;
-      g_topup_weight_before_pulse = s.grams;
-      g_topup_pulse_start_ms = s.millis;
-      g_topup_pulse_duration_ms = decision.duration_ms;
-      grinderRelay(true);
-      g_topup_phase = TopupPhase::PULSING;
-      break;
-    }
-    case TopupPhase::PULSING: {
-      if (s.millis - g_topup_pulse_start_ms >= g_topup_pulse_duration_ms) {
-        grinderRelay(false);
-        g_topup_phase = TopupPhase::SETTLING;
-        g_state_entered_ms = s.millis;  // Doubles as the settle-wait start.
-      }
-      break;
-    }
-    case TopupPhase::SETTLING: {
-      // The min wait lets the pulse's bounce damp out before a lucky quiet window can pass as stable.
-      bool min_wait_elapsed = s.millis - g_state_entered_ms >= g_settings.stability_min_wait_ms;
-      if (min_wait_elapsed && sampleSettledOrTimedOut(s, g_state_entered_ms)) {
-        double weight_added = s.grams - g_topup_weight_before_pulse;
-        g_topup_model->recordPulse(g_topup_gap_at_fire, weight_added);
-        sendTopupPulseTelemetry(s.grams - g_grams_on_grind_start, static_cast<float>(weight_added),
-                                g_topup_bucket_at_fire, g_topup_aim_weight_at_fire_g,
-                                g_topup_pulse_duration_ms);
-        g_topup_phase = TopupPhase::DECIDING;
-        g_topup_deciding_entered_ms = s.millis;
-      }
-      break;
-    }
-  }
-
-  // Overall safety cutoff so a misbehaving topup loop can't run forever.
-  if (millis() - g_grinder_stopped_ms >= g_settings.topup_timeout_ms * kTopupLoopTimeoutFactor) {
-    grinderRelay(false);
-    transitionTo(DosingState::FINALIZE);
   }
 }
 
@@ -569,8 +448,6 @@ bool drainScaleSamples() {
 
     if (g_state == DosingState::GRINDING) {
       handleGrindingSample(sample);
-    } else if (g_state == DosingState::TOPUP) {
-      handleTopupSample(sample);
     } else if (g_state == DosingState::SCREENSAVER) {
       wakeScreensaverOnWeightChange(sample);
     }
@@ -635,9 +512,8 @@ void handleButtonPress(const ButtonPress &press) {
       }
       break;
     case DosingState::GRINDING:
-    case DosingState::TOPUP:
       if (press.button == ButtonId::BACK) {
-        // Stop at once regardless of sub-phase; a cancel never queues behind anything.
+        // Stop at once; a cancel never queues behind anything.
         grinderRelay(false);
         transitionTo(DosingState::FINALIZE);
       }
@@ -674,7 +550,7 @@ void updateTare() {
   transitionTo(DosingState::GRINDING);
 }
 
-/** STOPPING: waits for the post-grind coast to settle, then records it and starts topup. */
+/** STOPPING: waits for the post-grind coast to settle, then records it and finishes the dose. */
 void updateStopping() {
   // Bounded wait: the coast trains the stop-time model, so a transient reading would bias it.
   if (!stateSettledOrTimedOut() || !g_have_sample) {
@@ -683,9 +559,8 @@ void updateStopping() {
   double observed_coast = g_last_sample.grams - g_weight_at_relay_off;
   g_coast_model->recordCoast(observed_coast, nowEpochS());
   recordLanding(observed_coast, g_last_sample.stable);
-  g_topup_phase = TopupPhase::DECIDING;
-  g_topup_deciding_entered_ms = millis();
-  transitionTo(DosingState::TOPUP);
+  sendTelemetry(TelemetryType::FINALIZE, g_last_sample.grams - g_grams_on_grind_start, g_target_grams);
+  transitionTo(DosingState::FINALIZE);
 }
 
 /** Latches the final weight, then keeps or discards the session's model updates. */

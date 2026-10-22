@@ -2310,3 +2310,14 @@ Format per entry:
 - **Verified**: three new host tests (bounded uncertainty over 300 sessions, adaptation 1.0 to 0.8 g/s, clamped saturated blob) fail on the old model and pass on the new; 45/45 native tests; firmware builds. No real-data replay: `v2.raw_samples` is empty because `RAW_SAMPLE` is never emitted.
 - **Open**: confirm on real grinds after flashing that the rate estimate and landing spread behave; the stop prediction now gives the live fit a real share of the vote.
 
+### AR-083 — Top-up removed: single-shot dosing, and the learners' history recorded
+
+- **Area**: lib/DosingTask, lib/DosingModel, lib/Messaging, lib/TelemetryTask, lib/NetworkTask, lib/SettingsTask, webapp (Model, History, Settings), `design/db-schema/006_model_snapshots.sql`
+- **Status**: implemented, OTA-deployed (firmware + SPA) 2026-10-22; migration 006 written, **not yet applied** (a remote DB write was blocked in-session; see below)
+- **What**: the dose now ends after the main grind settles (STOPPING -> FINALIZE). Removed: the TOPUP state and display mode, `TopupModel` and its lookup table, `TOPUP_PULSE` telemetry, the `top_up_margin_*`, `min_topup_grams`, `topup_timeout_ms` and `stability_min_wait_ms` settings, and the offset target (`target_weight_g` now equals the requested dose). `DosingModelState` went to version 4 without the table; `migrateDosingModelV3` carries the rate and coast over from the old blob (tested against the device's real bytes), so nothing learned was lost.
+- **Decision data (53 sessions since 10-12)**: landing at margin 0 had rms 0.106g against 0.097g final with top-up, i.e. about equal, with fewer large overshoots (9% vs 18% over by more than 0.15g) and a wider middle band (60% vs 77% within 0.1g). Chosen on the owner's call, not on accuracy.
+- **Recoverability**: `GET /api/boot_backup` (settings + raw NVS blobs as of boot), the pre-switch snapshot in `.agent/backups/`, the `topup-final` git tag, and the unchanged `v2.events` TOPUP history.
+- **Learner history**: each finished session POSTs the rate, coast and per-mode learner fit to `v2.model_snapshots`; the Model page charts them. The first row is a baseline decoded from the backup; earlier evolution was not recorded.
+- **Confounder**: the device was running firmware from before AR-082 (saturated rate precision, sd 0.00002, 1.56M "sessions") until this flash, so the adapting rate model and margin 0 start together.
+- **Open**: `CoastModel` still adds each observation's precision without a cap (precision 9023, sd 0.0105 at the flash), the same defect AR-082 fixed for the rate: the coast estimate has effectively stopped adapting. The learner's intercept absorbs a drifting coast meanwhile.
+- **Open**: the dose is never verified on a real grind yet; no top-up means a mis-stop is final (the 500 ms clamp bounds the learner, not the unlearned stop).

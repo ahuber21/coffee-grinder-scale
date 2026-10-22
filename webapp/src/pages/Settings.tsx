@@ -20,8 +20,6 @@ export default function SettingsPage() {
         <h3>Dosing</h3>
         <NumberSettingRow field="target_dose_single" label="Target dose (single)" step="0.1" unit=" g" />
         <NumberSettingRow field="target_dose_double" label="Target dose (double)" step="0.1" unit=" g" />
-        <NumberSettingRow field="top_up_margin_single" label="Top-up margin (single)" step="0.01" unit=" g" />
-        <NumberSettingRow field="top_up_margin_double" label="Top-up margin (double)" step="0.01" unit=" g" />
       </div>
 
       <div className="panel">
@@ -50,8 +48,7 @@ export default function SettingsPage() {
         <NumberSettingRow field="landing_learner_rate" label="Learning rate (per session)" step="0.01" />
         <NumberSettingRow field="landing_learner_clamp_ms" label="Stop-time clamp (±)" step="50" unit=" ms" />
         <p className="muted" style={noteStyle}>
-          Shifts the main-grind stop so the settled weight lands on the margin-offset target
-          (requested dose minus the top-up margin). The clamp bounds how far it can move the
+          Shifts the main-grind stop so the settled weight lands on the requested dose. The clamp bounds how far it can move the
           stop from the unlearned stop time; the rate is the per-session forgetting (0.05 weighs
           about the last 20 sessions). Each session's landing and applied shift show up in the
           console as a LAND line.
@@ -91,18 +88,11 @@ export default function SettingsPage() {
           </div>
 
           <div className="panel">
-            <h3>Top-up (advanced)</h3>
-            <NumberSettingRow field="min_topup_grams" label="Smallest gap to top up" step="0.01" unit=" g" />
-          </div>
-
-          <div className="panel">
             <h3>Timeouts (advanced)</h3>
             <NumberSettingRow field="grinding_timeout_ms" label="Grinding safety timeout" step="100" unit=" ms" />
-            <NumberSettingRow field="topup_timeout_ms" label="Top-up timeout" step="100" unit=" ms" />
             <NumberSettingRow field="finalize_timeout_ms" label="Finalize screen duration" step="100" unit=" ms" />
             <NumberSettingRow field="confirm_timeout_ms" label="Confirm screen timeout" step="100" unit=" ms" />
-            <NumberSettingRow field="stability_min_wait_ms" label="Stability min wait" step="10" unit=" ms" />
-            <NumberSettingRow field="stability_max_wait_ms" label="Stability max wait" step="10" unit=" ms" />
+            <NumberSettingRow field="stability_max_wait_ms" label="Settle timeout" step="10" unit=" ms" />
             <NumberSettingRow field="screensaver_timeout_s" label="Screensaver idle timeout" step="1" unit=" s" />
             <NumberSettingRow
               field="screensaver_wake_weight_delta_g"

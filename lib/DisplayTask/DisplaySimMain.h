@@ -9,7 +9,7 @@
  * part of the real firmware in any way. See `tools/display_sim/README.md`.
  *
  * Scripts four scenarios (BOOT, a full IDLE->CONFIRM->TARE->GRINDING->
- * STOPPING->TOPUP->FINALIZE dose, an OTA_UPDATE run, and layout edge cases) through the
+ * STOPPING->FINALIZE dose, an OTA_UPDATE run, and layout edge cases) through the
  * exact same `renderMode()` the real Display task calls, stepping
  * simulated time in fine increments (finer than drawClumpField's own
  * ~70ms animation throttle, so that throttle actually governs frame
@@ -165,23 +165,11 @@ int main(int argc, char **argv) {
     DisplayCommand stopping{};
     stopping.mode = DisplayMode::STOPPING;
     stopping.target_grams = 9.5f;
-    stopping.current_grams = 9.27f;  // coast lands it close to the corrected target
+    stopping.current_grams = 9.27f;  // coast lands it close to the target
     stopping.elapsed_s = 10.7f;
     runSegment(doseDump, last, stopping, 1500, 0.1f);
 
-    // TOPUP: one pulse (a fast jump), then its settle wait. Noisy too, since this mode
-    // deliberately shows the real reading rather than the running-max filter.
-    DisplayCommand pulseEnd{};
-    pulseEnd.mode = DisplayMode::TOPUP;
-    pulseEnd.target_grams = 9.5f;
-    pulseEnd.current_grams = 9.48f;
-    pulseEnd.elapsed_s = 11.0f;
-    runSegment(doseDump, last, pulseEnd, 300, 0.1f);
-    DisplayCommand settle = pulseEnd;
-    settle.elapsed_s = 12.0f;
-    runSegment(doseDump, last, settle, 1000, 0.1f);
-
-    DisplayCommand finalize = settle;
+    DisplayCommand finalize = stopping;
     finalize.mode = DisplayMode::FINALIZE;
     runSegment(doseDump, last, finalize, 3000);
   }

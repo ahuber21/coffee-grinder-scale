@@ -42,8 +42,6 @@ namespace settings_validators {
 inline bool calibrationFactor(double v) { return std::isfinite(v) && v != 0.0; }
 /** A plausible single/double target dose. */
 inline bool doseGrams(double v) { return std::isfinite(v) && v > 0.0 && v <= 100.0; }
-inline bool topUpMargin(double v) { return std::isfinite(v) && v >= 0.0; }
-inline bool minTopupGrams(double v) { return std::isfinite(v) && v >= 0.0 && v <= 5.0; }
 inline bool buttonDebounceMs(double v) { return v > 0.0 && v <= 2000.0; }
 /** Feeds ADS1232::setRingBufferSize, capped at its RING_BUFFER_MAX_SIZE. */
 inline bool readSamples(double v) { return v >= 1.0 && v <= 96.0; }
@@ -81,12 +79,6 @@ inline const SettingDescriptor *settingsTable(size_t &count) {
        v::doseGrams, true, 1.0},
       {"target_dose_double", "dose_double", SettingType::F32, SETTING_OFFSET(target_dose_double),
        v::doseGrams, true, 1.0},
-      {"top_up_margin_single", "margin_sing", SettingType::F32, SETTING_OFFSET(top_up_margin_single),
-       v::topUpMargin, true, 1.0},
-      {"top_up_margin_double", "margin_dbl", SettingType::F32, SETTING_OFFSET(top_up_margin_double),
-       v::topUpMargin, true, 1.0},
-      {"min_topup_grams", "min_topup_g", SettingType::F32, SETTING_OFFSET(min_topup_grams),
-       v::minTopupGrams, true, 1.0},
       {"button_debounce_ms", "btn_debounce", SettingType::U32, SETTING_OFFSET(button_debounce_ms),
        v::buttonDebounceMs, true, 1.0},
       {"button_min_hold_ms", "btn_hold_ms", SettingType::U32, SETTING_OFFSET(button_min_hold_ms),
@@ -99,15 +91,11 @@ inline const SettingDescriptor *settingsTable(size_t &count) {
        true, 1.0},
       {"speed", "speed", SettingType::U8, SETTING_OFFSET(speed), v::speedSps, true, 1.0},
       {"gain", "gain", SettingType::U8, SETTING_OFFSET(gain), v::gain, true, 1.0},
-      {"topup_timeout_ms", "topup_to_ms", SettingType::U32, SETTING_OFFSET(topup_timeout_ms),
-       v::timeoutMs, true, 1.0},
       {"grinding_timeout_ms", "grind_to_ms", SettingType::U32, SETTING_OFFSET(grinding_timeout_ms),
        v::timeoutMs, true, 1.0},
       {"finalize_timeout_ms", "final_to_ms", SettingType::U32, SETTING_OFFSET(finalize_timeout_ms),
        v::timeoutMs, true, 1.0},
       {"confirm_timeout_ms", "confirm_to_ms", SettingType::U32, SETTING_OFFSET(confirm_timeout_ms),
-       v::timeoutMs, true, 1.0},
-      {"stability_min_wait_ms", "stab_min_ms", SettingType::U32, SETTING_OFFSET(stability_min_wait_ms),
        v::timeoutMs, true, 1.0},
       {"stability_max_wait_ms", "stab_max_ms", SettingType::U32, SETTING_OFFSET(stability_max_wait_ms),
        v::timeoutMs, true, 1.0},

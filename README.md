@@ -26,7 +26,7 @@ name and ports. All three copies are gitignored.
 - **Web app**: `http://<device-host>/` (mDNS, no OTA password -- trusted
   home LAN only). A small React SPA (`webapp/`) with four tabs: **Live**
   (current weight/target, a session chart, manual dose request),
-  **Settings** (calibration factor, target doses, top-up margins, button
+  **Settings** (calibration factor, target doses, landing learner, button
   debounce, WiFi reset/reboot), **History** (past sessions, queried
   straight from PostgREST in the browser -- bypasses the device), and
   **Advanced** (debug sub-pages: tare-baseline consistency, live raw-ADC
@@ -47,8 +47,8 @@ name and ports. All three copies are gitignored.
 
 - `lib/*Task/` -- the seven FreeRTOS tasks, one per directory.
 - `lib/Messaging/` -- shared message structs, queues/mailboxes, task config.
-- `lib/DosingModel/` -- the main-grind, coast and topup models and the
-  landing learner, unit-tested on the host.
+- `lib/DosingModel/` -- the main-grind rate, coast and landing learner
+  models, unit-tested on the host.
 - `lib/ADS1232/` -- the load-cell ADC driver, a ring-buffered fork of
   jousis' library.
 - `webapp/` -- the SPA; see `webapp/README.md` to build and develop it.

@@ -62,8 +62,6 @@ const char *telemetryTypeToString(TelemetryType t) {
       return "progress";
     case TelemetryType::RAW_SAMPLE:
       return "raw_sample";
-    case TelemetryType::TOPUP_PULSE:
-      return "topup_pulse";
     case TelemetryType::FINALIZE:
       return "finalize";
     case TelemetryType::COMPLETE:
@@ -103,17 +101,8 @@ String buildTelemetryJson(const TelemetryEvent &ev) {
       doc["grams"] = ev.grams;
       doc["target_grams"] = ev.target_grams;
       doc["coast_g"] = ev.landing_coast_g;
-      doc["margin_g"] = ev.landing_margin_g;
       doc["correction_g"] = ev.landing_correction_g;
       doc["clamped"] = ev.landing_clamped;
-      break;
-    case TelemetryType::TOPUP_PULSE:
-      doc["grams"] = ev.grams;
-      doc["delta_grams"] = ev.delta_grams;
-      doc["target_grams"] = ev.target_grams;
-      doc["topup_bucket"] = ev.topup_bucket;
-      doc["topup_aim_weight_g"] = ev.topup_aim_weight_g;
-      doc["topup_commanded_duration_ms"] = ev.topup_commanded_duration_ms;
       break;
     case TelemetryType::PROGRESS:
       doc["grams"] = ev.grams;
@@ -133,11 +122,15 @@ String buildTelemetryJson(const TelemetryEvent &ev) {
       doc["rate_n_effective"] = ev.rate_n_effective;
       doc["coast_weight_g"] = ev.coast_weight_g;
       doc["coast_weight_sd_g"] = ev.coast_weight_sd_g;
-      JsonArray durations = doc["topup_lut_duration_ms"].to<JsonArray>();
-      JsonArray counts = doc["topup_lut_n"].to<JsonArray>();
-      for (int i = 0; i < kTopupLutBuckets; ++i) {
-        durations.add(ev.topup_lut_duration_ms[i]);
-        counts.add(ev.topup_lut_n[i]);
+      JsonArray learners = doc["learner"].to<JsonArray>();
+      for (const LandingLearner::Params &p : ev.learner) {
+        JsonObject mode = learners.add<JsonObject>();
+        mode["sessions"] = p.sessions;
+        mode["effective_sessions"] = p.effective_sessions;
+        mode["mean_rate_g_s"] = p.mean_rate_g_s;
+        mode["intercept_g"] = p.intercept_g;
+        mode["slope_g_per_g_s"] = p.slope_g_per_g_s;
+        mode["residual_sd_g"] = p.residual_sd_g;
       }
       break;
     }

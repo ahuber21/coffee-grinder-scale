@@ -75,10 +75,7 @@ export interface DoseOutcome {
   final_weight_g: number;
 }
 
-/**
- * Completed sessions with a final weight, for one dose mode. Errors must be taken against
- * requested_weight_g: target_weight_g is the margin-corrected stop target, which topup closes.
- */
+/** Completed sessions with a final weight, for one dose mode. */
 export function fetchCompletedDosesForMode(
   mode: "single" | "double",
   limit = 500
@@ -95,8 +92,9 @@ export interface LandingOutcome {
 }
 
 /**
- * The settled weight right after the main grind, before any topup, against the stop target
- * (target_weight_g). Only sessions that recorded a settled weight appear.
+ * The settled weight right after the main grind against the stop target (target_weight_g).
+ * Sessions before the landing learner have none; sessions from before top-up was removed
+ * aimed at a target below the requested dose, which target_weight_g records.
  */
 export function fetchLandingForMode(
   mode: "single" | "double",
@@ -131,4 +129,33 @@ export function fetchTareDebugSamples(limit = 2000): Promise<TareDebugSample[]> 
   return get<TareDebugSample[]>(
     `/tare_debug?order=created_at.asc&limit=${limit}&select=raw_adc,grams,created_at`
   );
+}
+
+/** The model parameters after one session; see v2.model_snapshots. */
+export interface ModelSnapshot {
+  taken_at: string;
+  note: string | null;
+  rate_hat_g_s: number;
+  rate_sd_g_s: number;
+  rate_n_effective: number;
+  coast_g: number;
+  coast_sd_g: number;
+  single_sessions: number;
+  single_effective_sessions: number;
+  single_mean_rate_g_s: number;
+  single_intercept_g: number;
+  single_slope_g_per_g_s: number;
+  single_residual_sd_g: number;
+  double_sessions: number;
+  double_effective_sessions: number;
+  double_mean_rate_g_s: number;
+  double_intercept_g: number;
+  double_slope_g_per_g_s: number;
+  double_residual_sd_g: number;
+}
+
+/** The most recent snapshots, oldest first. */
+export async function fetchModelSnapshots(limit = 1000): Promise<ModelSnapshot[]> {
+  const rows = await get<ModelSnapshot[]>(`/model_snapshots?order=taken_at.desc&limit=${limit}`);
+  return rows.reverse();
 }

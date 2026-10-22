@@ -1,5 +1,17 @@
 # Status
 
+*Last updated: 2026-10-22 (later) -- removed top-up entirely (AR-083): the
+grinder is single-shot, the margins/min-gap/top-up-timeout settings and the
+pre-session offset target are gone, `DosingModelState` is v4 (rate and coast
+migrated from the old blob), and the Model page now charts the rate, coast and
+per-mode landing-learner parameters per session from the new
+`v2.model_snapshots` table. Host tests (41), firmware build, SPA build and the
+display golden check pass; firmware and SPA are flashed; not yet seen on a
+real grind. Migration `006_model_snapshots.sql` still has to be applied
+(until then the device's snapshot POSTs fail harmlessly and the Model page
+shows live values only). Rollback: tag `topup-final` plus
+`.agent/backups/`.*
+
 *Last updated: 2026-10-22 -- promoted the landing learner: both top-up margins
 set to 0 on the device, so the main grind now aims at the real target and
 topup only cleans up undershoots. Decided on 53 sessions: landing rms 0.106g

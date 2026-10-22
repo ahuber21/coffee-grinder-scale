@@ -5,7 +5,6 @@ export type TelemetryType =
   | "target"
   | "progress"
   | "raw_sample"
-  | "topup_pulse"
   | "finalize"
   | "complete"
   | "log"
@@ -25,13 +24,6 @@ export interface TelemetryGrams extends TelemetryBase {
   target_grams: number;
 }
 
-export interface TelemetryTopupPulse extends TelemetryBase {
-  type: "topup_pulse";
-  grams: number;
-  delta_grams: number;
-  target_grams: number;
-}
-
 export interface TelemetryRawSample extends TelemetryBase {
   type: "raw_sample";
   raw_adc: number;
@@ -45,13 +37,12 @@ export interface TelemetryTareDebug extends TelemetryBase {
   grams: number;
 }
 
-/** Main-grind landing: the settled weight before topup, and what the landing learner did. */
+/** Main-grind landing: the settled weight, and what the landing learner did. */
 export interface TelemetryLanding extends TelemetryBase {
   type: "landing";
   grams: number;
   target_grams: number;
   coast_g: number;
-  margin_g: number;
   correction_g: number;
   clamped: boolean;
 }
@@ -68,14 +59,24 @@ export interface TelemetryModelState extends TelemetryBase {
   rate_n_effective: number;
   coast_weight_g: number;
   coast_weight_sd_g: number;
-  /** Per-gap-bucket tuned pulse duration and observation count; index i covers (i*0.1g, (i+1)*0.1g]. */
-  topup_lut_duration_ms: number[];
-  topup_lut_n: number[];
+  /** The landing learner's fit per dose mode: index 0 is single, 1 is double. */
+  learner: LearnerParams[];
+}
+
+/** One dose mode's landing-learner fit, as the firmware's LandingLearner::Params. */
+export interface LearnerParams {
+  sessions: number;
+  effective_sessions: number;
+  mean_rate_g_s: number;
+  /** Predicted landed-high excess (g) at the mean flow rate. */
+  intercept_g: number;
+  /** Change in that excess per g/s of flow rate. */
+  slope_g_per_g_s: number;
+  residual_sd_g: number;
 }
 
 export type TelemetryMessage =
   | TelemetryGrams
-  | TelemetryTopupPulse
   | TelemetryRawSample
   | TelemetryTareDebug
   | TelemetryLanding
@@ -93,20 +94,15 @@ export interface SettingsMessage {
   calibration_factor_x1e6: number;
   target_dose_single: number;
   target_dose_double: number;
-  top_up_margin_single: number;
-  top_up_margin_double: number;
-  min_topup_grams: number;
   button_debounce_ms: number;
   screensaver_timeout_s: number;
   screensaver_wake_weight_delta_g: number;
   read_samples: number;
   speed: number;
   gain: number;
-  topup_timeout_ms: number;
   grinding_timeout_ms: number;
   finalize_timeout_ms: number;
   confirm_timeout_ms: number;
-  stability_min_wait_ms: number;
   stability_max_wait_ms: number;
   button_min_hold_ms: number;
   display_clump_density: number;
