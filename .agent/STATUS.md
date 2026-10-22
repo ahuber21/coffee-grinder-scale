@@ -1,5 +1,16 @@
 # Status
 
+*Last updated: 2026-10-22 -- promoted the landing learner: both top-up margins
+set to 0 on the device, so the main grind now aims at the real target and
+topup only cleans up undershoots. Decided on 53 sessions: landing rms 0.106g
+vs 0.097g final with topup, about equal, with fewer large overshoots. Before
+the switch the device state was backed up with the new `GET /api/boot_backup`
+(`.agent/backups/`); to restore topup behaviour set both margins back to 0.5.
+The device had been running firmware without the AR-082 rate fix (saturated
+rate precision) until this flash, so the rate model starts adapting now: the
+margin change and the AR-082 change land together. `min_topup_grams` stays
+0.08. Next: re-run the landing/final comparison after about 30 shots.*
+
 *Last updated: 2026-10-13 (later) -- fixed the main-grind rate model
 (AR-082): its precision grew per sample, so the persisted rate showed
 0.9645 +/- 0.00002 from 1.25M "sessions" and could not adapt. Sessions are
