@@ -98,10 +98,12 @@ export interface LandingOutcome {
  */
 export function fetchLandingForMode(
   mode: "single" | "double",
+  since?: string,
   limit = 500
 ): Promise<LandingOutcome[]> {
+  const from = since ? `&started_at=gte.${since}` : "";
   return get<LandingOutcome[]>(
-    `/sessions?mode=eq.${mode}&settled_weight_g=not.is.null` +
+    `/sessions?mode=eq.${mode}&settled_weight_g=not.is.null${from}` +
       `&order=started_at.desc&limit=${limit}&select=settled_weight_g,target_weight_g`
   );
 }

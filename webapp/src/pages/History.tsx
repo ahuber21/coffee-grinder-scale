@@ -16,15 +16,15 @@ const SPOT_ON_THRESHOLD_G = 0.1;
 const WITHIN_GOAL_G = 0.2;
 
 /** Loads a list of errors in grams, treating a failed request as an empty list. */
-function useDeltas(load: () => Promise<number[]>): number[] | null {
+function useDeltas(load: () => Promise<number[]>, key = ""): number[] | null {
   const [deltas, setDeltas] = useState<number[] | null>(null);
   useEffect(() => {
     load()
       .then(setDeltas)
       .catch(() => setDeltas([]));
-    // `load` is a fresh closure each render; the data is fetched once.
+    // `load` is a fresh closure each render; reload only when `key` changes.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [key]);
   return deltas;
 }
 
@@ -35,8 +35,15 @@ const finalError = (mode: "single" | "double") => () =>
   );
 
 /** Settled main-grind weight minus the stop target. */
-const landingError = (mode: "single" | "double") => () =>
-  fetchLandingForMode(mode).then((rows) => rows.map((r) => r.settled_weight_g - r.target_weight_g));
+const landingError = (mode: "single" | "double", since?: string) => () =>
+  fetchLandingForMode(mode, since).then((rows) => rows.map((r) => r.settled_weight_g - r.target_weight_g));
+
+/** Landing-history ranges; `launch` is the day the single-shot system went live. */
+const LANDING_RANGES = {
+  all: { label: "All entries", since: undefined },
+  launch: { label: "Since launch (2026-10-22)", since: "2026-10-22" },
+} as const;
+type LandingRange = keyof typeof LANDING_RANGES;
 
 const twoColumnGrid = {
   display: "grid",
@@ -50,8 +57,10 @@ export default function HistoryPage() {
   const [selected, setSelected] = useState<Session | null>(null);
   const singleDeltas = useDeltas(finalError("single"));
   const doubleDeltas = useDeltas(finalError("double"));
-  const singleLanding = useDeltas(landingError("single"));
-  const doubleLanding = useDeltas(landingError("double"));
+  const [range, setRange] = useState<LandingRange>("launch");
+  const since = LANDING_RANGES[range].since;
+  const singleLanding = useDeltas(landingError("single", since), range);
+  const doubleLanding = useDeltas(landingError("double", since), range);
 
   useEffect(() => {
     fetchRecentSessions(50)
@@ -87,7 +96,7 @@ export default function HistoryPage() {
       )}
 
       <div className="panel">
-        <h3>Dose accuracy by target</h3>
+        <h3>Dose accuracy by target (legacy)</h3>
         <p className="muted" style={{ fontSize: "0.85em" }}>
           Final weight minus target, one histogram per fixed target dose (single/double), fit
           with a Gaussian. A narrower, more centered curve means tighter, less biased dosing.
@@ -100,6 +109,16 @@ export default function HistoryPage() {
 
       <div className="panel">
         <h3>Main-grind landing (landing learner)</h3>
+        <label style={{ fontSize: "0.85em" }}>
+          Range:{" "}
+          <select value={range} onChange={(e) => setRange(e.target.value as LandingRange)}>
+            {Object.entries(LANDING_RANGES).map(([k, r]) => (
+              <option key={k} value={k}>
+                {r.label}
+              </option>
+            ))}
+          </select>
+        </label>
         <p className="muted" style={{ fontSize: "0.85em" }}>
           Settled weight right after the main grind minus the stop target, which is the requested
           dose (earlier sessions aimed 0.5 g below it and finished with top-up pulses). The
