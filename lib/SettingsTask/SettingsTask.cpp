@@ -2,6 +2,7 @@
 
 #include <Arduino.h>
 #include <Preferences.h>
+#include <atomic>
 #include <cmath>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
@@ -173,6 +174,63 @@ void saveBlobToNvs(const char *key, const char *what, const State &state) {
   g_prefs.end();
 }
 
+String g_boot_backup;                    ///< Written once by the Settings task, then read-only.
+std::atomic<bool> g_boot_backup_ready{false};
+
+/** Appends `len` bytes of `data` to `out` as lowercase hex. */
+void appendHex(String &out, const uint8_t *data, size_t len) {
+  static const char kDigits[] = "0123456789abcdef";
+  for (size_t i = 0; i < len; ++i) {
+    out += kDigits[data[i] >> 4];
+    out += kDigits[data[i] & 0xF];
+  }
+}
+
+/** Appends `"key":{"bytes":N,"hex":"..."}` for the raw NVS blob under `key`; N is 0 if absent. */
+void appendRawBlobJson(String &out, const char *key) {
+  uint8_t raw[256];
+  size_t len = g_prefs.getBytesLength(key);
+  size_t got = len <= sizeof(raw) ? g_prefs.getBytes(key, raw, sizeof(raw)) : 0;
+  out += '"';
+  out += key;
+  out += "\":{\"bytes\":";
+  out += static_cast<unsigned>(len);
+  out += ",\"hex\":\"";
+  appendHex(out, raw, got);
+  out += "\"}";
+}
+
+/**
+ * Builds the boot backup from NVS itself rather than from the decoded structs, so a blob
+ * that failed its version or plausibility check is still preserved byte for byte.
+ */
+void captureBootBackup(const SettingsSnapshot &loaded) {
+  String json = "{\"settings\":{";
+  size_t count = 0;
+  const SettingDescriptor *table = settingsTable(count);
+  for (size_t i = 0; i < count; ++i) {
+    if (i > 0) json += ',';
+    json += '"';
+    json += table[i].name;
+    json += "\":";
+    json += String(readSetting(loaded, table[i]), 6);
+  }
+  json += "},\"blobs\":{";
+  if (g_prefs.begin(kNvsNamespace, /*readOnly=*/true)) {
+    appendRawBlobJson(json, kKeyDosingModel);
+    json += ',';
+    appendRawBlobJson(json, kKeyLandingLearner);
+    g_prefs.end();
+  }
+  json += "},\"struct_sizes\":{\"dosing_model\":";
+  json += static_cast<unsigned>(sizeof(DosingModelState));
+  json += ",\"landing_learner\":";
+  json += static_cast<unsigned>(sizeof(LandingLearnerState));
+  json += "}}";
+  g_boot_backup = json;
+  g_boot_backup_ready.store(true, std::memory_order_release);
+}
+
 /** Overwrites every subscriber's mailbox with the current snapshot. */
 void broadcastSnapshot() {
   xQueueOverwrite(g_settings_mailbox_scale, &g_settings);
@@ -234,6 +292,7 @@ void settingsTaskFn(void *) {
     g_settings = SettingsSnapshot{};
   }
   g_settings.version = 1;
+  captureBootBackup(g_settings);
 
   g_dosing_model = makeDefaultDosingModelState();
   if (!loadBlobFromNvs(kKeyDosingModel, "dosing model", kDosingModelVersion,
@@ -265,6 +324,12 @@ void settingsTaskFn(void *) {
 }
 
 }  // namespace
+
+bool settingsBootBackupJson(String &out) {
+  if (!g_boot_backup_ready.load(std::memory_order_acquire)) return false;
+  out = g_boot_backup;
+  return true;
+}
 
 void createSettingsTask() {
   xTaskCreatePinnedToCore(settingsTaskFn, "Settings", TaskConfig::kSettingsStackBytes, nullptr,

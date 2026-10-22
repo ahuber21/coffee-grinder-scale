@@ -19,6 +19,7 @@
 #include "Messages.h"
 #include "Queues.h"
 #include "SettingsSchema.h"
+#include "SettingsTask.h"
 #include "TaskConfig.h"
 #include "defines.h"  // SERVER_PORT
 
@@ -445,9 +446,19 @@ void handleGetDosage(AsyncWebServerRequest *request) {
   request->send(200, "application/json", out);
 }
 
+/** GET /api/boot_backup: the settings and raw model blobs NVS held at the last boot. */
+void handleBootBackup(AsyncWebServerRequest *request) {
+  String json;
+  if (!settingsBootBackupJson(json)) {
+    request->send(503, "text/plain", "settings not loaded yet");
+    return;
+  }
+  request->send(200, "application/json", json);
+}
+
 /**
  * Mounts LittleFS and starts the AsyncWebServer: the WS at "/ws",
- * GET /api/getDosage, and the SPA served from "/". SPA routing there
+ * GET /api/getDosage, GET /api/boot_backup, and the SPA served from "/". SPA routing there
  * is hash-based ("#/settings", not "/settings"), so there's no need
  * for a catch-all fallback to index.html on unknown paths -- every
  * real HTTP request is either "/", a concrete built asset, or an
@@ -463,6 +474,7 @@ void setupWebServer() {
   g_server.addHandler(&g_ws);
 
   g_server.on("/api/getDosage", HTTP_GET, handleGetDosage);
+  g_server.on("/api/boot_backup", HTTP_GET, handleBootBackup);
 
   g_server.serveStatic("/", LittleFS, "/").setDefaultFile("index.html");
 

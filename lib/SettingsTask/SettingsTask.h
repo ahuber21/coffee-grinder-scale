@@ -12,5 +12,14 @@
  * The dosing models and landing learner are stored as raw-byte blobs.
  */
 
+#include <WString.h>
+
 /** Creates and starts the Settings task. */
 void createSettingsTask();
+
+/**
+ * Copies out the JSON backup of what NVS held when the Settings task booted: every
+ * setting plus the raw hex of both model blobs, whatever their version or plausibility.
+ * Returns false until the Settings task has finished loading.
+ */
+bool settingsBootBackupJson(String &out);
