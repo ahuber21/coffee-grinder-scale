@@ -70,22 +70,6 @@ export async function patchReferenceWeight(
   }
 }
 
-export interface DoseOutcome {
-  requested_weight_g: number;
-  final_weight_g: number;
-}
-
-/** Completed sessions with a final weight, for one dose mode. */
-export function fetchCompletedDosesForMode(
-  mode: "single" | "double",
-  limit = 500
-): Promise<DoseOutcome[]> {
-  return get<DoseOutcome[]>(
-    `/sessions?mode=eq.${mode}&outcome=eq.completed&final_weight_g=not.is.null` +
-      `&order=started_at.desc&limit=${limit}&select=requested_weight_g,final_weight_g`
-  );
-}
-
 export interface LandingOutcome {
   settled_weight_g: number;
   target_weight_g: number;

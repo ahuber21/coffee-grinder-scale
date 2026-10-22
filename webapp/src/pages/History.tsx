@@ -3,7 +3,6 @@ import DeltaHistogram from "../components/DeltaHistogram";
 import { ACCENT_BLUE, ACCENT_ORANGE } from "../lib/chartTheme";
 import { formatTimestamp } from "../lib/format";
 import {
-  fetchCompletedDosesForMode,
   fetchLandingForMode,
   fetchRecentSessions,
   type Session,
@@ -28,12 +27,6 @@ function useDeltas(load: () => Promise<number[]>, key = ""): number[] | null {
   return deltas;
 }
 
-/** Final weight minus the requested weight. */
-const finalError = (mode: "single" | "double") => () =>
-  fetchCompletedDosesForMode(mode).then((doses) =>
-    doses.map((d) => d.final_weight_g - d.requested_weight_g)
-  );
-
 /** Settled main-grind weight minus the stop target. */
 const landingError = (mode: "single" | "double", since?: string) => () =>
   fetchLandingForMode(mode, since).then((rows) => rows.map((r) => r.settled_weight_g - r.target_weight_g));
@@ -55,8 +48,6 @@ export default function HistoryPage() {
   const [sessions, setSessions] = useState<Session[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [selected, setSelected] = useState<Session | null>(null);
-  const singleDeltas = useDeltas(finalError("single"));
-  const doubleDeltas = useDeltas(finalError("double"));
   const [range, setRange] = useState<LandingRange>("launch");
   const since = LANDING_RANGES[range].since;
   const singleLanding = useDeltas(landingError("single", since), range);
@@ -94,18 +85,6 @@ export default function HistoryPage() {
           </p>
         </div>
       )}
-
-      <div className="panel">
-        <h3>Dose accuracy by target (legacy)</h3>
-        <p className="muted" style={{ fontSize: "0.85em" }}>
-          Final weight minus target, one histogram per fixed target dose (single/double), fit
-          with a Gaussian. A narrower, more centered curve means tighter, less biased dosing.
-        </p>
-        <div style={twoColumnGrid}>
-          <DeltaHistogram label="Single dose" deltas={singleDeltas ?? []} color={ACCENT_BLUE} />
-          <DeltaHistogram label="Double dose" deltas={doubleDeltas ?? []} color={ACCENT_ORANGE} />
-        </div>
-      </div>
 
       <div className="panel">
         <h3>Main-grind landing (landing learner)</h3>
